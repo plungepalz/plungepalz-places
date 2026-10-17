@@ -1,8 +1,12 @@
 'use client';
 
-import { PlaceDetail } from '@/lib/types';
 import { useEffect, useState } from 'react';
+import { isApproved } from '@/lib/approval';
 import { client } from '@/lib/client';
+import { isPlacesApiError } from '@/lib/errors';
+import { ACTIVITY_LABELS, formatLocation, formatPlaceType } from '@/lib/labels';
+import type { PlaceDetail } from '@/lib/types';
+import CoverImage from './CoverImage';
 
 interface PlaceDetailsPanelProps {
   placeId: string;
@@ -15,164 +19,119 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const fetchPlace = async () => {
       setIsLoading(true);
       setError(null);
       try {
         const data = await client.getPlace(placeId);
-        setPlace(data);
+        if (!cancelled) setPlace(data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load place details');
+        if (!cancelled) {
+          setPlace(null);
+          setError(isPlacesApiError(err) ? err.message : 'Failed to load place details');
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
-
     fetchPlace();
+    return () => {
+      cancelled = true;
+    };
   }, [placeId]);
 
   return (
-    <div className="fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl z-30 overflow-y-auto">
-      {/* Header */}
-      <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-900">Place Details</h2>
+    <aside className="absolute inset-y-4 right-4 z-30 flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10">
+      <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+        <h2 className="text-lg font-semibold text-gray-900">Place details</h2>
         <button
+          type="button"
           onClick={onClose}
-          className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+          className="rounded-full p-2 text-gray-500 hover:bg-gray-100"
+          aria-label="Close details"
         >
-          <svg className="w-6 h-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
       </div>
 
-      {/* Content */}
-      <div className="px-6 py-6">
+      <div className="flex-1 overflow-y-auto px-5 py-5">
         {isLoading ? (
-          <div className="flex items-center justify-center h-32">
-            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-orange-500"></div>
+          <div className="flex h-40 items-center justify-center">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
           </div>
         ) : error ? (
-          <div className="text-center text-red-600 py-8">
-            <p>{error}</p>
-          </div>
+          <p className="text-center text-red-600">{error}</p>
         ) : place ? (
-          <div className="space-y-6">
-            {/* Cover Image */}
-            {place.cover_image ? (
-              <img
-                src={place.cover_image}
-                alt={place.place_name}
-                className="w-full h-64 object-cover rounded-lg"
-              />
-            ) : (
-              <div className="w-full h-64 bg-gradient-to-br from-orange-100 to-orange-200 rounded-lg flex items-center justify-center">
-                <svg className="w-24 h-24 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                  />
-                </svg>
-              </div>
-            )}
-
-            {/* Title & Approval Status */}
+          <div className="space-y-5">
+            <CoverImage src={place.cover_image} alt="" className="h-52 w-full rounded-xl object-cover" />
             <div>
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-2xl font-bold text-gray-900">{place.place_name}</h3>
-                {place.is_approved && (
-                  <span className="px-3 py-1 bg-green-100 text-green-700 text-sm font-medium rounded-full">
+                {isApproved(place) && (
+                  <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
                     Approved
                   </span>
                 )}
               </div>
-              <p className="text-gray-600 capitalize">{place.place_type.replace(/_/g, ' ')}</p>
+              <p className="mt-1 text-gray-600">{formatPlaceType(place.place_type)}</p>
             </div>
-
-            {/* Location */}
             <div>
-              <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Location</h4>
+              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Location</h4>
               <p className="text-gray-900">
-                {place.address && <>{place.address}<br /></>}
-                {place.city}
-                {place.state_province && `, ${place.state_province}`}
-                {place.country && <> {place.country}</>}
+                {place.address && (
+                  <>
+                    {place.address}
+                    <br />
+                  </>
+                )}
+                {formatLocation(place.city, place.state_province)}
+                {place.country ? ` · ${place.country}` : ''}
               </p>
             </div>
-
-            {/* Activity Types */}
             <div>
-              <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Activities</h4>
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Activities</h4>
               <div className="flex flex-wrap gap-2">
                 {place.activity_types.map((activity) => (
                   <span
                     key={activity}
-                    className="px-3 py-1.5 bg-orange-100 text-orange-700 text-sm font-medium rounded-full"
+                    className="rounded-full bg-orange-50 px-3 py-1 text-sm font-medium text-orange-700"
                   >
-                    {activity === 'cold_plunge' ? '❄️ Cold Plunge' : '🔥 Sauna'}
+                    {ACTIVITY_LABELS[activity]}
                   </span>
                 ))}
               </div>
             </div>
-
-            {/* Description */}
             {place.description && (
               <div>
-                <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Description</h4>
-                <p className="text-gray-700 leading-relaxed">{place.description}</p>
+                <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Description</h4>
+                <p className="leading-relaxed text-gray-700">{place.description}</p>
               </div>
             )}
-
-            {/* Amenities */}
             {place.amenities && place.amenities.length > 0 && (
-              <div>
-                <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Amenities</h4>
-                <div className="flex flex-wrap gap-2">
-                  {place.amenities.map((amenity, idx) => (
-                    <span
-                      key={idx}
-                      className="px-3 py-1 bg-gray-100 text-gray-700 text-sm rounded-full capitalize"
-                    >
-                      {amenity}
-                    </span>
-                  ))}
-                </div>
+              <div className="flex flex-wrap gap-2">
+                {place.amenities.map((amenity) => (
+                  <span key={amenity} className="rounded-full bg-gray-100 px-3 py-1 text-sm capitalize text-gray-700">
+                    {amenity}
+                  </span>
+                ))}
               </div>
             )}
-
-            {/* Website */}
             {place.place_website_url && (
-              <div>
-                <a
-                  href={place.place_website_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg font-medium hover:bg-orange-600 transition-colors"
-                >
-                  Visit Website
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </a>
-              </div>
+              <a
+                href={place.place_website_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600"
+              >
+                Visit website
+              </a>
             )}
-
-            {/* Coordinates */}
-            <div className="pt-4 border-t border-gray-200 text-xs text-gray-500">
-              <p>ID: {place.place_id}</p>
-              <p>Coordinates: {place.lat.toFixed(4)}, {place.lng.toFixed(4)}</p>
-            </div>
           </div>
         ) : null}
       </div>
-    </div>
+    </aside>
   );
 }

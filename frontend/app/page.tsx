@@ -1,12 +1,23 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import dynamic from 'next/dynamic';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import FilterBar from '@/components/FilterBar';
-import PlacesList from '@/components/PlacesList';
-import PlacesMap from '@/components/PlacesMap';
 import PlaceDetailsPanel from '@/components/PlaceDetailsPanel';
+import PlacesList from '@/components/PlacesList';
 import { client, isMockMode } from '@/lib/client';
-import { PlaceSearchResult, ActivityType, PlaceType } from '@/lib/types';
+import { isPlacesApiError } from '@/lib/errors';
+import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
+import type { ActivityType, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
+import { formatBbox } from '@/lib/types';
+
+const PlacesMap = dynamic(() => import('@/components/PlacesMap'), {
+  ssr: false,
+  loading: () => <div className="h-full w-full bg-[#e8e4dc]" />,
+});
+
+const PAGE_SIZE = 20;
+const DEFAULT_LOCATION = LOCATION_PRESETS[1]; // United States
 
 export default function HomePage() {
   const [places, setPlaces] = useState<PlaceSearchResult[]>([]);
@@ -14,197 +25,202 @@ export default function HomePage() {
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedActivities, setSelectedActivities] = useState<ActivityType[]>([]);
   const [selectedPlaceTypes, setSelectedPlaceTypes] = useState<PlaceType[]>([]);
   const [approvedOnly, setApprovedOnly] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
+  const [location, setLocation] = useState<LocationPreset>(DEFAULT_LOCATION);
 
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [hoveredPlaceId, setHoveredPlaceId] = useState<string | null>(null);
   const [detailsPlaceId, setDetailsPlaceId] = useState<string | null>(null);
-
-  const [currentBounds, setCurrentBounds] = useState<{
-    minLng: number;
-    minLat: number;
-    maxLng: number;
-    maxLat: number;
+  const [flyToPlaceId, setFlyToPlaceId] = useState<string | null>(null);
+  const [cameraTarget, setCameraTarget] = useState<{
+    longitude: number;
+    latitude: number;
+    zoom: number;
   } | null>(null);
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const viewportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
+  const mapBoundsRef = useRef<MapBounds | null>(null);
+  const requestIdRef = useRef(0);
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  const hasMap = Boolean(mapboxToken);
+
+  const buildParams = useCallback(
+    (pageNum: number, bounds: MapBounds | null): SearchParams => {
+      const params: SearchParams = { page: pageNum, limit: PAGE_SIZE };
+      if (searchQuery.trim()) params.q = searchQuery.trim();
+      if (selectedActivities.length > 0) params.activity_types = selectedActivities.join(',');
+      if (selectedPlaceTypes.length > 0) params.place_type = selectedPlaceTypes.join(',');
+      if (approvedOnly) params.approved_only = true;
+
+      if (bounds) {
+        params.bbox = formatBbox(bounds);
+      } else if (location.id !== 'worldwide') {
+        params.lat = location.lat;
+        params.lng = location.lng;
+        params.radius_km = location.radiusKm;
+      }
+      return params;
+    },
+    [searchQuery, selectedActivities, selectedPlaceTypes, approvedOnly, location]
+  );
 
   const performSearch = useCallback(
-    async (bounds: typeof currentBounds, pageNum: number = 0, append: boolean = false) => {
+    async (pageNum: number, append: boolean, bounds: MapBounds | null) => {
+      const requestId = ++requestIdRef.current;
       setIsLoading(true);
       try {
-        const params: {
-          page: number;
-          limit: number;
-          q?: string;
-          bbox?: string;
-          activity_types?: string;
-          place_type?: string;
-          approved_only?: boolean;
-        } = {
-          page: pageNum,
-          limit: 100,
-        };
-
-        if (searchQuery.trim()) {
-          params.q = searchQuery.trim();
-        }
-
-        if (bounds) {
-          params.bbox = `${bounds.minLng},${bounds.minLat},${bounds.maxLng},${bounds.maxLat}`;
-        }
-
-        if (selectedActivities.length > 0) {
-          params.activity_types = selectedActivities.join(',');
-        }
-
-        if (selectedPlaceTypes.length > 0) {
-          params.place_type = selectedPlaceTypes.join(',');
-        }
-
-        if (approvedOnly) {
-          params.approved_only = true;
-        }
-
-        const response = await client.search(params);
-
-        if (append) {
-          setPlaces((prev) => [...prev, ...response.places]);
-        } else {
-          setPlaces(response.places);
-        }
-
+        const response = await client.search(buildParams(pageNum, bounds));
+        if (requestId !== requestIdRef.current) return;
+        setPlaces((prev) => (append ? [...prev, ...response.places] : response.places));
         setTotal(response.total);
         setPage(response.page);
         setHasMore(response.has_more);
-      } catch (error) {
-        console.error('Search failed:', error);
+        setError(null);
+      } catch (err) {
+        if (requestId !== requestIdRef.current) return;
+        setError(isPlacesApiError(err) ? err.message : 'Search failed');
+        if (!append) {
+          setPlaces([]);
+          setTotal(0);
+          setHasMore(false);
+        }
       } finally {
-        setIsLoading(false);
+        if (requestId === requestIdRef.current) setIsLoading(false);
       }
     },
-    [searchQuery, selectedActivities, selectedPlaceTypes, approvedOnly]
+    [buildParams]
   );
 
-  // Debounced search when filters change
+  const handleViewportChange = useCallback((bounds: MapBounds) => {
+    mapBoundsRef.current = bounds;
+    setMapBounds(bounds);
+  }, []);
+
   useEffect(() => {
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
+    const handle = window.setTimeout(() => {
+      performSearch(0, false, mapBounds);
+    }, mapBounds ? 450 : 200);
+    return () => window.clearTimeout(handle);
+  }, [performSearch, mapBounds]);
 
-    searchTimeoutRef.current = setTimeout(() => {
-      if (currentBounds) {
-        performSearch(currentBounds, 0, false);
-      }
-    }, 500);
-
-    return () => {
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
-      }
-    };
-  }, [searchQuery, selectedActivities, selectedPlaceTypes, approvedOnly, performSearch, currentBounds]);
-
-  // Debounced viewport change
-  const handleViewportChange = useCallback(
-    (bounds: { minLng: number; minLat: number; maxLng: number; maxLat: number }) => {
-      if (viewportTimeoutRef.current) {
-        clearTimeout(viewportTimeoutRef.current);
-      }
-
-      viewportTimeoutRef.current = setTimeout(() => {
-        setCurrentBounds(bounds);
-        performSearch(bounds, 0, false);
-      }, 800);
-    },
-    [performSearch]
-  );
-
-  const handleActivityToggle = (activity: ActivityType) => {
-    setSelectedActivities((prev) =>
-      prev.includes(activity) ? prev.filter((a) => a !== activity) : [...prev, activity]
-    );
-  };
-
-  const handlePlaceTypeToggle = (placeType: PlaceType) => {
-    setSelectedPlaceTypes((prev) =>
-      prev.includes(placeType) ? prev.filter((t) => t !== placeType) : [...prev, placeType]
-    );
-  };
-
-  const handleLoadMore = () => {
-    if (hasMore && !isLoading && currentBounds) {
-      performSearch(currentBounds, page + 1, true);
+  const handleLocationChange = (next: LocationPreset) => {
+    setLocation(next);
+    setCameraTarget({ longitude: next.lng, latitude: next.lat, zoom: next.zoom });
+    if (!hasMap) {
+      mapBoundsRef.current = null;
+      setMapBounds(null);
     }
   };
 
-  const handleSelectPlace = (placeId: string) => {
+  const handleSelectFromList = (placeId: string) => {
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
+    setFlyToPlaceId(placeId);
   };
 
+  const handleSelectFromMap = (placeId: string) => {
+    setSelectedPlaceId(placeId);
+    setDetailsPlaceId(placeId);
+    setFlyToPlaceId(null);
+  };
+
+  const handleToggleFavorite = (placeId: string) => {
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(placeId)) next.delete(placeId);
+      else next.add(placeId);
+      return next;
+    });
+  };
+
+  const locationName = useMemo(() => {
+    if (!hasMap || !mapBounds) {
+      return location.id === 'worldwide' ? 'the world' : location.label;
+    }
+    const counts = new Map<string, number>();
+    for (const place of places) {
+      const key = place.city || place.country;
+      if (!key) continue;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    let best = '';
+    let bestCount = 0;
+    for (const [key, count] of counts) {
+      if (count > bestCount) {
+        best = key;
+        bestCount = count;
+      }
+    }
+    if (bestCount >= 2) return best;
+    return location.label === 'United States' ? 'this area' : location.label;
+  }, [hasMap, mapBounds, places, location]);
+
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
-      {/* Mock mode banner */}
-      {isMockMode && (
-        <div className="bg-yellow-100 border-b border-yellow-200 px-4 py-2 text-center text-sm text-yellow-800">
-          <strong>Mock Mode:</strong> Using mock data. Set NEXT_PUBLIC_API_BASE_URL in .env.local to use the real API.
+    <div className="relative h-screen overflow-hidden bg-[#e8e4dc] text-gray-900">
+      <div className="absolute inset-0">
+        <PlacesMap
+          places={places}
+          selectedPlaceId={selectedPlaceId}
+          hoveredPlaceId={hoveredPlaceId}
+          flyToPlaceId={flyToPlaceId}
+          cameraTarget={cameraTarget}
+          onSelectPlace={handleSelectFromMap}
+          onHoverPlace={setHoveredPlaceId}
+          onViewportChange={handleViewportChange}
+          mapboxToken={mapboxToken}
+        />
+      </div>
+
+      <div className="pointer-events-none absolute inset-0 z-20">
+        <div className="pointer-events-auto px-4 pt-4">
+          <FilterBar
+            location={location}
+            onLocationChange={handleLocationChange}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            selectedActivities={selectedActivities}
+            onActivityToggle={(activity) =>
+              setSelectedActivities((prev) =>
+                prev.includes(activity) ? prev.filter((item) => item !== activity) : [...prev, activity]
+              )
+            }
+            selectedPlaceTypes={selectedPlaceTypes}
+            onPlaceTypeToggle={(placeType) =>
+              setSelectedPlaceTypes((prev) =>
+                prev.includes(placeType) ? prev.filter((item) => item !== placeType) : [...prev, placeType]
+              )
+            }
+            approvedOnly={approvedOnly}
+            onApprovedOnlyToggle={() => setApprovedOnly((prev) => !prev)}
+            mockMode={isMockMode}
+          />
         </div>
-      )}
 
-      {/* Filter bar */}
-      <FilterBar
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        selectedActivities={selectedActivities}
-        onActivityToggle={handleActivityToggle}
-        selectedPlaceTypes={selectedPlaceTypes}
-        onPlaceTypeToggle={handlePlaceTypeToggle}
-        showFilters={showFilters}
-        onToggleFilters={() => setShowFilters(!showFilters)}
-        approvedOnly={approvedOnly}
-        onApprovedOnlyToggle={() => setApprovedOnly(!approvedOnly)}
-      />
-
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden" style={{ marginTop: showFilters ? '120px' : '72px' }}>
-        {/* Left panel - Places list */}
-        <div className="w-96 p-4 overflow-hidden">
+        <div className="pointer-events-auto absolute bottom-4 left-4 top-24 w-[min(100%-2rem,380px)]">
           <PlacesList
             places={places}
             total={total}
             selectedPlaceId={selectedPlaceId}
-            onSelectPlace={handleSelectPlace}
+            favorites={favorites}
+            onSelectPlace={handleSelectFromList}
             onHoverPlace={setHoveredPlaceId}
-            onLoadMore={handleLoadMore}
+            onToggleFavorite={handleToggleFavorite}
+            onLoadMore={() => performSearch(page + 1, true, mapBoundsRef.current)}
             hasMore={hasMore}
             isLoading={isLoading}
-            locationName="the map"
-          />
-        </div>
-
-        {/* Right panel - Map */}
-        <div className="flex-1">
-          <PlacesMap
-            places={places}
-            selectedPlaceId={selectedPlaceId}
-            hoveredPlaceId={hoveredPlaceId}
-            onSelectPlace={handleSelectPlace}
-            onViewportChange={handleViewportChange}
-            mapboxToken={mapboxToken}
+            locationName={locationName}
+            error={error}
           />
         </div>
       </div>
 
-      {/* Details panel */}
       {detailsPlaceId && (
         <PlaceDetailsPanel placeId={detailsPlaceId} onClose={() => setDetailsPlaceId(null)} />
       )}

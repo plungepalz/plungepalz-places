@@ -1,86 +1,81 @@
 'use client';
 
-import { PlaceSearchResult } from '@/lib/types';
-import { useState } from 'react';
+import { isApproved } from '@/lib/approval';
+import { formatLocation, formatPlaceType } from '@/lib/labels';
+import type { PlaceSearchResult } from '@/lib/types';
+import CoverImage from './CoverImage';
 
 interface PlaceCardProps {
   place: PlaceSearchResult;
   isSelected: boolean;
+  isFavorited: boolean;
   onSelect: () => void;
   onHover: (hover: boolean) => void;
+  onToggleFavorite: () => void;
 }
 
-export default function PlaceCard({ place, isSelected, onSelect, onHover }: PlaceCardProps) {
-  const [isFavorited, setIsFavorited] = useState(false);
-
+export default function PlaceCard({
+  place,
+  isSelected,
+  isFavorited,
+  onSelect,
+  onHover,
+  onToggleFavorite,
+}: PlaceCardProps) {
   return (
     <div
-      className={`bg-white border rounded-lg p-4 cursor-pointer transition-all ${
+      role="button"
+      tabIndex={0}
+      className={`cursor-pointer rounded-2xl border bg-white p-3 transition-all ${
         isSelected
-          ? 'border-orange-500 ring-2 ring-orange-200'
-          : 'border-gray-200 hover:border-orange-300 hover:shadow-md'
+          ? 'border-orange-500 shadow-md ring-2 ring-orange-100'
+          : 'border-transparent hover:border-gray-200 hover:shadow-sm'
       }`}
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
     >
       <div className="flex gap-3">
-        {/* Thumbnail */}
-        <div className="flex-shrink-0">
-          <div className="w-20 h-20 bg-gradient-to-br from-orange-100 to-orange-200 rounded-lg flex items-center justify-center">
-            {place.cover_image ? (
-              <img
-                src={place.cover_image}
-                alt={place.place_name}
-                className="w-full h-full object-cover rounded-lg"
-              />
-            ) : (
-              <svg
-                className="w-10 h-10 text-orange-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
-            )}
-          </div>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 min-w-0">
+        <CoverImage
+          src={place.cover_image}
+          alt=""
+          className="h-[72px] w-[72px] shrink-0 rounded-xl object-cover"
+        />
+        <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
-            <div className="flex-1 min-w-0">
-              <h3 className="font-semibold text-gray-900 truncate">{place.place_name}</h3>
-              {place.is_approved && (
-                <span className="inline-block mt-1 px-2 py-0.5 bg-green-100 text-green-700 text-xs font-medium rounded-full">
-                  Approved
-                </span>
-              )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h3 className="truncate font-semibold text-gray-900">{place.place_name}</h3>
+                {isApproved(place) && (
+                  <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                    Approved
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 text-sm text-gray-600">{formatPlaceType(place.place_type)}</p>
+              <p className="text-xs text-gray-500">{formatLocation(place.city, place.state_province)}</p>
             </div>
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsFavorited(!isFavorited);
+              type="button"
+              aria-label={isFavorited ? 'Remove favorite' : 'Save favorite'}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleFavorite();
               }}
-              className="flex-shrink-0 p-1 hover:bg-gray-100 rounded-full transition-colors"
+              className="shrink-0 rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-orange-500"
             >
               <svg
-                className={`w-5 h-5 ${isFavorited ? 'fill-orange-500 text-orange-500' : 'text-gray-400'}`}
+                className={`h-5 w-5 ${isFavorited ? 'fill-orange-500 text-orange-500' : ''}`}
                 viewBox="0 0 24 24"
                 stroke="currentColor"
                 strokeWidth={2}
+                fill={isFavorited ? 'currentColor' : 'none'}
               >
                 <path
                   strokeLinecap="round"
@@ -89,25 +84,6 @@ export default function PlaceCard({ place, isSelected, onSelect, onHover }: Plac
                 />
               </svg>
             </button>
-          </div>
-
-          <div className="mt-1 text-sm text-gray-600">
-            <div className="capitalize">{place.place_type.replace(/_/g, ' ')}</div>
-            <div className="text-xs text-gray-500">
-              {place.city}
-              {place.state_province && `, ${place.state_province}`}
-            </div>
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-1">
-            {place.activity_types.map((activity) => (
-              <span
-                key={activity}
-                className="px-2 py-0.5 bg-gray-100 text-gray-700 text-xs rounded-full"
-              >
-                {activity === 'cold_plunge' ? '❄️ Cold' : '🔥 Sauna'}
-              </span>
-            ))}
           </div>
         </div>
       </div>

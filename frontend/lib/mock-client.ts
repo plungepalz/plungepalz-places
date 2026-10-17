@@ -1,179 +1,170 @@
-// Mock API client for local development
-
-import {
+import { PlacesApiError } from './errors';
+import { MOCK_PLACE_DETAILS, MOCK_PLACES } from './mock-data';
+import type {
+  ActivityType,
+  PlaceDetail,
+  PlaceSearchResult,
+  PlacesClient,
+  PlaceType,
   SearchParams,
   SearchResponse,
-  PlaceDetail,
   SubmitPlaceRequest,
   SubmitPlaceResponse,
-  PlaceSearchResult,
-  ActivityType,
-  PlaceType,
 } from './types';
-import { MOCK_PLACES, MOCK_PLACE_DETAILS } from './mock-data';
 
-// Track submitted places in memory (mutable for in-memory state)
 const submittedPlaces: PlaceSearchResult[] = [];
 
-class MockApiClient {
+function allPlaces(): PlaceSearchResult[] {
+  return [...MOCK_PLACES, ...submittedPlaces];
+}
+
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+class MockApiClient implements PlacesClient {
   async search(params: SearchParams): Promise<SearchResponse> {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 220));
 
-    // Combine mock and submitted places
-    let places = [...MOCK_PLACES, ...submittedPlaces];
+    let places = allPlaces();
 
-    // Apply filters
     if (params.q) {
       const query = params.q.toLowerCase();
       places = places.filter(
-        p =>
+        (p) =>
           p.place_name.toLowerCase().includes(query) ||
           p.city.toLowerCase().includes(query) ||
+          p.state_province.toLowerCase().includes(query) ||
+          p.country.toLowerCase().includes(query) ||
           p.description.toLowerCase().includes(query)
       );
     }
 
-    // Apply bbox filter (preferred)
     if (params.bbox) {
-      const [minLng, minLat, maxLng, maxLat] = params.bbox.split(',').map(Number);
+      const parts = params.bbox.split(',').map(Number);
+      if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) {
+        throw new PlacesApiError('Invalid bbox. Expected minLng,minLat,maxLng,maxLat.', 'INVALID_BBOX', 400, {
+          error: { code: 'INVALID_BBOX', message: 'Invalid bbox. Expected minLng,minLat,maxLng,maxLat.' },
+        });
+      }
+      const [minLng, minLat, maxLng, maxLat] = parts;
       places = places.filter(
-        p =>
-          p.lng >= minLng &&
-          p.lng <= maxLng &&
-          p.lat >= minLat &&
-          p.lat <= maxLat
+        (p) => p.lng >= minLng && p.lng <= maxLng && p.lat >= minLat && p.lat <= maxLat
       );
-    }
-    // Fallback to radius filter
-    else if (params.lat !== undefined && params.lng !== undefined) {
-      const radiusKm = params.radius_km || 10;
-      places = places.filter(p => {
-        const distance = this.calculateDistance(
-          params.lat!,
-          params.lng!,
-          p.lat,
-          p.lng
-        );
-        return distance <= radiusKm;
-      });
+    } else if (params.lat !== undefined && params.lng !== undefined) {
+      const radiusKm = params.radius_km ?? 10;
+      places = places.filter((p) => haversineKm(params.lat!, params.lng!, p.lat, p.lng) <= radiusKm);
     }
 
-    // Apply place_type filter
     if (params.place_type) {
-      const types = params.place_type.split(',') as PlaceType[];
-      places = places.filter(p => types.includes(p.place_type));
+      const types = params.place_type.split(',').filter(Boolean) as PlaceType[];
+      places = places.filter((p) => types.includes(p.place_type));
     }
 
-    // Apply activity_types filter (match any)
     if (params.activity_types) {
-      const activities = params.activity_types.split(',') as ActivityType[];
-      places = places.filter(p =>
-        p.activity_types.some(a => activities.includes(a))
-      );
+      const activities = params.activity_types.split(',').filter(Boolean) as ActivityType[];
+      places = places.filter((p) => p.activity_types.some((a) => activities.includes(a)));
     }
 
-    // Apply approved_only filter
     if (params.approved_only) {
-      places = places.filter(p => p.is_approved);
+      places = places.filter((p) => p.is_approved);
     }
 
     const total = places.length;
-    const limit = Math.min(params.limit || 100, 500);
-    const page = params.page || 0;
+    const limit = Math.min(Math.max(params.limit ?? 100, 1), 500);
+    const page = Math.max(params.page ?? 0, 0);
     const start = page * limit;
-    const end = start + limit;
-    const paginatedPlaces = places.slice(start, end);
-    const has_more = end < total;
+    const paginatedPlaces = places.slice(start, start + limit);
 
     return {
       places: paginatedPlaces,
       total,
       page,
       limit,
-      has_more,
+      has_more: start + limit < total,
     };
   }
 
   async getPlace(placeId: string): Promise<PlaceDetail> {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 160));
 
-    // Check submitted places first
-    const submittedPlace = submittedPlaces.find(p => p.place_id === placeId);
-    if (submittedPlace) {
-      return {
-        ...submittedPlace,
-        amenities: [],
-        tags: [],
-      };
+    const submitted = submittedPlaces.find((p) => p.place_id === placeId);
+    if (submitted) {
+      return { ...submitted, amenities: [], tags: [], images: [] };
     }
 
     const place = MOCK_PLACE_DETAILS[placeId];
     if (!place) {
-      throw new Error('Place not found');
+      throw new PlacesApiError('Place not found', 'NOT_FOUND', 404, {
+        error: { code: 'NOT_FOUND', message: 'Place not found' },
+      });
     }
     return place;
   }
 
   async submitPlace(data: SubmitPlaceRequest): Promise<SubmitPlaceResponse> {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 280));
 
-    const submission_id = `sub_${Date.now()}`;
+    if (!data.place_name?.trim()) {
+      throw new PlacesApiError('place_name is required', 'INVALID_BODY', 400, {
+        error: { code: 'INVALID_BODY', message: 'place_name is required' },
+      });
+    }
+    if (data.place_type !== 'nature' && !data.address?.trim()) {
+      throw new PlacesApiError('address is required unless place_type is nature', 'INVALID_BODY', 400, {
+        error: {
+          code: 'INVALID_BODY',
+          message: 'address is required unless place_type is nature',
+        },
+      });
+    }
+    if (typeof data.lat !== 'number' || typeof data.lng !== 'number') {
+      throw new PlacesApiError('lat and lng are required', 'INVALID_BODY', 400, {
+        error: { code: 'INVALID_BODY', message: 'lat and lng are required' },
+      });
+    }
+
     const place_id = `place_${Date.now()}`;
-    const place_slug = `${data.place_name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
-
-    // Add to submitted places (not approved)
+    const place_slug = `${slugify(data.place_name)}-${Date.now()}`;
     const newPlace: PlaceSearchResult = {
       place_id,
       place_slug,
       place_name: data.place_name,
       place_type: data.place_type,
-      address: data.address || '',
-      city: 'Unknown',
+      address: data.address ?? '',
+      city: '',
       state_province: '',
-      country: 'Unknown',
+      country: '',
       activity_types: data.activity_types,
-      description: data.description || '',
+      description: data.description ?? '',
       cover_image: null,
       lat: data.lat,
       lng: data.lng,
       is_approved: false,
       created_ts: new Date().toISOString(),
     };
-
     submittedPlaces.push(newPlace);
 
     return {
-      submission_id,
+      submission_id: `sub_${Date.now()}`,
       place_id,
       place_slug,
       is_approved: false,
     };
-  }
-
-  private calculateDistance(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number
-  ): number {
-    const R = 6371; // Earth's radius in km
-    const dLat = this.toRad(lat2 - lat1);
-    const dLng = this.toRad(lng2 - lng1);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.toRad(lat1)) *
-        Math.cos(this.toRad(lat2)) *
-        Math.sin(dLng / 2) *
-        Math.sin(dLng / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  private toRad(deg: number): number {
-    return deg * (Math.PI / 180);
   }
 }
 

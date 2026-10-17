@@ -1,9 +1,12 @@
-// PlungePalz Places client factory
-
 import { apiClient } from './api-client';
 import { mockClient } from './mock-client';
+import type { PlacesClient } from './types';
 
-const USE_MOCK = !process.env.NEXT_PUBLIC_API_BASE_URL;
+function shouldUseMocks(): boolean {
+  if (process.env.NEXT_PUBLIC_USE_MOCKS === 'true') return true;
+  if (process.env.NEXT_PUBLIC_USE_MOCKS === 'false') return false;
+  return !process.env.NEXT_PUBLIC_API_BASE_URL;
+}
 
-export const client = USE_MOCK ? mockClient : apiClient;
-export const isMockMode = USE_MOCK;
+export const isMockMode = shouldUseMocks();
+export const client: PlacesClient = isMockMode ? mockClient : apiClient;

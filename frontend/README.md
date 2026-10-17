@@ -1,162 +1,90 @@
 # PlungePalz Places Frontend
 
-A Next.js web application for browsing and discovering sauna and cold plunge locations worldwide.
-
-## Features
-
-- **Interactive Map**: Mapbox GL map with clustered pins showing place locations
-- **Filter & Search**: Search by text, activity type (sauna, cold plunge), and place type (business, nature, pop-up, gym)
-- **Place Cards**: Scrollable list of places with thumbnail, approval status, and favorite functionality
-- **Details Panel**: Full place information including location, activities, amenities, and website links
-- **Viewport Sync**: Map and list stay synchronized based on the current map viewport
-- **Mock Mode**: Fully functional with mock data when API is not configured
+Local Next.js app for browsing a global map of sauna and cold plunge locations. The backend Lambdas are still stubs, so this app runs against **mock data** until `NEXT_PUBLIC_API_BASE_URL` is set.
 
 ## Setup
 
-### Prerequisites
-
-- Node.js 18+ and npm
-
-### Installation
-
-1. Install dependencies:
-
 ```bash
+cd frontend
 npm install
-```
-
-2. Create environment configuration:
-
-```bash
 cp .env.example .env.local
 ```
 
-3. Configure environment variables in `.env.local`:
+Edit `frontend/.env.local` (never commit this file):
 
 ```bash
-# Required for map functionality
-NEXT_PUBLIC_MAPBOX_TOKEN=your_mapbox_token_here
-
-# Optional: API base URL (omit for mock mode)
+NEXT_PUBLIC_MAPBOX_TOKEN=pk.your_mapbox_token_here
+# Optional until the API is live — omit to stay in mock mode
 NEXT_PUBLIC_API_BASE_URL=https://your-api-gateway.execute-api.us-east-1.amazonaws.com/dev
+# Optional: force mocks even if a base URL is set
+# NEXT_PUBLIC_USE_MOCKS=true
 ```
 
-### Getting a Mapbox Token
+Get a Mapbox public token from [account.mapbox.com](https://account.mapbox.com/). Without it, the map shows a placeholder and the list/filters still work.
 
-1. Sign up for a free account at [https://www.mapbox.com/](https://www.mapbox.com/)
-2. Navigate to your [Account Dashboard](https://account.mapbox.com/)
-3. Create a new token or copy your default public token
-4. Add it to your `.env.local` file
-
-## Development
-
-Run the development server:
+## Scripts
 
 ```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-The app will run in **mock mode** if `NEXT_PUBLIC_API_BASE_URL` is not set, using realistic mock data for development.
-
-## Building for Production
-
-Build the application:
-
-```bash
+npm run dev      # http://localhost:3000
 npm run build
-```
-
-Start the production server:
-
-```bash
-npm run start
-```
-
-## Linting
-
-Run ESLint:
-
-```bash
 npm run lint
+npm start        # production server after build
 ```
 
-## API Integration
+Dev and build use webpack (`--webpack`) because `react-map-gl` v8 does not resolve cleanly under Turbopack yet.
 
-The frontend connects to the PlungePalz Places API (backend in `../backend/`). See `../backend/docs/API_REFERENCE.md` for the full API contract.
+## Env vars
 
-### API Endpoints Used
+| Variable | Client? | Purpose |
+|---|---|---|
+| `NEXT_PUBLIC_MAPBOX_TOKEN` | yes | Mapbox GL token |
+| `NEXT_PUBLIC_API_BASE_URL` | yes | Places API origin (no hardcoded fallback) |
+| `NEXT_PUBLIC_USE_MOCKS` | yes | `true` forces the in-memory mock client |
 
-- **GET /search**: Search places with filters (bbox, activity types, place types, etc.)
-- **GET /place/{place_id}**: Get full place details
-- **POST /submit**: Submit a new place (typed client function only; no UI yet)
+`.env*` is gitignored except `.env.example`.
 
-### API Contract Notes
+## API client
 
-1. **Approval Status**: Places include `is_approved: boolean`. Only approved places show the "Approved" tag in the UI.
-2. **Pagination**: Search supports `limit` (default 100, max 500) and `page` (0-based) with `has_more` in the response.
-3. **Bbox Filtering**: Preferred method for viewport-based queries using `bbox=minLng,minLat,maxLng,maxLat`.
+Typed client in `lib/` for:
 
-## Project Structure
+- `GET /search`
+- `GET /place/{place_id}`
+- `POST /submit` (typed function only; no submit form UI in this PR)
 
-```
-frontend/
-├── app/
-│   ├── layout.tsx          # Root layout
-│   ├── page.tsx            # Main map view page
-│   └── globals.css         # Global styles
-├── components/
-│   ├── FilterBar.tsx       # Top filter bar with search and chips
-│   ├── PlaceCard.tsx       # Individual place card
-│   ├── PlacesList.tsx      # Scrollable list of place cards
-│   ├── PlacesMap.tsx       # Mapbox map with pins
-│   └── PlaceDetailsPanel.tsx # Sliding details drawer
-├── lib/
-│   ├── types.ts            # TypeScript types
-│   ├── api-client.ts       # Real API client
-│   ├── mock-client.ts      # Mock API client
-│   ├── mock-data.ts        # Mock place data
-│   └── client.ts           # Client factory (switches between real/mock)
-├── .env.example            # Environment variable template
-├── .env.local              # Your local environment (gitignored)
-└── README.md               # This file
-```
+Mock mode is used when the base URL is unset, or when `NEXT_PUBLIC_USE_MOCKS=true`. The mock catalog is ~28 places across several countries, mixed place types, some `is_approved: true` and some false. `POST /submit` in mock mode appends the place so it would show on the map without an Approved tag.
 
-## Mock Data
+## Contract this UI is built against
 
-When running in mock mode, the app includes ~24 mock places across multiple countries:
+This supersedes `backend/docs/API_REFERENCE.md` where they differ (lead-engineer MVP notes):
 
-- United States (Utah, California, New York, Washington, Colorado, etc.)
-- Finland (Helsinki)
-- Iceland (Reykjavik)
-- Germany (Berlin)
-- Japan (Tokyo)
-- Australia (Sydney)
-- Canada (Whistler, Lake Louise)
-- United Kingdom (London)
-- Netherlands (Amsterdam)
+**GET /search query params**
 
-Mix of place types: business, nature, temporary pop-ups, and gym amenities, with varying approval statuses.
+- `q`
+- `bbox=minLng,minLat,maxLng,maxLat` (current map viewport; preferred)
+- `lat` / `lng` / `radius_km` fallback (bbox wins if both)
+- `place_type` — comma list of `business,nature,temporary_pop_up,gym_amenity`
+- `activity_types` — comma list of `cold_plunge,sauna` (match any)
+- `approved_only` (default false)
+- `limit` (default 100, max 500) and `page` (0-based)
 
-## Technologies
+**GET /search response:** `{ places, total, page, limit, has_more }`
 
-- **Next.js 16** (App Router, using webpack)
-- **React 19**
-- **TypeScript**
-- **Tailwind CSS 4**
-- **Mapbox GL JS** (via react-map-gl)
-- **React Map GL 8**
+Each place: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types[]`, `description`, `cover_image` (url\|null), `lat`, `lng` (numbers), `is_approved` (bool), `created_ts`.
 
-**Note:** This project uses webpack instead of Turbopack due to react-map-gl compatibility. The `--webpack` flag is included in the npm scripts.
+**Approval:** show the Approved tag only when `is_approved === true`. Pending submissions come back with `is_approved: false`. Rejected/hidden places are excluded server-side. Public payloads do **not** expose `internal_status` or `internal_comments`.
 
-## Known Limitations
+**GET /place/{place_id}:** full public record plus `is_approved`; 404 if missing.
 
-- No image upload functionality yet
-- Submit form UI not implemented (API client function exists)
-- Clustering logic uses simple markers (advanced clustering TBD)
-- Mock mode uses in-memory state (resets on refresh)
+**POST /submit body:** `place_name`, `place_type`, `activity_types`, `lat`, `lng` (required), `address` (required unless nature), optional `description` and `email`. **201:** `{ submission_id, place_id, place_slug, is_approved: false }`. No verification step.
 
-## License
+**Errors:** `{ error: { code, message } }`.
 
-Proprietary - PlungePalz
+## Layout
+
+Sweatpals-style map-first view:
+
+- Top bar: location chip, filter icon, Sauna / Cold plunge chips, place-type filters, search
+- Left: white rounded list floating over the map (`N places in {area}`), cards with thumbnail, Approved tag, title, place type, city, favorite star
+- Right / background: full-screen Mapbox map. Clusters = black teardrop with count. Single places = orange teardrop with cover image (icon fallback). Zoom +/− and locate-me at bottom right
+- Map move (debounced) re-queries `/search` with `bbox`; list shows what’s in view
+- Hover/select syncs card ↔ pin; click opens a details drawer via `GET /place/{place_id}`

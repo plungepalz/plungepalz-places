@@ -1,89 +1,182 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import Map, { Marker, NavigationControl, GeolocateControl } from 'react-map-gl/mapbox';
-import type { MapRef, ViewStateChangeEvent } from 'react-map-gl/mapbox';
-import { PlaceSearchResult } from '@/lib/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import MapGL, { Marker } from 'react-map-gl/mapbox';
+import type { MapRef } from 'react-map-gl/mapbox';
+import Supercluster from 'supercluster';
+import type { PlaceSearchResult } from '@/lib/types';
+import type { MapBounds } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
+
+interface CameraTarget {
+  longitude: number;
+  latitude: number;
+  zoom: number;
+}
 
 interface PlacesMapProps {
   places: PlaceSearchResult[];
   selectedPlaceId: string | null;
   hoveredPlaceId: string | null;
+  flyToPlaceId: string | null;
+  cameraTarget: CameraTarget | null;
   onSelectPlace: (placeId: string) => void;
-  onViewportChange: (bounds: { minLng: number; minLat: number; maxLng: number; maxLat: number }) => void;
+  onHoverPlace: (placeId: string | null) => void;
+  onViewportChange: (bounds: MapBounds) => void;
   mapboxToken?: string;
+}
+
+type PlaceProps = { placeId: string };
+
+function Teardrop({
+  fill,
+  count,
+  imageUrl,
+  highlighted,
+}: {
+  fill: string;
+  count?: number;
+  imageUrl?: string | null;
+  highlighted?: boolean;
+}) {
+  const size = highlighted ? 44 : count ? 40 : 36;
+  const height = Math.round(size * 1.25);
+  return (
+    <svg
+      width={size}
+      height={height}
+      viewBox="0 0 32 40"
+      className="drop-shadow-md"
+      style={{ display: 'block' }}
+    >
+      <path
+        d="M16 0C7.163 0 0 7.163 0 16C0 24.837 16 40 16 40C16 40 32 24.837 32 16C32 7.163 24.837 0 16 0Z"
+        fill={fill}
+      />
+      {count != null ? (
+        <text
+          x="16"
+          y="18"
+          textAnchor="middle"
+          fill="white"
+          fontSize="12"
+          fontWeight="700"
+          fontFamily="system-ui, sans-serif"
+        >
+          {count}
+        </text>
+      ) : imageUrl ? (
+        <image href={imageUrl} x="8" y="6" width="16" height="16" clipPath="inset(0 round 8px)" />
+      ) : (
+        <circle cx="16" cy="14" r="6" fill="white" opacity="0.92" />
+      )}
+    </svg>
+  );
 }
 
 export default function PlacesMap({
   places,
   selectedPlaceId,
   hoveredPlaceId,
+  flyToPlaceId,
+  cameraTarget,
   onSelectPlace,
+  onHoverPlace,
   onViewportChange,
   mapboxToken,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
-  const [viewState, setViewState] = useState({
-    longitude: -98.5795,
-    latitude: 39.8283,
-    zoom: 4,
-  });
+  const [zoom, setZoom] = useState(3.4);
+  const [bounds, setBounds] = useState<[number, number, number, number]>([-180, -85, 180, 85]);
 
-  const handleMove = useCallback(
-    (evt: ViewStateChangeEvent) => {
-      setViewState(evt.viewState);
+  const reportViewport = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    const b = map.getBounds();
+    if (!b) return;
+    const next: [number, number, number, number] = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    setBounds(next);
+    setZoom(map.getZoom());
+    onViewportChange({
+      minLng: next[0],
+      minLat: next[1],
+      maxLng: next[2],
+      maxLat: next[3],
+    });
+  }, [onViewportChange]);
 
-      // Debounce the viewport change callback
-      if (mapRef.current) {
-        const map = mapRef.current.getMap();
-        const bounds = map.getBounds();
-        onViewportChange({
-          minLng: bounds.getWest(),
-          minLat: bounds.getSouth(),
-          maxLng: bounds.getEast(),
-          maxLat: bounds.getNorth(),
-        });
-      }
-    },
-    [onViewportChange]
-  );
+  const clusterIndex = useMemo(() => {
+    const index = new Supercluster<PlaceProps>({
+      radius: 68,
+      maxZoom: 16,
+    });
+    index.load(
+      places.map((place) => ({
+        type: 'Feature' as const,
+        properties: { placeId: place.place_id },
+        geometry: {
+          type: 'Point' as const,
+          coordinates: [place.lng, place.lat],
+        },
+      }))
+    );
+    return index;
+  }, [places]);
 
-  // Fly to selected place
+  const clusters = useMemo(() => {
+    return clusterIndex.getClusters(bounds, Math.round(zoom));
+  }, [clusterIndex, bounds, zoom]);
+
+  const placeById = useMemo(() => {
+    return new Map(places.map((place) => [place.place_id, place]));
+  }, [places]);
+
   useEffect(() => {
-    if (selectedPlaceId && mapRef.current) {
-      const place = places.find((p) => p.place_id === selectedPlaceId);
-      if (place) {
-        mapRef.current.flyTo({
-          center: [place.lng, place.lat],
-          zoom: Math.max(viewState.zoom, 12),
-          duration: 1000,
-        });
-      }
-    }
-  }, [selectedPlaceId, places, viewState.zoom]);
+    if (!flyToPlaceId || !mapRef.current) return;
+    const place = placeById.get(flyToPlaceId);
+    if (!place) return;
+    mapRef.current.flyTo({
+      center: [place.lng, place.lat],
+      zoom: Math.max(mapRef.current.getZoom(), 12),
+      duration: 800,
+    });
+  }, [flyToPlaceId, placeById]);
+
+  useEffect(() => {
+    if (!cameraTarget || !mapRef.current) return;
+    mapRef.current.flyTo({
+      center: [cameraTarget.longitude, cameraTarget.latitude],
+      zoom: cameraTarget.zoom,
+      duration: 900,
+    });
+  }, [cameraTarget]);
+
+  const zoomBy = (delta: number) => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    map.zoomTo(map.getZoom() + delta, { duration: 200 });
+  };
+
+  const locateMe = () => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition((position) => {
+      mapRef.current?.flyTo({
+        center: [position.coords.longitude, position.coords.latitude],
+        zoom: 11,
+        duration: 900,
+      });
+    });
+  };
 
   if (!mapboxToken) {
     return (
-      <div className="w-full h-full bg-gray-100 flex items-center justify-center">
-        <div className="text-center p-8">
-          <svg
-            className="w-16 h-16 text-gray-400 mx-auto mb-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
-            />
-          </svg>
-          <h3 className="text-lg font-semibold text-gray-700 mb-2">Mapbox Token Required</h3>
-          <p className="text-gray-600 max-w-md">
-            Add <code className="bg-gray-200 px-2 py-1 rounded text-sm">NEXT_PUBLIC_MAPBOX_TOKEN</code> to your{' '}
-            <code className="bg-gray-200 px-2 py-1 rounded text-sm">.env.local</code> file to enable the map.
+      <div className="flex h-full w-full items-center justify-center bg-[#e8e4dc]">
+        <div className="mx-6 max-w-md rounded-2xl bg-white p-8 text-center shadow-lg">
+          <h3 className="text-lg font-semibold text-gray-900">Mapbox token required</h3>
+          <p className="mt-2 text-sm leading-relaxed text-gray-600">
+            Add <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">NEXT_PUBLIC_MAPBOX_TOKEN</code> to{' '}
+            <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">frontend/.env.local</code> to enable the
+            interactive map. The list and filters still work in mock mode.
           </p>
         </div>
       </div>
@@ -91,83 +184,113 @@ export default function PlacesMap({
   }
 
   return (
-    <div className="w-full h-full relative">
-      <Map
+    <div className="relative h-full w-full">
+      <MapGL
         ref={mapRef}
-        {...viewState}
-        onMove={handleMove}
+        initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
         mapStyle="mapbox://styles/mapbox/light-v11"
         mapboxAccessToken={mapboxToken}
-        attributionControl={false}
+        attributionControl
         style={{ width: '100%', height: '100%' }}
+        onLoad={reportViewport}
+        onMove={() => {
+          const map = mapRef.current?.getMap();
+          if (!map) return;
+          const b = map.getBounds();
+          if (!b) return;
+          setBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+          setZoom(map.getZoom());
+        }}
+        onMoveEnd={reportViewport}
       >
-        {/* Places markers */}
-        {places.map((place) => {
-          const isSelected = selectedPlaceId === place.place_id;
-          const isHovered = hoveredPlaceId === place.place_id;
-          const scale = isSelected || isHovered ? 1.2 : 1;
+        {clusters.map((feature) => {
+          const [lng, lat] = feature.geometry.coordinates;
+          const props = feature.properties as {
+            cluster?: boolean;
+            cluster_id?: number;
+            point_count?: number;
+            placeId?: string;
+          };
+
+          if (props.cluster && props.cluster_id != null) {
+            return (
+              <Marker key={`cluster-${props.cluster_id}`} longitude={lng} latitude={lat} anchor="bottom">
+                <button
+                  type="button"
+                  className="cursor-pointer"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const expansion = clusterIndex.getClusterExpansionZoom(props.cluster_id!);
+                    mapRef.current?.flyTo({
+                      center: [lng, lat],
+                      zoom: expansion,
+                      duration: 500,
+                    });
+                  }}
+                >
+                  <Teardrop fill="#111111" count={props.point_count} />
+                </button>
+              </Marker>
+            );
+          }
+
+          const place = props.placeId ? placeById.get(props.placeId) : undefined;
+          if (!place) return null;
+          const highlighted = selectedPlaceId === place.place_id || hoveredPlaceId === place.place_id;
 
           return (
-            <Marker
-              key={place.place_id}
-              longitude={place.lng}
-              latitude={place.lat}
-              anchor="bottom"
-              onClick={(e) => {
-                e.originalEvent.stopPropagation();
-                onSelectPlace(place.place_id);
-              }}
-            >
-              <div
-                className="cursor-pointer transition-transform duration-200"
-                style={{ transform: `scale(${scale})` }}
+            <Marker key={place.place_id} longitude={lng} latitude={lat} anchor="bottom">
+              <button
+                type="button"
+                className="cursor-pointer"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectPlace(place.place_id);
+                }}
+                onMouseEnter={() => onHoverPlace(place.place_id)}
+                onMouseLeave={() => onHoverPlace(null)}
+                aria-label={place.place_name}
               >
-                {/* Teardrop pin */}
-                <svg
-                  width="32"
-                  height="40"
-                  viewBox="0 0 32 40"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="drop-shadow-lg"
-                >
-                  <path
-                    d="M16 0C7.163 0 0 7.163 0 16C0 24.837 16 40 16 40C16 40 32 24.837 32 16C32 7.163 24.837 0 16 0Z"
-                    fill={isSelected || isHovered ? '#f97316' : place.is_approved ? '#fb923c' : '#fdba74'}
-                  />
-                  {place.cover_image ? (
-                    <image
-                      href={place.cover_image}
-                      x="8"
-                      y="6"
-                      width="16"
-                      height="16"
-                      clipPath="circle(8px at center)"
-                    />
-                  ) : (
-                    <circle cx="16" cy="14" r="6" fill="white" opacity="0.9" />
-                  )}
-                </svg>
-                {/* Tooltip on hover */}
-                {isHovered && (
-                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg whitespace-nowrap pointer-events-none">
-                    {place.place_name}
-                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-                  </div>
-                )}
-              </div>
+                <Teardrop fill="#f97316" imageUrl={place.cover_image} highlighted={highlighted} />
+              </button>
             </Marker>
           );
         })}
+      </MapGL>
 
-        {/* Map controls */}
-        <NavigationControl position="bottom-right" style={{ marginBottom: '20px', marginRight: '20px' }} />
-        <GeolocateControl
-          position="bottom-right"
-          style={{ marginBottom: '80px', marginRight: '20px' }}
-          trackUserLocation
-        />
-      </Map>
+      <div className="absolute bottom-6 right-4 z-10 flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={() => zoomBy(1)}
+          className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomBy(-1)}
+          className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+        <button
+          type="button"
+          onClick={locateMe}
+          className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-white text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+          aria-label="Locate me"
+        >
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 8v4l2 2m6-2a8 8 0 11-16 0 8 8 0 0116 0z"
+            />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

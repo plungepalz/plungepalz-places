@@ -1,5 +1,3 @@
-// PlungePalz Places API types
-
 export type PlaceType = 'business' | 'nature' | 'temporary_pop_up' | 'gym_amenity';
 export type ActivityType = 'cold_plunge' | 'sauna';
 
@@ -21,6 +19,16 @@ export interface PlaceSearchResult {
   created_ts: string;
 }
 
+export interface PlaceDetail extends PlaceSearchResult {
+  amenities?: string[];
+  tags?: string[];
+  place_website_url?: string | null;
+  images?: Array<{ url: string; alt?: string }>;
+  header_image?: string | null;
+  has_plungepalz_discount?: boolean;
+  place_type_metadata?: Record<string, unknown>;
+}
+
 export interface SearchResponse {
   places: PlaceSearchResult[];
   total: number;
@@ -31,23 +39,21 @@ export interface SearchResponse {
 
 export interface SearchParams {
   q?: string;
-  bbox?: string; // minLng,minLat,maxLng,maxLat
+  /** minLng,minLat,maxLng,maxLat — preferred over lat/lng/radius_km */
+  bbox?: string;
   lat?: number;
   lng?: number;
   radius_km?: number;
-  place_type?: string; // comma-separated
-  activity_types?: string; // comma-separated
+  /** Comma-separated PlaceType values */
+  place_type?: string;
+  /** Comma-separated ActivityType values (match any) */
+  activity_types?: string;
+  /** Default false. When true, only admin-approved places. */
   approved_only?: boolean;
+  /** Default 100, max 500 */
   limit?: number;
+  /** 0-based */
   page?: number;
-}
-
-export interface PlaceDetail extends PlaceSearchResult {
-  // Full record includes everything from search plus potentially more fields
-  // For now, using the search result shape as the base
-  amenities?: string[];
-  place_website_url?: string;
-  tags?: string[];
 }
 
 export interface SubmitPlaceRequest {
@@ -56,7 +62,8 @@ export interface SubmitPlaceRequest {
   activity_types: ActivityType[];
   lat: number;
   lng: number;
-  address?: string; // required unless nature
+  /** Required unless place_type is nature */
+  address?: string;
   description?: string;
   email?: string;
 }
@@ -68,9 +75,26 @@ export interface SubmitPlaceResponse {
   is_approved: false;
 }
 
-export interface ApiError {
+export interface ApiErrorBody {
   error: {
     code: string;
     message: string;
   };
+}
+
+export type PlacesClient = {
+  search(params: SearchParams): Promise<SearchResponse>;
+  getPlace(placeId: string): Promise<PlaceDetail>;
+  submitPlace(data: SubmitPlaceRequest): Promise<SubmitPlaceResponse>;
+};
+
+export interface MapBounds {
+  minLng: number;
+  minLat: number;
+  maxLng: number;
+  maxLat: number;
+}
+
+export function formatBbox(bounds: MapBounds): string {
+  return `${bounds.minLng},${bounds.minLat},${bounds.maxLng},${bounds.maxLat}`;
 }

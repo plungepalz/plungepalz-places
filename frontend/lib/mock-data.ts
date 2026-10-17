@@ -1,9 +1,15 @@
-// Mock data for PlungePalz Places
+import type { PlaceDetail, PlaceSearchResult } from './types';
 
-import { PlaceSearchResult, PlaceDetail } from './types';
+const SAUNA_IMG =
+  'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&w=400&q=80';
+const PLUNGE_IMG =
+  'https://images.unsplash.com/photo-1571902943202-507ec2618e8f?auto=format&fit=crop&w=400&q=80';
+const NATURE_IMG =
+  'https://images.unsplash.com/photo-1439066615861-d1af74d74000?auto=format&fit=crop&w=400&q=80';
+const SPA_IMG =
+  'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?auto=format&fit=crop&w=400&q=80';
 
 export const MOCK_PLACES: PlaceSearchResult[] = [
-  // United States - Utah
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000001',
     place_slug: 'plunge-lab-salt-lake-city',
@@ -15,9 +21,9 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'USA',
     activity_types: ['cold_plunge', 'sauna'],
     description: 'A dedicated cold plunge and sauna studio in downtown SLC.',
-    cover_image: null,
+    cover_image: PLUNGE_IMG,
     lat: 40.7608,
-    lng: -111.8910,
+    lng: -111.891,
     is_approved: true,
     created_ts: '2025-02-20T12:00:00Z',
   },
@@ -31,15 +37,64 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     state_province: 'UT',
     country: 'USA',
     activity_types: ['cold_plunge'],
-    description: 'Beautiful alpine lake at 8,740 ft elevation. Snow-fed and ice cold year round.',
-    cover_image: null,
+    description: 'Beautiful alpine lake at 8,740 ft. Snow-fed and ice cold year round.',
+    cover_image: NATURE_IMG,
     lat: 40.5974,
     lng: -111.5853,
     is_approved: true,
     created_ts: '2025-02-18T10:00:00Z',
   },
-  
-  // California
+  {
+    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000025',
+    place_slug: 'nordic-millcreek-salt-lake-city',
+    place_name: 'Nordic Millcreek',
+    place_type: 'business',
+    address: '1200 E 3300 S, Salt Lake City, UT 84106',
+    city: 'Salt Lake City',
+    state_province: 'UT',
+    country: 'USA',
+    activity_types: ['sauna', 'cold_plunge'],
+    description: 'Neighborhood contrast studio with a wood-fired sauna and two plunge tubs.',
+    cover_image: SAUNA_IMG,
+    lat: 40.7624,
+    lng: -111.8872,
+    is_approved: true,
+    created_ts: '2025-03-08T12:00:00Z',
+  },
+  {
+    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000026',
+    place_slug: 'the-plunge-house-slc',
+    place_name: 'The Plunge House',
+    place_type: 'business',
+    address: '210 W 400 S, Salt Lake City, UT 84101',
+    city: 'Salt Lake City',
+    state_province: 'UT',
+    country: 'USA',
+    activity_types: ['cold_plunge'],
+    description: 'Walk-in cold plunge club with community hours on weekends.',
+    cover_image: PLUNGE_IMG,
+    lat: 40.7589,
+    lng: -111.8955,
+    is_approved: false,
+    created_ts: '2026-02-12T09:00:00Z',
+  },
+  {
+    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000027',
+    place_slug: 'liberty-park-sauna-pop-up',
+    place_name: 'Liberty Park Sauna Pop-up',
+    place_type: 'temporary_pop_up',
+    address: '600 E 900 S, Salt Lake City, UT 84105',
+    city: 'Salt Lake City',
+    state_province: 'UT',
+    country: 'USA',
+    activity_types: ['sauna'],
+    description: 'Sunday morning mobile sauna next to the park pond.',
+    cover_image: null,
+    lat: 40.7468,
+    lng: -111.8734,
+    is_approved: false,
+    created_ts: '2026-01-30T16:00:00Z',
+  },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000003',
     place_slug: 'the-cold-plunge-venice',
@@ -50,8 +105,8 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     state_province: 'CA',
     country: 'USA',
     activity_types: ['cold_plunge'],
-    description: 'Premier cold plunge studio on Abbot Kinney. Multiple plunge pools.',
-    cover_image: null,
+    description: 'Premier cold plunge studio on Abbot Kinney with multiple pools.',
+    cover_image: PLUNGE_IMG,
     lat: 33.9924,
     lng: -118.4704,
     is_approved: true,
@@ -74,8 +129,6 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     is_approved: false,
     created_ts: '2026-01-10T14:00:00Z',
   },
-
-  // New York
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000005',
     place_slug: 'bathhouse-williamsburg',
@@ -87,14 +140,46 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'USA',
     activity_types: ['cold_plunge', 'sauna'],
     description: 'Modern spa with contrast therapy, saunas, and cold plunges.',
-    cover_image: null,
+    cover_image: SPA_IMG,
     lat: 40.7194,
     lng: -73.9573,
     is_approved: true,
     created_ts: '2025-03-01T09:00:00Z',
   },
-
-  // Washington
+  {
+    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000021',
+    place_slug: 'equinox-hudson-yards',
+    place_name: 'Equinox Hudson Yards',
+    place_type: 'gym_amenity',
+    address: '33 Hudson Yards, New York, NY 10001',
+    city: 'New York',
+    state_province: 'NY',
+    country: 'USA',
+    activity_types: ['cold_plunge', 'sauna'],
+    description: 'Luxury gym with spa-quality cold plunge and sauna.',
+    cover_image: SAUNA_IMG,
+    lat: 40.7538,
+    lng: -74.0019,
+    is_approved: false,
+    created_ts: '2026-01-18T12:00:00Z',
+  },
+  {
+    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000028',
+    place_slug: 'othership-nomad',
+    place_name: 'Othership Nomad',
+    place_type: 'business',
+    address: '31 W 26th St, New York, NY 10010',
+    city: 'New York',
+    state_province: 'NY',
+    country: 'USA',
+    activity_types: ['sauna', 'cold_plunge'],
+    description: 'Social sauna and cold plunge with guided contrast classes.',
+    cover_image: SAUNA_IMG,
+    lat: 40.7446,
+    lng: -73.9903,
+    is_approved: true,
+    created_ts: '2025-04-02T11:00:00Z',
+  },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000006',
     place_slug: 'banya-5-seattle',
@@ -105,15 +190,13 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     state_province: 'WA',
     country: 'USA',
     activity_types: ['cold_plunge', 'sauna'],
-    description: 'Russian-style bathhouse with authentic banya experience.',
-    cover_image: null,
+    description: 'Russian-style bathhouse with an authentic banya experience.',
+    cover_image: SPA_IMG,
     lat: 47.7623,
     lng: -122.2054,
     is_approved: true,
     created_ts: '2025-02-25T11:00:00Z',
   },
-
-  // Colorado
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000007',
     place_slug: 'life-time-lodo-denver',
@@ -131,8 +214,6 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     is_approved: true,
     created_ts: '2025-02-12T07:00:00Z',
   },
-
-  // Finland
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000008',
     place_slug: 'loyly-helsinki',
@@ -144,7 +225,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'Finland',
     activity_types: ['sauna', 'cold_plunge'],
     description: 'Iconic waterfront sauna with direct Baltic Sea access.',
-    cover_image: null,
+    cover_image: SAUNA_IMG,
     lat: 60.1514,
     lng: 24.9275,
     is_approved: true,
@@ -161,26 +242,24 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'Finland',
     activity_types: ['sauna'],
     description: 'Traditional wood-heated public sauna, operating since 1928.',
-    cover_image: null,
+    cover_image: SAUNA_IMG,
     lat: 60.1877,
     lng: 24.9607,
     is_approved: true,
     created_ts: '2025-01-20T15:00:00Z',
   },
-
-  // Iceland
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000010',
     place_slug: 'sky-lagoon-reykjavik',
     place_name: 'Sky Lagoon',
     place_type: 'business',
-    address: 'Vesturbaer, 101 Reykjavik',
+    address: 'Vesturvör 44, 200 Kópavogur',
     city: 'Reykjavik',
     state_province: 'Capital Region',
     country: 'Iceland',
     activity_types: ['cold_plunge', 'sauna'],
-    description: 'Oceanside geothermal lagoon with cold plunge and sauna ritual.',
-    cover_image: null,
+    description: 'Oceanside geothermal lagoon with a cold plunge and sauna ritual.',
+    cover_image: SPA_IMG,
     lat: 64.1452,
     lng: -22.0156,
     is_approved: true,
@@ -196,15 +275,13 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     state_province: 'Southern Region',
     country: 'Iceland',
     activity_types: ['cold_plunge'],
-    description: 'Historic mountain pool built in 1923, fed by natural hot springs.',
-    cover_image: null,
+    description: 'Historic mountain pool built in 1923, fed by natural springs.',
+    cover_image: NATURE_IMG,
     lat: 63.5697,
     lng: -19.6008,
     is_approved: false,
     created_ts: '2026-02-01T10:00:00Z',
   },
-
-  // Germany
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000012',
     place_slug: 'vabali-spa-berlin',
@@ -215,15 +292,13 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     state_province: 'Berlin',
     country: 'Germany',
     activity_types: ['sauna', 'cold_plunge'],
-    description: 'Balinese-inspired spa with extensive sauna world.',
-    cover_image: null,
+    description: 'Balinese-inspired spa with an extensive sauna world.',
+    cover_image: SPA_IMG,
     lat: 52.5238,
-    lng: 13.3690,
+    lng: 13.369,
     is_approved: true,
     created_ts: '2025-02-08T12:00:00Z',
   },
-
-  // Japan
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000013',
     place_slug: 'thermae-yu-tokyo',
@@ -235,14 +310,12 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'Japan',
     activity_types: ['sauna', 'cold_plunge'],
     description: 'Premium onsen and sauna facility in Shinjuku.',
-    cover_image: null,
+    cover_image: SAUNA_IMG,
     lat: 35.6938,
     lng: 139.7036,
     is_approved: true,
     created_ts: '2025-02-22T06:00:00Z',
   },
-
-  // Australia
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000014',
     place_slug: 'icebergs-bondi-beach',
@@ -254,14 +327,12 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'Australia',
     activity_types: ['cold_plunge'],
     description: 'Iconic ocean pool for cold water swimming year-round.',
-    cover_image: null,
+    cover_image: NATURE_IMG,
     lat: -33.8933,
     lng: 151.2753,
     is_approved: true,
     created_ts: '2025-01-28T09:00:00Z',
   },
-
-  // Canada
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000015',
     place_slug: 'scandinave-spa-whistler',
@@ -272,8 +343,8 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     state_province: 'BC',
     country: 'Canada',
     activity_types: ['sauna', 'cold_plunge'],
-    description: 'Scandinavian-inspired spa with hydrotherapy circuit.',
-    cover_image: null,
+    description: 'Scandinavian-inspired spa with a hydrotherapy circuit.',
+    cover_image: SPA_IMG,
     lat: 50.1163,
     lng: -122.9574,
     is_approved: true,
@@ -290,14 +361,12 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'Canada',
     activity_types: ['cold_plunge'],
     description: 'Stunning glacial lake in the Canadian Rockies, ice-cold year-round.',
-    cover_image: null,
+    cover_image: NATURE_IMG,
     lat: 51.4254,
     lng: -116.1773,
     is_approved: false,
     created_ts: '2026-01-22T14:00:00Z',
   },
-
-  // United Kingdom
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000017',
     place_slug: 'the-ice-co-london',
@@ -308,15 +377,13 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     state_province: 'England',
     country: 'UK',
     activity_types: ['cold_plunge'],
-    description: 'East London cold plunge studio with recovery-focused approach.',
-    cover_image: null,
-    lat: 51.5290,
+    description: 'East London cold plunge studio with a recovery-focused approach.',
+    cover_image: PLUNGE_IMG,
+    lat: 51.529,
     lng: -0.0751,
     is_approved: true,
     created_ts: '2025-02-17T10:00:00Z',
   },
-
-  // Netherlands
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000018',
     place_slug: 'sauna-deco-amsterdam',
@@ -328,14 +395,12 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'Netherlands',
     activity_types: ['sauna', 'cold_plunge'],
     description: 'Art Deco sauna and wellness center in a historic canal house.',
-    cover_image: null,
+    cover_image: SAUNA_IMG,
     lat: 52.3759,
     lng: 4.8866,
     is_approved: true,
     created_ts: '2025-02-10T13:00:00Z',
   },
-
-  // More US locations
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000019',
     place_slug: 'other-side-coconut-grove',
@@ -347,9 +412,9 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'USA',
     activity_types: ['cold_plunge', 'sauna'],
     description: 'Wellness studio with cold plunge and infrared sauna.',
-    cover_image: null,
+    cover_image: PLUNGE_IMG,
     lat: 25.7275,
-    lng: -80.2420,
+    lng: -80.242,
     is_approved: true,
     created_ts: '2025-02-14T08:00:00Z',
   },
@@ -363,29 +428,12 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     state_province: 'TX',
     country: 'USA',
     activity_types: ['cold_plunge'],
-    description: 'Natural spring-fed pool, 68-70°F year-round.',
-    cover_image: null,
+    description: 'Natural spring-fed pool, 68–70°F year-round.',
+    cover_image: NATURE_IMG,
     lat: 30.2638,
     lng: -97.7725,
     is_approved: true,
     created_ts: '2025-02-11T09:00:00Z',
-  },
-  {
-    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000021',
-    place_slug: 'equinox-hudson-yards',
-    place_name: 'Equinox Hudson Yards',
-    place_type: 'gym_amenity',
-    address: '33 Hudson Yards, New York, NY 10001',
-    city: 'New York',
-    state_province: 'NY',
-    country: 'USA',
-    activity_types: ['cold_plunge', 'sauna'],
-    description: 'Luxury gym with spa-quality cold plunge and sauna.',
-    cover_image: null,
-    lat: 40.7538,
-    lng: -74.0019,
-    is_approved: false,
-    created_ts: '2026-01-18T12:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000022',
@@ -415,7 +463,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'USA',
     activity_types: ['cold_plunge', 'sauna'],
     description: 'Modern contrast therapy studio in Wicker Park.',
-    cover_image: null,
+    cover_image: PLUNGE_IMG,
     lat: 41.8956,
     lng: -87.6769,
     is_approved: true,
@@ -432,7 +480,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     country: 'USA',
     activity_types: ['cold_plunge'],
     description: 'Alpine lake perfect for cold plunges after the hike.',
-    cover_image: null,
+    cover_image: NATURE_IMG,
     lat: 47.4344,
     lng: -121.7723,
     is_approved: true,
@@ -440,16 +488,24 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
   },
 ];
 
-// Create a detailed record lookup
-export const MOCK_PLACE_DETAILS: Record<string, PlaceDetail> = MOCK_PLACES.reduce(
-  (acc, place) => {
-    acc[place.place_id] = {
+export const MOCK_PLACE_DETAILS: Record<string, PlaceDetail> = Object.fromEntries(
+  MOCK_PLACES.map((place) => [
+    place.place_id,
+    {
       ...place,
-      amenities: place.place_type === 'business' ? ['showers', 'lockers', 'towels'] : [],
-      place_website_url: place.place_type === 'business' ? `https://example.com/${place.place_slug}` : undefined,
-      tags: ['wellness', 'recovery'],
-    };
-    return acc;
-  },
-  {} as Record<string, PlaceDetail>
+      amenities: place.place_type === 'nature' ? ['parking'] : ['showers', 'lockers', 'towels'],
+      place_website_url:
+        place.place_type === 'business' || place.place_type === 'gym_amenity'
+          ? `https://example.com/${place.place_slug}`
+          : null,
+      tags: place.activity_types,
+      has_plungepalz_discount: place.is_approved && place.place_type === 'business',
+      images: place.cover_image ? [{ url: place.cover_image }] : [],
+      header_image: place.cover_image,
+      place_type_metadata:
+        place.place_type === 'nature'
+          ? { access_type: 'free', nature_type: 'lake' }
+          : { access_type: 'pay', walk_ins_allowed: true },
+    },
+  ])
 );
