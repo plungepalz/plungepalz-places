@@ -129,6 +129,84 @@ def test_submit_max_lengths_at_limit_ok(dynamodb_tables):
     assert resp["statusCode"] == 201
 
 
+def test_submit_parses_international_city_and_postal_code(dynamodb_tables):
+    mod = load_handler("Places_Submit")
+    payload = {
+        **VALID,
+        "place_name": "Löyly",
+        "address": "Hernesaarenranta 4, 00150 Helsinki, Finland",
+    }
+    body = parse_body(mod.handler(api_event(body=payload), None))
+    place = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": body["place_id"]})[
+        "Item"
+    ]
+    assert place["city"] == "Helsinki"
+    assert place["country"] == "Finland"
+    assert place["postal_code"] == "00150"
+    assert "00150" not in place["place_slug"]
+    assert "helsinki" in place["place_slug"]
+    sub = dynamodb_tables.Table("Places_Submissions").get_item(
+        Key={"submission_id": body["submission_id"]}
+    )["Item"]
+    original = sub["original_submission_record_json"]
+    assert original["city"] == "Helsinki"
+    assert original["postal_code"] == "00150"
+
+
+def test_submit_usa_country_from_usa_token(dynamodb_tables):
+    mod = load_handler("Places_Submit")
+    payload = {
+        **VALID,
+        "address": "457 East 300 South, Salt Lake City, UT 84111, USA",
+    }
+    body = parse_body(mod.handler(api_event(body=payload), None))
+    place = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": body["place_id"]})[
+        "Item"
+    ]
+    assert place["country"] == "USA"
+    assert place["city"] == "Salt Lake City"
+    assert place["state_province"] == "UT"
+    assert place["postal_code"] == "84111"
+
+
+def test_submit_omits_postal_code_when_absent(dynamodb_tables):
+    mod = load_handler("Places_Submit")
+    payload = {
+        "place_name": "Silver Lake",
+        "place_type": "nature",
+        "activity_types": ["cold_plunge"],
+        "lat": 40.5974,
+        "lng": -111.5853,
+    }
+    body = parse_body(mod.handler(api_event(body=payload), None))
+    place = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": body["place_id"]})[
+        "Item"
+    ]
+    assert "postal_code" not in place
+    assert "city" not in place
+
+
+def test_submit_ignores_client_location_overrides(dynamodb_tables):
+    mod = load_handler("Places_Submit")
+    payload = {
+        **VALID,
+        "address": "457 East 300 South, Salt Lake City, UT 84111, USA",
+        "city": "Explicit City",
+        "state_province": "CO",
+        "postal_code": "80202",
+    }
+    body = parse_body(mod.handler(api_event(body=payload), None))
+    place = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": body["place_id"]})[
+        "Item"
+    ]
+    assert place["city"] == "Salt Lake City"
+    assert place["state_province"] == "UT"
+    assert place["postal_code"] == "84111"
+    assert place["country"] == "USA"
+    assert "explicit-city" not in body["place_slug"]
+    assert "salt-lake-city" in body["place_slug"]
+
+
 def test_submit_invalid_json():
     mod = load_handler("Places_Submit")
     resp = mod.handler({"body": "{not json"}, None)

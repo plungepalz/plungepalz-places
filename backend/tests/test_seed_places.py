@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from places_common.records import parse_address_parts
 from places_common.validate import validate_submit_body
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -71,16 +72,16 @@ def test_seed_file_has_required_coverage_and_valid_payloads():
     for entry in entries:
         assert entry.get("source_url")
         payload = seed.submit_payload(entry)
-        expected = validate_submit_body(
-            {
-                "place_name": entry["name"],
-                "place_type": entry["place_type"],
-                "activity_types": entry["activity_types"],
-                "lat": entry["lat"],
-                "lng": entry["lng"],
-                **({"address": entry["address"]} if entry.get("address") else {}),
-            }
-        )
+        body = {
+            "place_name": entry["name"],
+            "place_type": entry["place_type"],
+            "activity_types": entry["activity_types"],
+            "lat": entry["lat"],
+            "lng": entry["lng"],
+        }
+        if entry.get("address"):
+            body["address"] = entry["address"]
+        expected = validate_submit_body(body)
         assert payload == expected
         assert "website" not in payload
         assert "source_url" not in payload
@@ -89,6 +90,220 @@ def test_seed_file_has_required_coverage_and_valid_payloads():
         assert len(payload["place_name"]) <= 200
         if payload.get("address"):
             assert len(payload["address"]) <= 500
+
+
+def test_seed_cities_have_no_digits_or_bare_region_codes():
+    seed = _load_seed_mod()
+    entries = seed.load_seed_entries(SEED_FILE)
+    checked = 0
+    for entry in entries:
+        address = entry.get("address")
+        if not isinstance(address, str) or not address.strip():
+            continue
+        parsed = parse_address_parts(address)
+        city = parsed.get("city")
+        assert city, entry.get("name")
+        assert city.strip()
+        assert not any(ch.isdigit() for ch in city), (entry.get("name"), city)
+        assert not (
+            len(city) in (2, 3) and city.isalpha() and city.isupper()
+        ), (entry.get("name"), city)
+        checked += 1
+    assert checked >= 30
+
+
+# Locked against the parser output for every current seed address so optional
+# locality tweaks cannot silently change existing rows. US country stays USA.
+SEED_ADDRESS_PARSE = {
+    "Optimyze Scottsdale": {
+        "country": "USA",
+        "state_province": "AZ",
+        "postal_code": "85258",
+        "city": "Scottsdale",
+    },
+    "RESET Old Town Scottsdale": {
+        "country": "USA",
+        "state_province": "AZ",
+        "postal_code": "85257",
+        "city": "Scottsdale",
+    },
+    "ReConnect Mind Body Scottsdale": {
+        "country": "USA",
+        "state_province": "AZ",
+        "postal_code": "85254",
+        "city": "Scottsdale",
+    },
+    "FIX Medical Group Scottsdale": {
+        "country": "USA",
+        "state_province": "AZ",
+        "postal_code": "85254",
+        "city": "Scottsdale",
+    },
+    "Hanmer Springs Thermal Pools & Spa": {
+        "country": "New Zealand",
+        "city": "Hanmer Springs",
+        "postal_code": "7334",
+    },
+    "Tekapo Springs": {
+        "country": "New Zealand",
+        "city": "Lake Tekapo",
+        "postal_code": "7945",
+    },
+    "InterContinental Fiji Golf Resort & Spa": {"country": "Fiji", "city": "Viti Levu"},
+    "Kilolani Spa at Grand Wailea": {
+        "country": "USA",
+        "state_province": "HI",
+        "postal_code": "96753",
+        "city": "Wailea",
+    },
+    "Hualalai Spa": {
+        "country": "USA",
+        "state_province": "HI",
+        "postal_code": "96740",
+        "city": "Kailua-Kona",
+    },
+    "Löyly": {"country": "Finland", "postal_code": "00150", "city": "Helsinki"},
+    "Allas Sea Pool": {"country": "Finland", "postal_code": "00160", "city": "Helsinki"},
+    "Kotiharjun Sauna": {"country": "Finland", "postal_code": "00500", "city": "Helsinki"},
+    "Kulttuurisauna": {"country": "Finland", "postal_code": "00530", "city": "Helsinki"},
+    "Rajaportin Sauna": {"country": "Finland", "postal_code": "33250", "city": "Tampere"},
+    "Sompasauna": {"country": "Finland", "postal_code": "00570", "city": "Helsinki"},
+    "Sky Lagoon": {"country": "Iceland", "postal_code": "200", "city": "Kópavogur"},
+    "The Well": {"country": "Norway", "postal_code": "1412", "city": "Sofiemyr"},
+    "Yasuragi Hasseludden": {
+        "country": "Sweden",
+        "postal_code": "132 81",
+        "city": "Saltsjö-Boo",
+    },
+    "Community Sauna Baths Hackney Wick": {
+        "country": "United Kingdom",
+        "city": "London",
+        "postal_code": "E9 5JH",
+    },
+    "Banya No.1 Chiswick": {
+        "country": "United Kingdom",
+        "city": "London",
+        "postal_code": "W4 5TF",
+    },
+    "Finnish Church in London": {
+        "country": "United Kingdom",
+        "city": "London",
+        "postal_code": "SE16 7HZ",
+    },
+    "Cold Plunge Coffee": {
+        "country": "USA",
+        "state_province": "UT",
+        "postal_code": "84111",
+        "city": "Salt Lake City",
+    },
+    "Bathhouse Williamsburg": {
+        "country": "USA",
+        "state_province": "NY",
+        "postal_code": "11249",
+        "city": "Brooklyn",
+    },
+    "Othership Yorkville": {
+        "country": "Canada",
+        "state_province": "ON",
+        "postal_code": "M5S 2W7",
+        "city": "Toronto",
+    },
+    "Othership Adelaide": {
+        "country": "Canada",
+        "state_province": "ON",
+        "postal_code": "M5V 3C1",
+        "city": "Toronto",
+    },
+    "Kabuki Springs & Spa": {
+        "country": "USA",
+        "state_province": "CA",
+        "postal_code": "94115",
+        "city": "San Francisco",
+    },
+    "Archimedes Banya": {
+        "country": "USA",
+        "state_province": "CA",
+        "postal_code": "94124",
+        "city": "San Francisco",
+    },
+    "Scandinave Spa Whistler": {
+        "country": "Canada",
+        "state_province": "BC",
+        "postal_code": "V8E 1L1",
+        "city": "Whistler",
+    },
+    "Barton Springs Pool": {
+        "country": "USA",
+        "state_province": "TX",
+        "postal_code": "78746",
+        "city": "Austin",
+    },
+    "Thermae-Yu": {"country": "Japan", "city": "Tokyo", "postal_code": "160-0021"},
+    "Spa LaQua": {"country": "Japan", "city": "Tokyo", "postal_code": "112-0003"},
+    "Peninsula Hot Springs": {
+        "country": "Australia",
+        "city": "Fingal",
+        "state_province": "VIC",
+        "postal_code": "3939",
+    },
+    "Bondi Icebergs Club": {
+        "country": "Australia",
+        "city": "Bondi Beach",
+        "state_province": "NSW",
+        "postal_code": "2026",
+    },
+    "Spa Land Centum City": {
+        "country": "South Korea",
+        "city": "Busan",
+        "postal_code": "48058",
+    },
+    "vabali spa Berlin": {"country": "Germany", "postal_code": "10557", "city": "Berlin"},
+}
+
+
+def test_every_seed_address_parses_exactly():
+    seed = _load_seed_mod()
+    entries = seed.load_seed_entries(SEED_FILE)
+    seen = set()
+    for entry in entries:
+        address = entry.get("address")
+        name = entry["name"]
+        if not isinstance(address, str) or not address.strip():
+            assert name not in SEED_ADDRESS_PARSE
+            continue
+        seen.add(name)
+        assert parse_address_parts(address) == SEED_ADDRESS_PARSE[name], name
+    assert seen == set(SEED_ADDRESS_PARSE)
+
+
+def test_us_seed_entries_keep_country_usa():
+    seed = _load_seed_mod()
+    entries = seed.load_seed_entries(SEED_FILE)
+    us_entries = [
+        entry
+        for entry in entries
+        if isinstance(entry.get("address"), str) and entry["address"].rstrip().endswith("USA")
+    ]
+    assert len(us_entries) >= 8
+    for entry in us_entries:
+        parsed = parse_address_parts(entry["address"])
+        assert parsed.get("country") == "USA", entry["name"]
+        assert parsed.get("city")
+        assert parsed.get("state_province")
+
+
+def test_submit_payload_does_not_forward_location_overrides():
+    seed = _load_seed_mod()
+    entry = _sample_entry(
+        city="Explicit City",
+        state_province="EX",
+        postal_code="99999",
+    )
+    payload = seed.submit_payload(entry)
+    assert "city" not in payload
+    assert "state_province" not in payload
+    assert "postal_code" not in payload
+    assert payload["address"] == entry["address"]
 
 
 def test_dry_run_makes_no_requests(tmp_path, capsys, monkeypatch):

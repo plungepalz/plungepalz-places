@@ -46,6 +46,9 @@ def handler(event, context):
 
     address_parts = parse_address_parts(data.get("address"))
     city = address_parts.get("city")
+    state_province = address_parts.get("state_province")
+    postal_code = address_parts.get("postal_code")
+    country = address_parts.get("country")
     place_slug = generate_place_slug(data["place_name"], city, place_id)
 
     original = omit_empty_strings(
@@ -58,8 +61,9 @@ def handler(event, context):
             "address": data.get("address"),
             "description": data.get("description"),
             "city": city,
-            "state_province": address_parts.get("state_province"),
-            "country": address_parts.get("country"),
+            "state_province": state_province,
+            "country": country,
+            "postal_code": postal_code,
         }
     )
 
@@ -108,10 +112,12 @@ def handler(event, context):
         place["description"] = data["description"]
     if city:
         place["city"] = city
-    if address_parts.get("state_province"):
-        place["state_province"] = address_parts["state_province"]
-    if address_parts.get("country"):
-        place["country"] = address_parts["country"]
+    if state_province:
+        place["state_province"] = state_province
+    if country:
+        place["country"] = country
+    if postal_code:
+        place["postal_code"] = postal_code
 
     h3_fields = compute_h3(data["lat"], data["lng"])
     place.update(h3_fields)

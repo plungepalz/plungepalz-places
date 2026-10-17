@@ -573,6 +573,7 @@ Storage (DynamoDB) keeps DATA_SCHEMAS.md names. The response layer maps:
 | `ai_autofill_ts` | `ai_autofill_ts` | Set when autofill completes. Omitted until then. |
 | `ai_autofill_status` | `ai_autofill_status` | `pending` \| `complete` \| `failed`. Claim guard before any paid outbound call. |
 | `ai_autofill_claimed_ts` | `ai_autofill_claimed_ts` | Set when a claim is taken. A `pending` claim older than 5 minutes may be reclaimed. |
+| `postal_code` | `postal_code` | Optional. Stored on Places_Places and copied onto the Algolia object when present. Omitted when missing. Not a PlaceSummary or GetByID field. |
 
 Conflicts flagged, not silently renamed:
 

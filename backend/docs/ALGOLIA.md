@@ -12,6 +12,7 @@ Index name (dev): `places_dev` (`ALGOLIA_INDEX_NAME`).
 | `objectID` | `place_id` |
 | `_geoloc` | `{lat, lng}` for geo / bbox |
 | PlaceSummary fields | `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types`, `description`, `cover_image`, `lat`, `lng`, `is_approved`, `ts_created` |
+| `postal_code` | optional; copied from Places_Places when present, omitted when missing |
 | `ts_created_unix` | numeric unix seconds — **ranking only**, not returned by Search |
 | `internal_status` | **filter only** — never returned by Search |
 | `visibility` | filter only |
