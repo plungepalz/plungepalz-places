@@ -367,15 +367,18 @@ def parse_address_parts(address: str | None) -> dict[str, str]:
     if not parts:
         return {}
     out: dict[str, str] = {}
-    # One-part input (no commas) matches main: empty, except strict US "City ST 12345".
+    # One-part input (no commas) matches main: empty, except strict US "City ST 12345"
+    # where the captured city has no digits (not "123 Main St Phoenix AZ 85004").
     if len(parts) == 1:
         us_city_zip = _US_CITY_STATE_ZIP_RE.fullmatch(parts[0])
         if us_city_zip and us_city_zip.group(2).upper() in _US_STATE_CODES:
-            return {
-                "city": us_city_zip.group(1).strip(),
-                "state_province": us_city_zip.group(2).upper(),
-                "postal_code": us_city_zip.group(3),
-            }
+            city = us_city_zip.group(1).strip()
+            if city and not re.search(r"\d", city):
+                return {
+                    "city": city,
+                    "state_province": us_city_zip.group(2).upper(),
+                    "postal_code": us_city_zip.group(3),
+                }
         return {}
 
     last = parts[-1]

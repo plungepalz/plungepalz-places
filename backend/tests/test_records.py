@@ -176,6 +176,7 @@ PARSER_CASES = [
     ("one-part Finnish street", "Kansanpuistonpolku 5", {}),
     ("one-part country name", "Canada", {}),
     ("one-part city name", "Helsinki", {}),
+    ("one-part street city ST ZIP", "123 Main St Phoenix AZ 85004", {}),
 ]
 
 
