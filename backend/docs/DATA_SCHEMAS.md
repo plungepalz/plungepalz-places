@@ -36,9 +36,9 @@
 | images | List[Map] | Image URLs/metadata |
 | cover_image | String \| null | Primary image URL |
 | header_image | String \| null | Header/banner image URL |
-| internal_status | String | in_review \| active \| rejected |
+| internal_status | String | in_review \| active \| rejected. `is_approved` is derived (`internal_status == "active"`) and is **not** stored. `decision=in_review` restores a fresh Submit: `in_review`, `internal_verified=false`, and removes leftover `is_approved` / `reviewed_ts` / `reviewed_by` / `ts_reviewed` / `reviewer`. |
 | internal_comments | String | Admin notes |
-| internal_verified | Boolean | Manual verification flag |
+| internal_verified | Boolean | Manual verification flag; `false` on Submit and after an `in_review` revert |
 | internal_verified_ts | String | ISO timestamp UTC |
 | external_reporting | List[Map] | Abuse/duplicate reports |
 | total_plunge_sessions_recorded | Number | Counter |

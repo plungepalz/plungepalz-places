@@ -28,17 +28,19 @@ Idempotency:
 
 A successful run **merges** created `place_id`s into `--output` (default `scripts/seed_data/.seed_places_created.json`, gitignored), de-duplicated, so a later partial run does not wipe ids that `review_place.py --from-file` still needs.
 
-## Review / approve (`review_place.py`)
+## Review / approve / revert (`review_place.py`)
 
-Writes `internal_status` on `TABLE_PLACES` with boto3 (not SigV4 to API Gateway). Same write as `Places_AdminReview`.
+Writes `internal_status` on `TABLE_PLACES` with boto3 (not SigV4 to API Gateway). Same write as `Places_AdminReview`. `--decision in_review` reverts an approval to a fresh `POST /submit` (pending on the map, no Approved tag, `is_approved` false). The Places_Places stream upserts Algolia as pending.
 
 ```bash
 python scripts/review_place.py --place-id UUID --decision active
 python scripts/review_place.py --place-id UUID --decision rejected --comments "duplicate"
+python scripts/review_place.py --place-id UUID --decision in_review
 python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision active
+python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision in_review
 ```
 
-`--from-file` reads `place_ids` (or a `created` array) from the seed output file. `--limit` (requires `--from-file`, must be >= 1) approves the first N ids. Do not run this against production unless you intend to flip those places to `active`.
+`--from-file` reads `place_ids` (or a `created` array) from the seed output file. `--limit` (requires `--from-file`, must be >= 1) reviews the first N ids. Do not run this against production unless you intend to flip those places.
 
 ## Other scripts
 

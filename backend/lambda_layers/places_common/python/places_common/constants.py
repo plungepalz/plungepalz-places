@@ -4,7 +4,28 @@ VALID_PLACE_TYPES = frozenset({"business", "nature", "temporary_pop_up", "gym_am
 VALID_ACTIVITY_TYPES = frozenset({"cold_plunge", "sauna"})
 VALID_INTERNAL_STATUSES = frozenset({"in_review", "active", "rejected"})
 VALID_VISIBILITY = frozenset({"public", "hidden"})
-VALID_REVIEW_DECISIONS = frozenset({"active", "rejected"})
+VALID_REVIEW_DECISIONS = frozenset({"active", "rejected", "in_review"})
+
+# Approval metadata the active/reject path may persist (or leftover demo writes).
+# decision=in_review REMOVEs these so the item matches a fresh Places_Submit record.
+REVIEW_REVERT_REMOVE_ATTRS = (
+    "is_approved",
+    "reviewed_ts",
+    "reviewed_by",
+    "ts_reviewed",
+    "reviewer",
+)
+
+# Approval-related keys compared after revert vs a freshly submitted place.
+REVIEW_APPROVAL_COMPARE_ATTRS = (
+    "internal_status",
+    "is_approved",
+    "internal_verified",
+    "reviewed_ts",
+    "reviewed_by",
+    "ts_reviewed",
+    "reviewer",
+)
 
 DEFAULT_SEARCH_LIMIT = 100
 MAX_SEARCH_LIMIT = 500

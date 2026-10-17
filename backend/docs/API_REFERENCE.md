@@ -472,13 +472,15 @@ Only the approved claimer can edit. Request must include proof of claim (e.g. Co
 **Lambda:** Places_AdminReview  
 **Tables:** Places_Places
 
-Sets `internal_status` to `active` or `rejected`, optional `internal_comments`, and `ts_last_updated`. Approving flips `is_approved` to true (derived). The Places_Places stream then upserts/deletes Algolia.
+Sets `internal_status` to `active`, `rejected`, or `in_review`, optional `internal_comments`, and `ts_last_updated`. Approving flips `is_approved` to true (derived). `decision=in_review` reverts the place to the exact approval state of a fresh `POST /submit`: `internal_status=in_review`, `is_approved` false, review metadata (`reviewed_ts`, `reviewer`, and aliases) cleared. The Places_Places stream then upserts/deletes Algolia (a revert upserts as pending).
 
 CLI (boto3 DynamoDB, not SigV4 to API Gateway):
 
 ```bash
 python scripts/review_place.py --place-id UUID --decision active
 python scripts/review_place.py --place-id UUID --decision rejected --comments "duplicate"
+python scripts/review_place.py --place-id UUID --decision in_review
+python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision in_review
 ```
 
 Requires `dynamodb:GetItem` + `dynamodb:UpdateItem` on `TABLE_PLACES`. Same write as the Lambda.
@@ -488,7 +490,7 @@ Requires `dynamodb:GetItem` + `dynamodb:UpdateItem` on `TABLE_PLACES`. Same writ
 ```json
 {
   "place_id": "uuid",
-  "decision": "active | rejected",
+  "decision": "active | rejected | in_review",
   "internal_comments": "string (optional)"
 }
 ```

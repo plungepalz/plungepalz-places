@@ -10,7 +10,7 @@
 - **Places_Search:** Algolia GET /search
 - **Places_GetByID:** DynamoDB GET /place/{place_id}
 - **Places_SubmitAIAutofill:** Opt-in UpdateItem enrichment (no verified gate)
-- **Places_AdminReview:** IAM approve/reject + `scripts/review_place.py`
+- **Places_AdminReview:** IAM approve/reject/revert-to-in_review + `scripts/review_place.py`
 - **Places_AlgoliaSync:** Places_Places stream → Algolia upsert/delete
 
 ---

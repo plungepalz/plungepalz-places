@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from tests.conftest import load_handler
+from tests.conftest import api_event, load_handler, parse_body
+from tests.test_submit import VALID as SUBMIT_BODY
 
 
 def _stream_record(event_name, *, new=None, old=None, place_id="p1"):
@@ -130,3 +131,55 @@ def test_algolia_sync_batch_mixed(fake_algolia, monkeypatch):
     assert "a" in fake_algolia.objects
     assert "b" in fake_algolia.deleted
     assert "c" in fake_algolia.deleted
+
+
+def test_algolia_sync_revert_matches_fresh_in_review(fake_algolia, monkeypatch, dynamodb_tables):
+    """A reverted place syncs as pending through the normal stream path."""
+    table = dynamodb_tables.Table("Places_Places")
+    submit = load_handler("Places_Submit")
+    review = load_handler("Places_AdminReview")
+    sync = _mod(fake_algolia, monkeypatch)
+
+    fresh_id = parse_body(submit.handler(api_event(body=SUBMIT_BODY), None))["place_id"]
+    fresh = table.get_item(Key={"place_id": fresh_id})["Item"]
+
+    reverted_id = parse_body(
+        submit.handler(api_event(body={**SUBMIT_BODY, "place_name": "Other Lab"}), None)
+    )["place_id"]
+    assert (
+        review.handler(api_event(body={"place_id": reverted_id, "decision": "active"}), None)[
+            "statusCode"
+        ]
+        == 200
+    )
+    approved = table.get_item(Key={"place_id": reverted_id})["Item"]
+    assert (
+        review.handler(api_event(body={"place_id": reverted_id, "decision": "in_review"}), None)[
+            "statusCode"
+        ]
+        == 200
+    )
+    reverted = table.get_item(Key={"place_id": reverted_id})["Item"]
+
+    result = sync.handler(
+        {
+            "Records": [
+                _stream_record("INSERT", new=fresh, place_id=fresh_id),
+                _stream_record("MODIFY", new=reverted, old=approved, place_id=reverted_id),
+            ]
+        },
+        None,
+    )
+    assert result["upserted"] == 2
+    assert result["deleted"] == 0
+    assert reverted_id not in fake_algolia.deleted
+
+    fresh_obj = fake_algolia.objects[fresh_id]
+    reverted_obj = fake_algolia.objects[reverted_id]
+    assert fresh_obj["internal_status"] == "in_review"
+    assert reverted_obj["internal_status"] == "in_review"
+    assert fresh_obj["is_approved"] is False
+    assert reverted_obj["is_approved"] is False
+    assert fresh_obj["visibility"] == reverted_obj["visibility"] == "public"
+    for key in ("internal_status", "is_approved", "visibility"):
+        assert fresh_obj[key] == reverted_obj[key]

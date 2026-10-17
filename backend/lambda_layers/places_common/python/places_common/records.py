@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from .constants import PLACE_DETAIL_FIELDS, PLACE_SUMMARY_FIELDS
+from .constants import (
+    PLACE_DETAIL_FIELDS,
+    PLACE_SUMMARY_FIELDS,
+    REVIEW_REVERT_REMOVE_ATTRS,
+)
 
 
 def utc_now() -> str:
@@ -366,3 +370,45 @@ def should_delete_from_algolia(place: dict | None) -> bool:
     status = place.get("internal_status")
     visibility = place.get("visibility") or "public"
     return status == "rejected" or visibility == "hidden"
+
+
+def review_item_update_kwargs(
+    place_id: str,
+    decision: str,
+    comments: str | None = None,
+    ts: str | None = None,
+) -> dict[str, Any]:
+    """Build Places_Places UpdateItem kwargs for AdminReview / review_place.py.
+
+    No DynamoDB I/O. ``decision=in_review`` restores the approval slice of a
+    fresh Places_Submit write: ``internal_status=in_review``,
+    ``internal_verified=false``, and REMOVE of stored approval flags
+    (``is_approved``, ``reviewed_ts``, ``reviewer``, and aliases).
+    """
+    if not ts:
+        ts = utc_now()
+
+    set_parts = ["internal_status = :st", "ts_last_updated = :ts"]
+    values: dict[str, Any] = {":st": decision, ":ts": ts}
+
+    if comments is not None and comments != "":
+        set_parts.append("internal_comments = :c")
+        values[":c"] = comments
+
+    remove_parts: list[str] = []
+    if decision == "in_review":
+        set_parts.append("internal_verified = :iv")
+        values[":iv"] = False
+        remove_parts.extend(REVIEW_REVERT_REMOVE_ATTRS)
+
+    expr = "SET " + ", ".join(set_parts)
+    if remove_parts:
+        expr += " REMOVE " + ", ".join(remove_parts)
+
+    return {
+        "Key": {"place_id": place_id},
+        "UpdateExpression": expr,
+        "ConditionExpression": "attribute_exists(place_id)",
+        "ExpressionAttributeValues": values,
+        "ReturnValues": "ALL_NEW",
+    }

@@ -442,7 +442,7 @@ def validate_review_body(body: dict) -> dict[str, Any]:
 
     decision = body.get("decision")
     if decision not in VALID_REVIEW_DECISIONS:
-        _field_error("decision", "decision must be active or rejected", details)
+        _field_error("decision", "decision must be active, rejected, or in_review", details)
         decision = None
 
     comments = body.get("internal_comments")

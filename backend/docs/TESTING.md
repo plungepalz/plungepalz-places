@@ -14,7 +14,7 @@ pytest tests
 
 Dev deps include `pytest`, `h3`, `moto[dynamodb]`, `boto3`, and `algoliasearch`. Tests mock DynamoDB (moto) and Algolia (in-memory fake index); they do not use the network. Nothing should be skipped once `requirements-dev.txt` is installed.
 
-To load verified real places into a deployed API (no AI calls), see [scripts/README.md](../scripts/README.md) for `seed_places.py` and `review_place.py --from-file`.
+To load verified real places into a deployed API (no AI calls), see [scripts/README.md](../scripts/README.md) for `seed_places.py` and `review_place.py --from-file`. Revert demo approvals with `--decision in_review`.
 
 ## Manual Test Structure
 
