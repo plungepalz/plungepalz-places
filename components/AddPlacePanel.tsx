@@ -206,8 +206,9 @@ export default function AddPlacePanel({
       ref={panelRef}
       role="dialog"
       aria-labelledby="add-place-title"
+      data-add-place-panel
       className="absolute bottom-28 right-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
-      style={{ top: offsetTop }}
+      style={{ top: offsetTop, transition: 'top 200ms ease' }}
     >
       <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
         <h2 id="add-place-title" className="text-lg font-semibold text-gray-900">
@@ -299,7 +300,7 @@ export default function AddPlacePanel({
                   onClick={() => toggleActivity(activity)}
                   className={`rounded-full px-3 py-1.5 text-sm font-medium ${
                     activityTypes.includes(activity)
-                      ? 'bg-orange-500 text-white'
+                      ? 'bg-brand text-white'
                       : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
                   aria-pressed={activityTypes.includes(activity)}
@@ -498,7 +499,7 @@ export default function AddPlacePanel({
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+            className="w-full rounded-xl bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-selected disabled:opacity-60"
           >
             {isSubmitting ? 'Submitting…' : 'Submit place'}
           </button>

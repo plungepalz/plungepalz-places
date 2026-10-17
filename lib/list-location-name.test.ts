@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { listLocationName } from './list-location-name';
+import { listLocationName, locationChipLabel } from './list-location-name';
 import { LOCATION_PRESETS } from './locations';
 import type { PlaceSearchResult } from './types';
 
@@ -63,4 +63,34 @@ test('worldwide chip at regional zoom falls back to this area', () => {
 test('no map uses the selected chip', () => {
   assert.equal(listLocationName({ hasMap: false, zoom: null, places: [], location: worldwide }), 'the world');
   assert.equal(listLocationName({ hasMap: false, zoom: null, places: [], location: unitedStates }), 'United States');
+});
+
+test('user-initiated pan away from a country preset uses this area, not the chip', () => {
+  const places = placesIn('Suva', 2, [{ city: 'Nadi', count: 1 }]);
+  assert.equal(
+    listLocationName({
+      hasMap: true,
+      zoom: 3.4,
+      places,
+      location: unitedStates,
+      leftPreset: false,
+    }),
+    'United States'
+  );
+  assert.equal(
+    listLocationName({
+      hasMap: true,
+      zoom: 3.4,
+      places,
+      location: unitedStates,
+      leftPreset: true,
+    }),
+    'this area'
+  );
+});
+
+test('location chip switches to Map area after a user leaves the preset', () => {
+  assert.equal(locationChipLabel(unitedStates, false), 'United States');
+  assert.equal(locationChipLabel(unitedStates, true), 'Map area');
+  assert.equal(locationChipLabel(worldwide, true), 'Map area');
 });

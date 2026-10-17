@@ -1,5 +1,18 @@
 /** `left-4` (16px) + list `w-[min(100%-2rem,380px)]`. */
+export const LIST_LEFT = 16;
+export const LIST_WIDTH = 380;
 export const LIST_PANEL_RIGHT = 396;
+/** Right-side details / add-place drawer: 28rem. */
+export const DRAWER_WIDTH = 448;
+export const DRAWER_RIGHT = 16;
+/** Drawer box plus `right-4`. */
+export const DRAWER_OCCUPIED = 464;
+/** Drawer occupancy + a 32px map gap used as flyTo right padding. */
+export const PANEL_PADDING_RIGHT = 496;
+export const MAP_CONTROL_SIZE = 40;
+export const MAP_CONTROL_MARGIN = 16;
+/** Minimum visible map strip between list and drawer (controls + gutters). */
+export const MIN_MAP_STRIP = 96;
 /** Mapbox mercator world width in CSS pixels at zoom 0. */
 export const MERCATOR_TILE_SIZE = 512;
 export const WORLD_FIT_ZOOM_MAX = 1.3;
@@ -22,6 +35,103 @@ export function listPanelRightEdge(canvasWidth: number): number {
   return Math.min(LIST_PANEL_RIGHT, Math.max(0, canvasWidth - 80));
 }
 
+/** Drawer width plus `right-4`, never wider than the canvas minus side gutters. */
+export function drawerOccupiedWidth(canvasWidth: number): number {
+  return Math.min(DRAWER_OCCUPIED, Math.max(0, canvasWidth - 32));
+}
+
+/**
+ * At 768px the 380px list and 28rem drawer cannot sit side by side.
+ * Collapse the list while a panel is open so the map keeps a usable strip.
+ */
+export function shouldCollapseList(canvasWidth: number, panelOpen: boolean): boolean {
+  if (!panelOpen) return false;
+  const listRight = listPanelRightEdge(canvasWidth);
+  return canvasWidth - listRight - drawerOccupiedWidth(canvasWidth) < MIN_MAP_STRIP;
+}
+
+export interface LayoutInsets {
+  left: number;
+  right: number;
+  collapseList: boolean;
+  listRight: number;
+  drawerOccupied: number;
+}
+
+/** List / drawer occupancy used by flyTo padding, Worldwide framing, and chrome. */
+export function layoutInsets(canvasWidth: number, panelOpen: boolean): LayoutInsets {
+  const collapseList = shouldCollapseList(canvasWidth, panelOpen);
+  const listRight = collapseList ? 0 : listPanelRightEdge(canvasWidth);
+  const drawerOccupied = panelOpen ? drawerOccupiedWidth(canvasWidth) : 0;
+  const maxHorizontal = Math.max(0, canvasWidth - 80);
+  let left = listRight;
+  let right = 0;
+  if (panelOpen) {
+    right = Math.min(PANEL_PADDING_RIGHT, Math.max(0, canvasWidth - left - MIN_MAP_STRIP));
+  }
+  if (left + right > maxHorizontal && left + right > 0) {
+    const scale = maxHorizontal / (left + right);
+    left = Math.floor(left * scale);
+    right = Math.floor(right * scale);
+  }
+  return { left, right, collapseList, listRight, drawerOccupied };
+}
+
+export function flyPadding(
+  panelOpen: boolean,
+  exactZoom: boolean | undefined,
+  size: { width: number; height: number }
+) {
+  const insets = layoutInsets(size.width, panelOpen);
+  const maxVertical = Math.max(0, size.height - 80);
+  let left = insets.left;
+  let right = panelOpen
+    ? insets.right
+    : exactZoom
+      ? 0
+      : Math.min(56, Math.floor(Math.max(0, size.width - 80) * 0.45));
+  if (exactZoom) {
+    // Worldwide / location chips ignore the drawer so the list gap stays stable.
+    right = 0;
+    left = insets.listRight;
+  }
+  return {
+    top: exactZoom ? 0 : Math.min(96, Math.floor(maxVertical * 0.25)),
+    bottom: exactZoom ? 0 : Math.min(48, Math.floor(maxVertical * 0.15)),
+    left,
+    right,
+  };
+}
+
+/** CSS `right` so zoom/locate sit in the visible map, clear of list and drawer. */
+export function mapControlsRightPx(canvasWidth: number, panelOpen: boolean): number {
+  if (!panelOpen) return MAP_CONTROL_MARGIN;
+  const drawerLeft = canvasWidth - drawerOccupiedWidth(canvasWidth);
+  return Math.max(MAP_CONTROL_MARGIN, canvasWidth - drawerLeft + MAP_CONTROL_MARGIN);
+}
+
+/** Horizontal center of the visible map strip (pin-drop hint). */
+export function pinHintCenterX(canvasWidth: number, panelOpen: boolean): number {
+  const collapseList = shouldCollapseList(canvasWidth, panelOpen);
+  const left = collapseList ? 0 : listPanelRightEdge(canvasWidth);
+  const right = panelOpen ? canvasWidth - drawerOccupiedWidth(canvasWidth) : canvasWidth;
+  return (left + right) / 2;
+}
+
+/**
+ * User-initiated camera change vs a programmatic flight.
+ * Mapbox `moveend` sets `originalEvent` for drag / scroll / pinch.
+ * Preset and place flights pass a flight tag and omit originalEvent.
+ */
+export function isUserMapMove(
+  event: { originalEvent?: unknown } | null | undefined,
+  flightTag?: string | null
+): boolean {
+  if (event?.originalEvent != null) return true;
+  if (flightTag) return false;
+  return false;
+}
+
 /**
  * Mapbox will not zoom out past the point where one world is shorter than the
  * canvas (mercator world is square). At 900px height that floor is ~0.814.
@@ -42,6 +152,21 @@ export interface WorldwideFraming {
 }
 
 export const ZERO_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
+
+/** Camera timings. Preset flights still use retainPadding: false + clearPaddingKeepView. */
+export const CAMERA_DURATION = {
+  preset: 900,
+  place: 760,
+  cluster: 560,
+  zoom: 220,
+  locate: 900,
+} as const;
+
+/** Cubic ease-out: quick start, gentle settle. */
+export function easeOutCubic(t: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  return 1 - (1 - x) ** 3;
+}
 
 /**
  * Zoom and center for the Worldwide preset.

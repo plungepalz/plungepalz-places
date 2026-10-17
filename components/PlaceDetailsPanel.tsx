@@ -90,8 +90,9 @@ export default function PlaceDetailsPanel({ placeId, onClose, offsetTop = 96 }: 
       role="dialog"
       aria-modal="true"
       aria-labelledby="place-details-title"
+      data-place-details
       className="absolute bottom-28 right-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
-      style={{ top: offsetTop }}
+      style={{ top: offsetTop, transition: 'top 200ms ease' }}
     >
       <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
         <h2 id="place-details-title" className="text-lg font-semibold text-gray-900">
@@ -113,7 +114,7 @@ export default function PlaceDetailsPanel({ placeId, onClose, offsetTop = 96 }: 
       <div className="flex-1 overflow-y-auto px-5 py-5">
         {isLoading ? (
           <div className="flex h-40 items-center justify-center">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand border-t-transparent" />
           </div>
         ) : error ? (
           <p className="text-center text-red-600">{error}</p>
@@ -152,7 +153,7 @@ export default function PlaceDetailsPanel({ placeId, onClose, offsetTop = 96 }: 
                   {place.activity_types.map((activity) => (
                     <span
                       key={activity}
-                      className="rounded-full bg-orange-50 px-3 py-1 text-sm font-medium text-orange-700"
+                      className="rounded-full bg-brand-soft px-3 py-1 text-sm font-medium text-brand-deep"
                     >
                       {ACTIVITY_LABELS[activity]}
                     </span>
@@ -227,7 +228,7 @@ export default function PlaceDetailsPanel({ placeId, onClose, offsetTop = 96 }: 
                 href={place.place_website_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600"
+                className="inline-flex items-center gap-2 rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-selected"
               >
                 Visit website
               </a>

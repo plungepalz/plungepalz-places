@@ -15,18 +15,26 @@ const MAJORITY_SHARE = 0.8;
  * Names a city only when the viewport or the result set is actually that city;
  * never picks the most common city from a mixed worldwide/country view.
  */
+export function locationChipLabel(location: LocationPreset, leftPreset: boolean): string {
+  return leftPreset ? 'Map area' : location.label;
+}
+
 export function listLocationName({
   hasMap,
   zoom,
   places,
   location,
+  leftPreset = false,
 }: {
   hasMap: boolean;
   zoom: number | null;
   places: Pick<PlaceSearchResult, 'city'>[];
   location: LocationPreset;
+  /** True after a user-initiated pan/zoom away from the selected preset. */
+  leftPreset?: boolean;
 }): string {
   if (!hasMap || zoom == null) {
+    if (leftPreset) return 'this area';
     return location.id === 'worldwide' ? 'the world' : location.label;
   }
 
@@ -44,7 +52,7 @@ export function listLocationName({
     }
   }
 
-  if (location.id === 'worldwide') {
+  if (leftPreset || location.id === 'worldwide') {
     return 'this area';
   }
 

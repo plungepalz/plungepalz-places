@@ -1,14 +1,27 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  DRAWER_OCCUPIED,
+  DRAWER_WIDTH,
   LIST_PANEL_RIGHT,
+  MAP_CONTROL_MARGIN,
+  MAP_CONTROL_SIZE,
+  MIN_MAP_STRIP,
   PACIFIC_SEAM_LNG,
+  PANEL_PADDING_RIGHT,
   WORLDWIDE_COMFORT_LNG,
   ZERO_PADDING,
+  easeOutCubic,
+  flyPadding,
   flyToThenOnMoveend,
+  isUserMapMove,
+  layoutInsets,
   lngScreenCopies,
   listPanelRightEdge,
+  mapControlsRightPx,
   mapboxHeightMinZoom,
+  pinHintCenterX,
+  shouldCollapseList,
   worldwideFraming,
 } from './map-camera';
 
@@ -56,6 +69,109 @@ test('list panel right edge matches the floating list (16 + 380)', () => {
   assert.equal(LIST_PANEL_RIGHT, 396);
   assert.equal(listPanelRightEdge(1440), 396);
   assert.equal(listPanelRightEdge(1280), 396);
+  assert.equal(listPanelRightEdge(768), 396);
+});
+
+function rectsOverlap(
+  a: { left: number; right: number; top: number; bottom: number },
+  b: { left: number; right: number; top: number; bottom: number }
+) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function chromeRects(width: number, height: number, panelOpen: boolean) {
+  const insets = layoutInsets(width, panelOpen);
+  const list = insets.collapseList
+    ? null
+    : { left: 16, right: 16 + 380, top: 104, bottom: height - 16 };
+  const drawer = panelOpen
+    ? {
+        left: width - 16 - Math.min(DRAWER_WIDTH, width - 32),
+        right: width - 16,
+        top: 104,
+        bottom: height - 112,
+      }
+    : null;
+  const controlRight = mapControlsRightPx(width, panelOpen);
+  const controlLeft = width - controlRight - MAP_CONTROL_SIZE;
+  const controls = {
+    left: controlLeft,
+    right: controlLeft + MAP_CONTROL_SIZE,
+    top: height - 24 - (MAP_CONTROL_SIZE * 3 + 16),
+    bottom: height - 24,
+  };
+  const hintX = pinHintCenterX(width, panelOpen);
+  const hint = { left: hintX - 90, right: hintX + 90, top: 96, bottom: 124 };
+  return { insets, list, drawer, controls, hint };
+}
+
+for (const width of [768, 1280, 1440] as const) {
+  test(`layout at ${width}px keeps list, drawer, and controls from overlapping`, () => {
+    const closed = chromeRects(width, 900, false);
+    assert.equal(closed.insets.collapseList, false);
+    assert.ok(closed.list);
+    assert.equal(closed.drawer, null);
+    assert.ok(!rectsOverlap(closed.list, closed.controls), 'closed: controls must clear the list');
+
+    const open = chromeRects(width, 900, true);
+    if (width === 768) {
+      assert.equal(shouldCollapseList(768, true), true);
+      assert.equal(open.insets.collapseList, true);
+      assert.equal(open.list, null);
+      assert.equal(open.insets.left, 0);
+    } else {
+      assert.equal(shouldCollapseList(width, true), false);
+      assert.ok(open.list);
+      assert.ok(!rectsOverlap(open.list, open.drawer!), `${width}: list vs drawer`);
+      assert.ok(!rectsOverlap(open.list, open.controls), `${width}: controls vs list`);
+    }
+    assert.ok(open.drawer);
+    assert.ok(!rectsOverlap(open.drawer, open.controls), `${width}: controls vs drawer`);
+    assert.ok(!rectsOverlap(open.hint, open.drawer), `${width}: pin hint vs drawer`);
+    if (open.list) {
+      assert.ok(!rectsOverlap(open.hint, open.list), `${width}: pin hint vs list`);
+    }
+    assert.ok(open.controls.left >= open.insets.listRight);
+    assert.ok(open.controls.right <= open.drawer.left);
+  });
+}
+
+test('flyTo padding tracks collapsed list at 768 and full list at 1280/1440', () => {
+  const narrow = flyPadding(true, false, { width: 768, height: 900 });
+  assert.equal(narrow.left, 0);
+  assert.ok(narrow.right >= DRAWER_OCCUPIED - 32);
+
+  const mid = flyPadding(true, false, { width: 1280, height: 900 });
+  assert.equal(mid.left, LIST_PANEL_RIGHT);
+  assert.equal(mid.right, PANEL_PADDING_RIGHT);
+
+  const wide = flyPadding(true, false, { width: 1440, height: 900 });
+  assert.equal(wide.left, LIST_PANEL_RIGHT);
+  assert.equal(wide.right, PANEL_PADDING_RIGHT);
+
+  const worldwide = flyPadding(true, true, { width: 768, height: 900 });
+  assert.equal(worldwide.left, 0);
+  assert.equal(worldwide.right, 0);
+});
+
+test('map controls sit in the visible map strip at every target width', () => {
+  assert.equal(mapControlsRightPx(1440, false), MAP_CONTROL_MARGIN);
+  for (const width of [768, 1280, 1440]) {
+    const right = mapControlsRightPx(width, true);
+    const drawerLeft = width - DRAWER_OCCUPIED;
+    assert.ok(width - right >= drawerLeft - MIN_MAP_STRIP);
+    assert.ok(width - right <= drawerLeft);
+  }
+});
+
+test('isUserMapMove uses originalEvent or a flight tag', () => {
+  assert.equal(isUserMapMove({ originalEvent: { type: 'mouseup' } }), true);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'mouseup' } }, 'preset'), true);
+  assert.equal(isUserMapMove({}, 'preset'), false);
+  assert.equal(isUserMapMove({ originalEvent: undefined }, 'place'), false);
+  assert.equal(isUserMapMove({}), false);
+  assert.equal(isUserMapMove(null, 'preset'), false);
+  assert.equal(isUserMapMove(undefined), false);
 });
 
 test('1280x900 uses the height min zoom and a Pacific seam, not a gap-fit zoom', () => {
@@ -83,6 +199,13 @@ test('1440x900 keeps the comfortable lng -20 framing and fits the world in the g
   assert.equal(framing.lng, WORLDWIDE_COMFORT_LNG);
   assert.ok(framing.worldPx <= framing.gap + 1);
   assertPlacesInGap(1440, 900);
+});
+
+test('Worldwide framing at 768 with a collapsed list uses the full width', () => {
+  const framing = worldwideFraming(768, 900, { left: 0, right: 0 });
+  assert.equal(framing.panelRight, 0);
+  assert.equal(framing.rightPadding, 0);
+  assert.equal(framing.gap, 768);
 });
 
 test('Worldwide framing subtracts drawer right padding from the visible gap', () => {
@@ -152,6 +275,12 @@ function startPlacesMapFlight(
   flyToThenOnMoveend(map, { padding: { ...ZERO_PADDING, left: 396 } }, onFlyEnd);
   handlerRef.current = onFlyEnd;
 }
+
+test('easeOutCubic is 0 at start, 1 at end, and faster early', () => {
+  assert.equal(easeOutCubic(0), 0);
+  assert.equal(easeOutCubic(1), 1);
+  assert.ok(easeOutCubic(0.5) > 0.5);
+});
 
 test('preset change mid-flight leaves padding at 0', () => {
   const map = new InterruptibleMap();

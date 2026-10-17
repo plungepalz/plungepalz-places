@@ -8,6 +8,7 @@ import CoverImage from './CoverImage';
 interface PlaceCardProps {
   place: PlaceSearchResult;
   isSelected: boolean;
+  isHovered?: boolean;
   isFavorited: boolean;
   onSelect: () => void;
   onHover: (hover: boolean) => void;
@@ -17,6 +18,7 @@ interface PlaceCardProps {
 export default function PlaceCard({
   place,
   isSelected,
+  isHovered = false,
   isFavorited,
   onSelect,
   onHover,
@@ -25,10 +27,16 @@ export default function PlaceCard({
   const locationLine = formatLocation(place.city, place.state_province);
   return (
     <div
-      className={`relative rounded-2xl border bg-white transition-all ${
+      data-place-id={place.place_id}
+      data-place-card
+      data-selected={isSelected ? 'true' : 'false'}
+      data-hovered={isHovered ? 'true' : 'false'}
+      className={`relative rounded-2xl border bg-white transition-all duration-200 ${
         isSelected
-          ? 'border-orange-500 shadow-md ring-2 ring-orange-100'
-          : 'border-transparent hover:border-gray-200 hover:shadow-sm'
+          ? 'border-brand shadow-md ring-2 ring-brand-soft'
+          : isHovered
+            ? 'border-brand/50 bg-brand-soft/40 shadow-sm'
+            : 'border-transparent hover:border-gray-200 hover:shadow-sm'
       }`}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
@@ -65,10 +73,10 @@ export default function PlaceCard({
         aria-label={isFavorited ? 'Remove favorite' : 'Save favorite'}
         aria-pressed={isFavorited}
         onClick={onToggleFavorite}
-        className="absolute right-2 top-2 rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-orange-500"
+        className="absolute right-2 top-2 rounded-full p-1 text-gray-400 hover:bg-brand-soft hover:text-brand"
       >
         <svg
-          className={`h-5 w-5 ${isFavorited ? 'fill-orange-500 text-orange-500' : ''}`}
+          className={`h-5 w-5 ${isFavorited ? 'fill-brand text-brand' : ''}`}
           viewBox="0 0 24 24"
           stroke="currentColor"
           strokeWidth={2}
