@@ -9,6 +9,10 @@ build-GeneratePlaceWithAILayer:
 	mkdir -p "$(ARTIFACTS_DIR)/python"
 	python3.13 -m pip install \
 		--disable-pip-version-check \
+		--platform manylinux2014_x86_64 \
+		--only-binary=:all: \
+		--python-version 3.13 \
+		--implementation cp \
 		-r "$(LAYER_SRC)/requirements.txt" \
 		-t "$(ARTIFACTS_DIR)/python"
 	cp -a "$(LAYER_SRC)/python/generate_place_with_ai" "$(ARTIFACTS_DIR)/python/"

@@ -30,10 +30,10 @@ Parameters:
     Default: places_dev
     Description: Algolia index name for Search and AlgoliaSync
 
-  AnthropicModelId:
+  AnthropicModel:
     Type: String
-    Default: claude-3-5-haiku-latest
-    Description: Anthropic model ID for SubmitAIAutofill
+    Default: claude-haiku-4-5-20251001
+    Description: Anthropic model for SubmitAIAutofill (ANTHROPIC_MODEL; ANTHROPIC_MODEL_ID accepted as env-file fallback)
 
   AnthropicMaxTokens:
     Type: Number
@@ -239,15 +239,23 @@ Resources:
           HttpMethod: GET
           ThrottlingBurstLimit: 10
           ThrottlingRateLimit: 5
+        - ResourcePath: "/~1place~1{place_id}"
+          HttpMethod: GET
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
         - ResourcePath: "/~1submit"
           HttpMethod: POST
           ThrottlingBurstLimit: 10
           ThrottlingRateLimit: 5
-        - ResourcePath: "/~1submit/~1ai_autofill"
+        - ResourcePath: "/~1submit~1ai_autofill"
           HttpMethod: POST
           ThrottlingBurstLimit: 2
           ThrottlingRateLimit: 1
-        - ResourcePath: "/*/*"
+        - ResourcePath: "/~1plungepalz_admin~1review"
+          HttpMethod: POST
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+        - ResourcePath: "/*"
           HttpMethod: "*"
           ThrottlingBurstLimit: 20
           ThrottlingRateLimit: 10
@@ -372,7 +380,7 @@ Resources:
           CORS_ALLOWED_ORIGIN: !Ref AllowedOrigin
           GOOGLE_PLACES_API_KEY: !Ref GooglePlacesApiKey
           ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY: !Ref AnthropicApiKey
-          ANTHROPIC_MODEL_ID: !Ref AnthropicModelId
+          ANTHROPIC_MODEL: !Ref AnthropicModel
           ANTHROPIC_MAX_TOKENS: !Ref AnthropicMaxTokens
       Events:
         PostAIAutofill:
@@ -620,6 +628,11 @@ Resources:
                   - dynamodb:UpdateItem
                 Resource:
                   - !GetAtt PlacesTable.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource:
                   - !GetAtt SubmissionsTable.Arn
       Tags:
         - Key: project

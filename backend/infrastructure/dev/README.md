@@ -82,7 +82,7 @@ SubmitAIAutofill only:
 
 - `GOOGLE_PLACES_API_KEY`
 - `ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY`
-- `ANTHROPIC_MODEL_ID` (default `claude-3-5-haiku-latest`)
+- `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`; env-file may also use `ANTHROPIC_MODEL_ID`)
 - `ANTHROPIC_MAX_TOKENS` (default `1024`)
 
 Secret **values** are NoEcho CloudFormation parameters. They are not SSM parameters, not template defaults, and not written to the committed `samconfig.toml`.

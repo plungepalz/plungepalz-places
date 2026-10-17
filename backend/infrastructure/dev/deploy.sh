@@ -183,19 +183,29 @@ wanted = {
     "ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY": "AnthropicApiKey",
 }
 
-values: dict[str, str] = {}
+def unquote(val: str) -> str:
+    val = val.strip()
+    if len(val) >= 2 and ((val[0] == val[-1] == '"') or (val[0] == val[-1] == "'")):
+        return val[1:-1]
+    return val
+
+parsed: dict[str, str] = {}
 for raw in env_path.read_text(encoding="utf-8").splitlines():
     line = raw.strip()
     if not line or line.startswith("#") or "=" not in line:
         continue
     key, _, val = line.partition("=")
-    key = key.strip()
-    if key not in wanted:
-        continue
-    val = val.strip()
-    if len(val) >= 2 and ((val[0] == val[-1] == '"') or (val[0] == val[-1] == "'")):
-        val = val[1:-1]
-    values[wanted[key]] = val
+    parsed[key.strip()] = unquote(val)
+
+values: dict[str, str] = {}
+for env_key, param_name in wanted.items():
+    if parsed.get(env_key):
+        values[param_name] = parsed[env_key]
+
+# Non-secret model override: ANTHROPIC_MODEL, with legacy ANTHROPIC_MODEL_ID fallback
+model = parsed.get("ANTHROPIC_MODEL") or parsed.get("ANTHROPIC_MODEL_ID")
+if model:
+    values["AnthropicModel"] = model
 
 missing = [name for name in wanted.values() if not values.get(name)]
 if missing:
