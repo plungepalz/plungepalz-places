@@ -257,31 +257,6 @@ export default function HomePage() {
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-20">
-        <div className="pointer-events-auto px-4 pt-4">
-          <FilterBar
-            location={location}
-            onLocationChange={handleLocationChange}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            selectedActivities={selectedActivities}
-            onActivityToggle={(activity) =>
-              setSelectedActivities((prev) =>
-                prev.includes(activity) ? prev.filter((item) => item !== activity) : [...prev, activity]
-              )
-            }
-            selectedPlaceTypes={selectedPlaceTypes}
-            onPlaceTypeToggle={(placeType) =>
-              setSelectedPlaceTypes((prev) =>
-                prev.includes(placeType) ? prev.filter((item) => item !== placeType) : [...prev, placeType]
-              )
-            }
-            approvedOnly={approvedOnly}
-            onApprovedOnlyToggle={() => setApprovedOnly((prev) => !prev)}
-            mockMode={isMockMode}
-            onAddPlace={handleOpenAddPlace}
-          />
-        </div>
-
         <div className="pointer-events-auto absolute bottom-4 left-4 top-24 w-[min(100%-2rem,380px)]">
           <PlacesList
             places={places}
@@ -298,6 +273,32 @@ export default function HomePage() {
             error={error}
           />
         </div>
+      </div>
+
+      {/* Above the list (z-20) and drawers (z-30). Overlay does not capture map clicks. */}
+      <div className="pointer-events-none absolute inset-0 z-40 px-4 pt-4">
+        <FilterBar
+          location={location}
+          onLocationChange={handleLocationChange}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          selectedActivities={selectedActivities}
+          onActivityToggle={(activity) =>
+            setSelectedActivities((prev) =>
+              prev.includes(activity) ? prev.filter((item) => item !== activity) : [...prev, activity]
+            )
+          }
+          selectedPlaceTypes={selectedPlaceTypes}
+          onPlaceTypeToggle={(placeType) =>
+            setSelectedPlaceTypes((prev) =>
+              prev.includes(placeType) ? prev.filter((item) => item !== placeType) : [...prev, placeType]
+            )
+          }
+          approvedOnly={approvedOnly}
+          onApprovedOnlyToggle={() => setApprovedOnly((prev) => !prev)}
+          mockMode={isMockMode}
+          onAddPlace={handleOpenAddPlace}
+        />
       </div>
 
       {successMessage && (
