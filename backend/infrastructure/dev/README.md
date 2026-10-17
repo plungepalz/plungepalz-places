@@ -112,6 +112,8 @@ GOOGLE_PLACES_API_KEY
 ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY
 ```
 
+Optional non-secret `ALLOWED_ORIGIN`: if set, passed as `AllowedOrigin` (exactly `*` is acceptable for **dev only**, or a single `http(s)://host[:port]` with no comma or trailing slash); if unset, `AllowedOrigin` is omitted so the stack keeps its current value.
+
 The MVP deploy skips provider keys:
 
 ```bash

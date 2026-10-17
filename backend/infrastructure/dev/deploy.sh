@@ -211,6 +211,7 @@ write_temp_samconfig() {
     python3 - "$ENV_FILE" "$dest_dir/samconfig.toml" "$artifacts_bucket" "$skip_csv" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 env_path = pathlib.Path(sys.argv[1])
@@ -261,6 +262,21 @@ for env_key, param_name in optional.items():
 model = parsed.get("ANTHROPIC_MODEL") or parsed.get("ANTHROPIC_MODEL_ID")
 if model:
     values["AnthropicModel"] = model
+
+# Optional non-secret CORS override. Unset/empty → omit AllowedOrigin so the
+# stack keeps its current value (template default on a new stack).
+origin = (parsed.get("ALLOWED_ORIGIN") or "").strip()
+if origin:
+    origin_ok = origin == "*" or re.fullmatch(
+        r"https?://[A-Za-z0-9.-]+(:[0-9]+)?", origin
+    )
+    if not origin_ok or "," in origin or origin.endswith("/"):
+        raise SystemExit(
+            "ALLOWED_ORIGIN must be exactly '*' or a single origin "
+            "matching ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ "
+            "(no commas or trailing slash)"
+        )
+    values["AllowedOrigin"] = origin
 
 missing = [name for name in required.values() if not values.get(name)]
 if missing:
