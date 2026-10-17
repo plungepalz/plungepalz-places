@@ -216,6 +216,7 @@ Resources:
     Properties:
       Name: plungepalz-places-dev-api
       StageName: dev
+      AlwaysDeploy: true
       Cors:
         AllowOrigin: !Sub "'${AllowedOrigin}'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
