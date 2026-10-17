@@ -56,6 +56,74 @@ def _ai_record():
     }
 
 
+def _assert_503_not_configured(resp):
+    assert resp["statusCode"] == 503
+    assert resp["headers"]["Access-Control-Allow-Origin"]
+    assert resp["headers"]["Content-Type"] == "application/json"
+    body = parse_body(resp)
+    assert body == {"error": {"code": "NOT_CONFIGURED", "message": "not configured"}}
+    dumped = resp["body"]
+    assert "GOOGLE_PLACES_API_KEY" not in dumped
+    assert "ANTHROPIC" not in dumped
+
+
+def test_ai_autofill_import_succeeds_with_empty_keys(monkeypatch):
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "")
+    mod = load_handler("Places_SubmitAIAutofill")
+    assert callable(mod.handler)
+    assert (mod.GOOGLE_PLACES_API_KEY or "") == ""
+    assert (mod.ANTHROPIC_API_KEY or "") == ""
+
+
+def test_ai_autofill_google_key_empty_is_503_no_outbound(monkeypatch):
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "ak")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "ak")
+    mocked_gen = MagicMock()
+    mocked_ddb = MagicMock()
+    monkeypatch.setattr(mod, "generate_place_record", mocked_gen)
+    monkeypatch.setattr(mod, "_dynamodb", mocked_ddb)
+    resp = mod.handler(api_event(body={"place_id": "place-ai-1"}), None)
+    _assert_503_not_configured(resp)
+    mocked_gen.assert_not_called()
+    mocked_ddb.assert_not_called()
+
+
+def test_ai_autofill_anthropic_key_empty_is_503_no_outbound(monkeypatch):
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "   ")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "   ")
+    mocked_gen = MagicMock()
+    mocked_ddb = MagicMock()
+    monkeypatch.setattr(mod, "generate_place_record", mocked_gen)
+    monkeypatch.setattr(mod, "_dynamodb", mocked_ddb)
+    resp = mod.handler(api_event(body={"place_id": "place-ai-1"}), None)
+    _assert_503_not_configured(resp)
+    mocked_gen.assert_not_called()
+    mocked_ddb.assert_not_called()
+
+
+def test_ai_autofill_both_keys_empty_is_503_no_outbound(monkeypatch):
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "")
+    mocked_gen = MagicMock()
+    mocked_ddb = MagicMock()
+    monkeypatch.setattr(mod, "generate_place_record", mocked_gen)
+    monkeypatch.setattr(mod, "_dynamodb", mocked_ddb)
+    resp = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
+    _assert_503_not_configured(resp)
+    mocked_gen.assert_not_called()
+    mocked_ddb.assert_not_called()
+
+
 def test_ai_autofill_default_model_is_current_haiku():
     mod = load_handler("Places_SubmitAIAutofill")
     assert mod.ANTHROPIC_MODEL == "claude-haiku-4-5-20251001"

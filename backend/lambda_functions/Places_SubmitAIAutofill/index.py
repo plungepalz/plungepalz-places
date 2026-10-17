@@ -140,7 +140,23 @@ def _set_autofill_status(table_places, place_id: str, status: str) -> None:
         )
 
 
+def _configured_keys():
+    google = (GOOGLE_PLACES_API_KEY or "").strip()
+    anthropic_key = (ANTHROPIC_API_KEY or "").strip()
+    return google, anthropic_key
+
+
 def handler(event, context):
+    google_key, anthropic_key = _configured_keys()
+    if not google_key or not anthropic_key:
+        missing = []
+        if not google_key:
+            missing.append("GOOGLE_PLACES_API_KEY")
+        if not anthropic_key:
+            missing.append("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY")
+        logger.error("AI autofill not configured: missing %s", ", ".join(missing))
+        return error_response(503, "NOT_CONFIGURED", "not configured")
+
     try:
         body = parse_json_body(event)
     except ValidationError as exc:
@@ -217,15 +233,6 @@ def handler(event, context):
             {"place_name": "place_name is required"},
         )
 
-    if not GOOGLE_PLACES_API_KEY:
-        return error_response(500, "INTERNAL_ERROR", "GOOGLE_PLACES_API_KEY not configured")
-    if not ANTHROPIC_API_KEY:
-        return error_response(
-            500,
-            "INTERNAL_ERROR",
-            "ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY not configured",
-        )
-
     claimed = _claim_autofill(table_places, place_id)
     if claimed is not None:
         return claimed
@@ -235,8 +242,8 @@ def handler(event, context):
         place_type=place_type,
         place_location=place_location,
         activity_types=list(activity_types),
-        google_places_api_key=GOOGLE_PLACES_API_KEY,
-        anthropic_api_key=ANTHROPIC_API_KEY,
+        google_places_api_key=google_key,
+        anthropic_api_key=anthropic_key,
         model_id=ANTHROPIC_MODEL,
         submission_id=submission_id or place.get("submission_id") or "",
         max_tokens=ANTHROPIC_MAX_TOKENS,

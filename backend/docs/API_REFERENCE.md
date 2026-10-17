@@ -228,7 +228,7 @@ Empty strings are never written. H3 `h3_r7` / `h3_r5` / `h3_r4` are set when the
 
 Touches only AI-generated fields: `description` (only if currently empty), `place_type_metadata`, `amenities`, `tags`, `external_ratings_ai_generated`, `google_places_api_data`. User-submitted fields are preserved.
 
-Spend: `ANTHROPIC_MODEL` (default current Haiku `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` is also accepted), `ANTHROPIC_MAX_TOKENS` (default 1024, cap 2048). Before any Google or Anthropic call the handler claims the job with a conditional `SET ai_autofill_status = pending, ai_autofill_claimed_ts = now` (`attribute_exists(place_id)`; allowed when status is missing, not `pending`/`complete`, or `pending` with `ai_autofill_claimed_ts` older than 5 minutes). ConditionalCheckFailed → **409** (or **404** if the place is gone) and no outbound calls. Success sets `ai_autofill_status=complete` and `ai_autofill_ts`. Failure sets `ai_autofill_status=failed`. Provider error strings are logged server-side and never returned.
+Spend: `ANTHROPIC_MODEL` (default current Haiku `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` is also accepted), `ANTHROPIC_MAX_TOKENS` (default 1024, cap 2048). If `GOOGLE_PLACES_API_KEY` or `ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY` is empty/whitespace, the handler returns **503** `NOT_CONFIGURED` immediately (before body parse or DynamoDB). Before any Google or Anthropic call the handler claims the job with a conditional `SET ai_autofill_status = pending, ai_autofill_claimed_ts = now` (`attribute_exists(place_id)`; allowed when status is missing, not `pending`/`complete`, or `pending` with `ai_autofill_claimed_ts` older than 5 minutes). ConditionalCheckFailed → **409** (or **404** if the place is gone) and no outbound calls. Success sets `ai_autofill_status=complete` and `ai_autofill_ts`. Failure sets `ai_autofill_status=failed`. Provider error strings are logged server-side and never returned.
 
 ### Request Body
 
@@ -270,6 +270,7 @@ Provide `submission_id` and/or `place_id`. `submission_id` loads `place_id_gener
 | 404 | Submission or place not found |
 | 409 | Already claimed or completed (`pending` younger than 5 minutes, or `complete`) |
 | 500 | AI autofill failed (generic message; provider errors are not returned) |
+| 503 | `NOT_CONFIGURED` — `GOOGLE_PLACES_API_KEY` and/or `ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY` are empty. Returned before any DynamoDB or provider call. Response does not name which key is missing. |
 
 ---
 
