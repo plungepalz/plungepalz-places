@@ -56,18 +56,30 @@ class FakeAlgoliaIndex:
         self.deleted: list[str] = []
         self.searches: list[tuple[str, dict]] = []
         self.search_result = {"hits": [], "nbHits": 0}
+        self.save_calls: list[list[dict]] = []
+        self.delete_calls: list[list[str]] = []
+        self.browse_calls: list = []
 
     def save_objects(self, objects):
+        objects = list(objects)
+        self.save_calls.append(objects)
         for obj in objects:
             oid = obj["objectID"]
             self.objects[oid] = obj
         return {"objectIDs": [o["objectID"] for o in objects]}
 
     def delete_objects(self, object_ids):
+        object_ids = list(object_ids)
+        self.delete_calls.append(object_ids)
         for oid in object_ids:
             self.objects.pop(oid, None)
             self.deleted.append(oid)
         return {"objectIDs": list(object_ids)}
+
+    def browse_objects(self, request_options=None):
+        self.browse_calls.append(request_options)
+        for obj in list(self.objects.values()):
+            yield obj
 
     def search(self, query, opts=None):
         opts = opts or {}
