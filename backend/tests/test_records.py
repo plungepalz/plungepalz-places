@@ -172,6 +172,10 @@ PARSER_CASES = [
         "7349 N Via Paseo Del Sur Suite 535, Scottsdale AZ 85258",
         {"city": "Scottsdale", "state_province": "AZ", "postal_code": "85258"},
     ),
+    ("one-part street", "100 Main St", {}),
+    ("one-part Finnish street", "Kansanpuistonpolku 5", {}),
+    ("one-part country name", "Canada", {}),
+    ("one-part city name", "Helsinki", {}),
 ]
 
 

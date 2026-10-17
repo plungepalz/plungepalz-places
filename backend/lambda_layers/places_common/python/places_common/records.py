@@ -367,6 +367,16 @@ def parse_address_parts(address: str | None) -> dict[str, str]:
     if not parts:
         return {}
     out: dict[str, str] = {}
+    # One-part input (no commas) matches main: empty, except strict US "City ST 12345".
+    if len(parts) == 1:
+        us_city_zip = _US_CITY_STATE_ZIP_RE.fullmatch(parts[0])
+        if us_city_zip and us_city_zip.group(2).upper() in _US_STATE_CODES:
+            return {
+                "city": us_city_zip.group(1).strip(),
+                "state_province": us_city_zip.group(2).upper(),
+                "postal_code": us_city_zip.group(3),
+            }
+        return {}
 
     last = parts[-1]
     # "USA" / "United States" / "Finland" — keep the token as written (no ISO remap).
