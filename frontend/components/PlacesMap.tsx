@@ -1,11 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import MapGL, { Layer, Source } from 'react-map-gl/mapbox';
+import MapGL, { Layer, Marker, Source } from 'react-map-gl/mapbox';
 import type { MapMouseEvent, MapRef } from 'react-map-gl/mapbox';
 import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
+
+interface DraftLocation {
+  lat: number;
+  lng: number;
+}
 
 interface PlacesMapProps {
   places: PlaceSearchResult[];
@@ -13,7 +18,12 @@ interface PlacesMapProps {
   hoveredPlaceId: string | null;
   flyRequest: FlyRequest | null;
   onFlyComplete: () => void;
-  detailsOpen: boolean;
+  panelOpen: boolean;
+  locationPickMode?: boolean;
+  draftLocation?: DraftLocation | null;
+  onPickLocation?: (location: DraftLocation) => void;
+  mapCenterRequest?: number | null;
+  onMapCenter?: (location: DraftLocation) => void;
   onSelectPlace: (placeId: string) => void;
   onHoverPlace: (placeId: string | null) => void;
   onViewportChange: (bounds: MapBounds) => void;
@@ -83,7 +93,12 @@ export default function PlacesMap({
   hoveredPlaceId,
   flyRequest,
   onFlyComplete,
-  detailsOpen,
+  panelOpen,
+  locationPickMode = false,
+  draftLocation = null,
+  onPickLocation,
+  mapCenterRequest = null,
+  onMapCenter,
   onSelectPlace,
   onHoverPlace,
   onViewportChange,
@@ -136,6 +151,12 @@ export default function PlacesMap({
   }, [reportViewport]);
 
   useEffect(() => {
+    if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;
+    const center = mapRef.current.getMap().getCenter();
+    onMapCenter({ lat: center.lat, lng: center.lng });
+  }, [mapCenterRequest, onMapCenter]);
+
+  useEffect(() => {
     if (!flyRequest || !mapRef.current) return;
     const currentZoom = mapRef.current.getZoom();
     const zoom = flyRequest.zoom != null ? Math.max(currentZoom, flyRequest.zoom) : currentZoom;
@@ -184,16 +205,19 @@ export default function PlacesMap({
           geometry?: { type?: string; coordinates?: [number, number] };
         }
       | undefined;
-    if (!feature || !mapRef.current) return;
-    const props = feature.properties;
-    if (props?.cluster && props.cluster_id != null) {
+    const props = feature?.properties;
+    if (props?.cluster && props.cluster_id != null && mapRef.current) {
       const source = mapRef.current.getMap().getSource('places') as GeoJSONSource;
-      const coords = feature.geometry?.type === 'Point' ? feature.geometry.coordinates : undefined;
+      const coords = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : undefined;
       const clusterCenter: [number, number] = coords ?? [event.lngLat.lng, event.lngLat.lat];
       source.getClusterExpansionZoom(Number(props.cluster_id), (error, zoom) => {
         if (error || zoom == null) return;
         mapRef.current?.easeTo({ center: clusterCenter, zoom, duration: 500 });
       });
+      return;
+    }
+    if (locationPickMode) {
+      onPickLocation?.({ lat: event.lngLat.lat, lng: event.lngLat.lng });
       return;
     }
     if (props?.place_id) {
@@ -208,7 +232,11 @@ export default function PlacesMap({
       | { properties?: { cluster?: boolean; place_id?: string } }
       | undefined;
     const props = feature?.properties;
-    map.getCanvas().style.cursor = feature ? 'pointer' : '';
+    if (locationPickMode) {
+      map.getCanvas().style.cursor = props?.cluster ? 'pointer' : 'crosshair';
+    } else {
+      map.getCanvas().style.cursor = feature ? 'pointer' : '';
+    }
     onHoverPlace(props?.place_id && !props.cluster ? props.place_id : null);
   };
 
@@ -297,10 +325,24 @@ export default function PlacesMap({
             />
           </Source>
         )}
+        {draftLocation && (
+          <Marker longitude={draftLocation.lng} latitude={draftLocation.lat} anchor="bottom">
+            <div className="pointer-events-none flex flex-col items-center" aria-hidden>
+              <div className="h-7 w-7 rounded-full border-[3px] border-white bg-gray-900 shadow-lg" />
+              <div className="-mt-0.5 h-2.5 w-0.5 bg-gray-900" />
+            </div>
+          </Marker>
+        )}
       </MapGL>
 
+      {locationPickMode && (
+        <div className="pointer-events-none absolute left-1/2 top-24 z-10 -translate-x-1/2 rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white shadow-lg">
+          Click the map to drop a pin
+        </div>
+      )}
+
       <div
-        className={`absolute bottom-6 z-10 flex flex-col gap-2 ${detailsOpen ? 'right-[min(calc(100%-3.5rem),calc(1.25rem+28rem))]' : 'right-4'}`}
+        className={`absolute bottom-6 z-10 flex flex-col gap-2 ${panelOpen ? 'right-[min(calc(100%-3.5rem),calc(1.25rem+28rem))]' : 'right-4'}`}
       >
         <button
           type="button"

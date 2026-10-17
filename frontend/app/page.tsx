@@ -2,14 +2,16 @@
 
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AddPlacePanel from '@/components/AddPlacePanel';
 import FilterBar from '@/components/FilterBar';
 import PlaceDetailsPanel from '@/components/PlaceDetailsPanel';
 import PlacesList from '@/components/PlacesList';
 import { client, isMockMode } from '@/lib/client';
 import { isPlacesApiError } from '@/lib/errors';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
+import { mergeLocalPlaces } from '@/lib/merge-local-places';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
-import { formatBbox } from '@/lib/types';
+import { formatBbox, wrapLng } from '@/lib/types';
 
 const PlacesMap = dynamic(() => import('@/components/PlacesMap'), {
   ssr: false,
@@ -19,9 +21,11 @@ const PlacesMap = dynamic(() => import('@/components/PlacesMap'), {
 /** API max. Mapbox clustering only sees this page of /search results (known MVP limit). */
 const SEARCH_LIMIT = 500;
 const DEFAULT_LOCATION = LOCATION_PRESETS[1]; // United States
+const SUCCESS_TOAST_MS = 4500;
 
 export default function HomePage() {
-  const [places, setPlaces] = useState<PlaceSearchResult[]>([]);
+  const [serverPlaces, setServerPlaces] = useState<PlaceSearchResult[]>([]);
+  const [localPlaces, setLocalPlaces] = useState<PlaceSearchResult[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -37,6 +41,11 @@ export default function HomePage() {
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [hoveredPlaceId, setHoveredPlaceId] = useState<string | null>(null);
   const [detailsPlaceId, setDetailsPlaceId] = useState<string | null>(null);
+  const [addPlaceOpen, setAddPlaceOpen] = useState(false);
+  const [draftLocation, setDraftLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [draftNonce, setDraftNonce] = useState(0);
+  const [mapCenterRequest, setMapCenterRequest] = useState<number | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [flyRequest, setFlyRequest] = useState<FlyRequest | null>(null);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
@@ -46,6 +55,22 @@ export default function HomePage() {
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
   const hasMap = Boolean(mapboxToken);
+
+  const localFilters = useMemo(
+    () => ({
+      q: searchQuery.trim() || undefined,
+      bounds: mapBounds,
+      placeTypes: selectedPlaceTypes,
+      activityTypes: selectedActivities,
+    }),
+    [searchQuery, mapBounds, selectedPlaceTypes, selectedActivities]
+  );
+
+  const { places, extraCount } = useMemo(
+    () => mergeLocalPlaces(serverPlaces, localPlaces, localFilters),
+    [serverPlaces, localPlaces, localFilters]
+  );
+  const displayTotal = total + extraCount;
 
   const buildParams = useCallback(
     (pageNum: number, bounds: MapBounds | null): SearchParams => {
@@ -74,7 +99,9 @@ export default function HomePage() {
       try {
         const response = await client.search(buildParams(pageNum, bounds));
         if (requestId !== requestIdRef.current) return;
-        setPlaces((prev) => (append ? [...prev, ...response.places] : response.places));
+        const returnedIds = new Set(response.places.map((place) => place.place_id));
+        setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
+        setServerPlaces((prev) => (append ? [...prev, ...response.places] : response.places));
         setTotal(response.total);
         setPage(response.page);
         setHasMore(response.has_more);
@@ -83,7 +110,7 @@ export default function HomePage() {
         if (requestId !== requestIdRef.current) return;
         setError(isPlacesApiError(err) ? err.message : 'Search failed');
         if (!append) {
-          setPlaces([]);
+          setServerPlaces([]);
           setTotal(0);
           setHasMore(false);
         }
@@ -106,6 +133,12 @@ export default function HomePage() {
     return () => window.clearTimeout(handle);
   }, [performSearch, mapBounds]);
 
+  useEffect(() => {
+    if (!successMessage) return;
+    const handle = window.setTimeout(() => setSuccessMessage(null), SUCCESS_TOAST_MS);
+    return () => window.clearTimeout(handle);
+  }, [successMessage]);
+
   const handleLocationChange = (next: LocationPreset) => {
     setLocation(next);
     setFlyRequest({ nonce: Date.now(), longitude: next.lng, latitude: next.lat, zoom: next.zoom });
@@ -119,6 +152,7 @@ export default function HomePage() {
     const place = places.find((item) => item.place_id === placeId);
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
+    setAddPlaceOpen(false);
     if (place) {
       setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
     }
@@ -127,6 +161,7 @@ export default function HomePage() {
   const handleSelectFromMap = (placeId: string) => {
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
+    setAddPlaceOpen(false);
   };
 
   const handleFlyComplete = useCallback(() => {
@@ -136,6 +171,38 @@ export default function HomePage() {
   const handleCloseDetails = useCallback(() => {
     setDetailsPlaceId(null);
   }, []);
+
+  const handleCloseAddPlace = useCallback(() => {
+    setAddPlaceOpen(false);
+    setDraftLocation(null);
+  }, []);
+
+  const handleOpenAddPlace = () => {
+    setDetailsPlaceId(null);
+    setAddPlaceOpen(true);
+  };
+
+  const applyMapLocation = useCallback((center: { lat: number; lng: number }) => {
+    setDraftLocation({ lat: center.lat, lng: wrapLng(center.lng) });
+    setDraftNonce((nonce) => nonce + 1);
+  }, []);
+
+  const handleUseMapCenter = () => {
+    setMapCenterRequest(Date.now());
+  };
+
+  const handlePlaceSubmitted = (place: PlaceSearchResult) => {
+    setLocalPlaces((prev) => {
+      if (prev.some((item) => item.place_id === place.place_id)) return prev;
+      return [...prev, place];
+    });
+    setAddPlaceOpen(false);
+    setDraftLocation(null);
+    setSelectedPlaceId(place.place_id);
+    setDetailsPlaceId(place.place_id);
+    setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
+    setSuccessMessage('Place submitted. It is pending review and is not approved yet.');
+  };
 
   const handleToggleFavorite = (placeId: string) => {
     setFavorites((prev) => {
@@ -168,6 +235,8 @@ export default function HomePage() {
     return location.label === 'United States' ? 'this area' : location.label;
   }, [hasMap, mapBounds, places, location]);
 
+  const panelOpen = Boolean(detailsPlaceId) || addPlaceOpen;
+
   return (
     <div className="relative h-screen overflow-hidden bg-[#e8e4dc] text-gray-900">
       <div className="absolute inset-0">
@@ -177,7 +246,12 @@ export default function HomePage() {
           hoveredPlaceId={hoveredPlaceId}
           flyRequest={flyRequest}
           onFlyComplete={handleFlyComplete}
-          detailsOpen={Boolean(detailsPlaceId)}
+          panelOpen={panelOpen}
+          locationPickMode={addPlaceOpen}
+          draftLocation={draftLocation}
+          onPickLocation={applyMapLocation}
+          mapCenterRequest={mapCenterRequest}
+          onMapCenter={applyMapLocation}
           onSelectPlace={handleSelectFromMap}
           onHoverPlace={setHoveredPlaceId}
           onViewportChange={handleViewportChange}
@@ -207,13 +281,14 @@ export default function HomePage() {
             approvedOnly={approvedOnly}
             onApprovedOnlyToggle={() => setApprovedOnly((prev) => !prev)}
             mockMode={isMockMode}
+            onAddPlace={handleOpenAddPlace}
           />
         </div>
 
         <div className="pointer-events-auto absolute bottom-4 left-4 top-24 w-[min(100%-2rem,380px)]">
           <PlacesList
             places={places}
-            total={total}
+            total={displayTotal}
             selectedPlaceId={selectedPlaceId}
             favorites={favorites}
             onSelectPlace={handleSelectFromList}
@@ -228,7 +303,32 @@ export default function HomePage() {
         </div>
       </div>
 
-      {detailsPlaceId && (
+      {successMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="absolute left-1/2 top-24 z-40 max-w-sm -translate-x-1/2 rounded-2xl bg-gray-900 px-4 py-3 text-center text-sm text-white shadow-lg"
+        >
+          {successMessage}
+        </div>
+      )}
+
+      {addPlaceOpen && (
+        <AddPlacePanel
+          onClose={handleCloseAddPlace}
+          onSubmitted={handlePlaceSubmitted}
+          mapboxToken={mapboxToken}
+          hasMap={hasMap}
+          locationLabel={location.label}
+          fallbackCenter={{ lat: location.lat, lng: location.lng }}
+          onUseMapCenter={handleUseMapCenter}
+          draftLocation={draftLocation}
+          draftNonce={draftNonce}
+          onDraftLocationChange={setDraftLocation}
+        />
+      )}
+
+      {detailsPlaceId && !addPlaceOpen && (
         <PlaceDetailsPanel placeId={detailsPlaceId} onClose={handleCloseDetails} />
       )}
     </div>
