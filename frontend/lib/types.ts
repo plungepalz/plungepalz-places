@@ -121,6 +121,11 @@ export interface FlyRequest {
   longitude: number;
   latitude: number;
   zoom?: number;
+  /**
+   * Location chips/presets set this so the map may zoom out (e.g. Worldwide).
+   * Card/pin flights omit it and keep the never-zoom-out Math.max behaviour.
+   */
+  exactZoom?: boolean;
 }
 
 function clamp(value: number, min: number, max: number): number {
