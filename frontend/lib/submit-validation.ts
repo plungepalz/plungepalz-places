@@ -9,6 +9,11 @@ import type {
 export const PLACE_TYPE_VALUES: PlaceType[] = ['business', 'nature', 'temporary_pop_up', 'gym_amenity'];
 export const ACTIVITY_TYPE_VALUES: ActivityType[] = ['cold_plunge', 'sauna'];
 
+/** Matches backend MAX_* constants used by POST /submit. */
+export const MAX_PLACE_NAME_LEN = 200;
+export const MAX_ADDRESS_LEN = 500;
+export const MAX_DESCRIPTION_LEN = 2000;
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function parseCoordinate(value: unknown): number | null {
@@ -38,6 +43,9 @@ export function validateSubmitPlace(input: SubmitFormInput): {
   const details: Record<string, string> = {};
   const place_name = input.place_name.trim();
   if (!place_name) details.place_name = 'required';
+  else if (place_name.length > MAX_PLACE_NAME_LEN) {
+    details.place_name = `place_name must be <= ${MAX_PLACE_NAME_LEN} characters`;
+  }
 
   const place_type = input.place_type as PlaceType;
   if (!PLACE_TYPE_VALUES.includes(place_type)) {
@@ -56,8 +64,15 @@ export function validateSubmitPlace(input: SubmitFormInput): {
   if (lng == null || lng < -180 || lng > 180) details.lng = 'must be a number between -180 and 180';
 
   const address = input.address.trim();
-  if (place_type !== 'nature' && !address) {
+  if (address.length > MAX_ADDRESS_LEN) {
+    details.address = `address must be <= ${MAX_ADDRESS_LEN} characters`;
+  } else if (place_type !== 'nature' && !address) {
     details.address = 'required unless place_type is nature';
+  }
+
+  const description = input.description?.trim() ?? '';
+  if (description.length > MAX_DESCRIPTION_LEN) {
+    details.description = `description must be <= ${MAX_DESCRIPTION_LEN} characters`;
   }
 
   const email = input.email.trim();
@@ -73,31 +88,31 @@ export function validateSubmitPlace(input: SubmitFormInput): {
     lng: lng!,
   };
   if (address) payload.address = address;
-  const description = input.description?.trim();
   if (description) payload.description = description;
   if (email) payload.email = email;
   return { details: {}, payload };
 }
 
-export function inferLocationFromAddress(address?: string): {
-  city: string;
-  state_province: string;
-  country: string;
+export function inferLocationFromAddress(address?: string | null): {
+  city: string | null;
+  state_province: string | null;
+  country: string | null;
 } {
-  if (!address) return { city: '', state_province: '', country: '' };
+  if (!address) return { city: null, state_province: null, country: null };
   const parts = address
     .split(',')
     .map((part) => part.trim())
     .filter(Boolean);
+  const orNull = (value: string | undefined) => value || null;
   if (parts.length >= 3) {
     return {
-      city: parts[parts.length - 3] ?? '',
-      state_province: parts[parts.length - 2] ?? '',
-      country: parts[parts.length - 1] ?? '',
+      city: orNull(parts[parts.length - 3]),
+      state_province: orNull(parts[parts.length - 2]),
+      country: orNull(parts[parts.length - 1]),
     };
   }
-  if (parts.length === 2) return { city: parts[0] ?? '', state_province: parts[1] ?? '', country: '' };
-  return { city: parts[0] ?? '', state_province: '', country: '' };
+  if (parts.length === 2) return { city: orNull(parts[0]), state_province: orNull(parts[1]), country: null };
+  return { city: orNull(parts[0]), state_province: null, country: null };
 }
 
 export function buildOptimisticPlace(data: SubmitPlaceRequest, response: SubmitPlaceResponse): PlaceSearchResult {
@@ -107,12 +122,12 @@ export function buildOptimisticPlace(data: SubmitPlaceRequest, response: SubmitP
     place_slug: response.place_slug,
     place_name: data.place_name,
     place_type: data.place_type,
-    address: data.address ?? '',
+    address: data.address ?? null,
     city: inferred.city,
     state_province: inferred.state_province,
     country: inferred.country,
     activity_types: data.activity_types,
-    description: data.description ?? '',
+    description: data.description ?? null,
     cover_image: null,
     lat: data.lat,
     lng: data.lng,

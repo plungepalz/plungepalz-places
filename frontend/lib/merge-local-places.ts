@@ -6,6 +6,7 @@ export interface LocalPlaceFilters {
   bounds: MapBounds | null;
   placeTypes: PlaceType[];
   activityTypes: ActivityType[];
+  approvedOnly?: boolean;
 }
 
 function matchesBbox(place: PlaceSearchResult, bounds: MapBounds | null): boolean {
@@ -19,13 +20,18 @@ function matchesBbox(place: PlaceSearchResult, bounds: MapBounds | null): boolea
   return latInBox && lngInBox;
 }
 
+function searchableText(place: PlaceSearchResult): string {
+  return [place.place_name, place.city, place.state_province, place.country, place.description]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
 export function localPlaceMatchesFilters(place: PlaceSearchResult, filters: LocalPlaceFilters): boolean {
+  if (filters.approvedOnly && !place.is_approved) return false;
   if (!matchesBbox(place, filters.bounds)) return false;
   if (filters.q) {
-    const query = filters.q.toLowerCase();
-    const haystack =
-      `${place.place_name} ${place.city} ${place.state_province} ${place.country} ${place.description}`.toLowerCase();
-    if (!haystack.includes(query)) return false;
+    if (!searchableText(place).includes(filters.q.toLowerCase())) return false;
   }
   if (filters.placeTypes.length > 0 && !filters.placeTypes.includes(place.place_type)) return false;
   if (filters.activityTypes.length > 0 && !place.activity_types.some((activity) => filters.activityTypes.includes(activity))) {

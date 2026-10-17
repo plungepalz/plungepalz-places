@@ -62,8 +62,9 @@ export default function HomePage() {
       bounds: mapBounds,
       placeTypes: selectedPlaceTypes,
       activityTypes: selectedActivities,
+      approvedOnly,
     }),
-    [searchQuery, mapBounds, selectedPlaceTypes, selectedActivities]
+    [searchQuery, mapBounds, selectedPlaceTypes, selectedActivities, approvedOnly]
   );
 
   const { places, extraCount } = useMemo(
