@@ -122,7 +122,7 @@ The MVP deploy skips provider keys:
 
 With the Anthropic key empty, `POST /submit/ai_autofill` is expected to return **503** `not configured` (handled in backend code).
 
-It writes a **mode-600** `samconfig.toml` under `mktemp -d /tmp/plungepalz-places-dev-XXXXXX` (outside the repo) and runs `sam deploy --config-file` against that file. A `trap` on `EXIT INT TERM HUP` deletes the temp dir (idempotent; signals exit non-zero).
+It writes a **mode-600** `samconfig.toml` under `mktemp -d /tmp/plungepalz-places-dev-XXXXXX` (outside the repo) and runs `sam deploy --config-file` against that file. A `trap cleanup EXIT` plus per-signal traps (`INT`→130, `TERM`→143, `HUP`→129) delete the temp dir. `cleanup` only removes the temp dir (idempotent via `CLEANUP_DONE`); it does not exit. Signals sent to the script PID alone stop the script with those statuses.
 
 Do **not** put secret values in:
 

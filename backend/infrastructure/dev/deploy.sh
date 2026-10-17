@@ -66,7 +66,6 @@ is_allowlisted_skip_key() {
 }
 
 cleanup() {
-    local rc=$?
     if [[ "${CLEANUP_DONE}" -eq 1 ]]; then
         return 0
     fi
@@ -75,12 +74,12 @@ cleanup() {
         rm -rf "${TMP_DEPLOY_DIR}"
     fi
     TMP_DEPLOY_DIR=""
-    if [[ "${rc}" -ne 0 ]]; then
-        exit "${rc}"
-    fi
 }
 
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 while [[ $# -gt 0 ]]; do
     case $1 in
