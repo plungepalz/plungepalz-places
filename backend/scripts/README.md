@@ -30,7 +30,7 @@ A successful run **merges** created `place_id`s into `--output` (default `script
 
 ## Review / approve / revert (`review_place.py`)
 
-Writes `internal_status` on `TABLE_PLACES` with boto3 (not SigV4 to API Gateway). Same write as `Places_AdminReview`. `--decision in_review` reverts an approval to a fresh `POST /submit` (pending on the map, no Approved tag, `is_approved` false). The Places_Places stream upserts Algolia as pending.
+Writes `internal_status` on `TABLE_PLACES` with boto3 (not SigV4 to API Gateway). Same write as `Places_AdminReview`. `--decision in_review` reverts an approval to a fresh `POST /submit` (pending on the map, no Approved tag, `is_approved` false, `internal_comments` / `internal_verified_ts` / review metadata cleared). The Places_Places stream upserts Algolia as pending.
 
 ```bash
 python scripts/review_place.py --place-id UUID --decision active

@@ -83,7 +83,7 @@ Model: `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_
 - Body: `{ place_id, decision: "active" | "rejected" | "in_review", internal_comments? }`
 - Sets `internal_status`, `ts_last_updated`, optional `internal_comments`
 - `decision=active` ⇒ `is_approved=true` on subsequent Search / GetByID
-- `decision=in_review` reverts an approval to the exact approval state of a fresh `POST /submit`: `internal_status=in_review`, `is_approved` false (not stored; derived), `internal_verified=false`, and any stored `reviewed_ts` / `reviewed_by` / `ts_reviewed` / `reviewer` / `is_approved` attributes removed. Visibility stays public. The Places_Places stream then upserts Algolia as pending (`internal_status=in_review`, `is_approved=false`).
+- `decision=in_review` reverts an approval to the exact approval state of a fresh `POST /submit`: `internal_status=in_review`, `is_approved` false (not stored; derived), `internal_verified=false`, and any stored `internal_comments` / `internal_verified_ts` / `reviewed_ts` / `reviewed_by` / `ts_reviewed` / `reviewer` / `is_approved` attributes removed. Visibility stays public. The Places_Places stream then upserts Algolia as pending (`internal_status=in_review`, `is_approved=false`).
 - Stream → `Places_AlgoliaSync` upserts (active/in_review + public) or deletes (rejected/hidden)
 
 Revert a single place or the first N seed ids (from `backend/`):

@@ -24,7 +24,7 @@ def test_generate_place_slug_same_name_city_without_id_still_collides():
 
 def test_review_item_update_kwargs_revert_removes_approval_fields():
     kwargs = review_item_update_kwargs(
-        "pid", "in_review", comments=None, ts="2026-01-01T00:00:00Z"
+        "pid", "in_review", comments="should not persist", ts="2026-01-01T00:00:00Z"
     )
     expr = kwargs["UpdateExpression"]
     assert expr.startswith("SET ")
