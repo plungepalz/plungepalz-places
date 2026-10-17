@@ -1,5 +1,6 @@
 import { PlacesApiError } from './errors';
 import { MOCK_PLACE_DETAILS, MOCK_PLACES } from './mock-data';
+import { inferLocationFromAddress, validateSubmitPlace } from './submit-validation';
 import type {
   ActivityType,
   PlaceDetail,
@@ -129,66 +130,51 @@ class MockApiClient implements PlacesClient {
   async submitPlace(data: SubmitPlaceRequest): Promise<SubmitPlaceResponse> {
     await new Promise((resolve) => setTimeout(resolve, 280));
 
-    if (!data.place_name?.trim()) {
-      throw new PlacesApiError('place_name is required', 'INVALID_BODY', 400, {
+    const { details, payload } = validateSubmitPlace({
+      place_name: data.place_name ?? '',
+      place_type: data.place_type ?? '',
+      activity_types: data.activity_types ?? [],
+      lat: data.lat,
+      lng: data.lng,
+      address: data.address ?? '',
+      description: data.description,
+      email: data.email ?? '',
+    });
+    if (!payload) {
+      throw new PlacesApiError('Invalid request body', 'INVALID_BODY', 400, {
         error: {
           code: 'INVALID_BODY',
-          message: 'place_name is required',
-          details: { place_name: 'required' },
-        },
-      });
-    }
-    if (!Array.isArray(data.activity_types) || data.activity_types.length === 0) {
-      throw new PlacesApiError('activity_types must be a non-empty list', 'INVALID_BODY', 400, {
-        error: {
-          code: 'INVALID_BODY',
-          message: 'activity_types must be a non-empty list',
-          details: { activity_types: 'must be a non-empty subset of cold_plunge, sauna' },
-        },
-      });
-    }
-    if (data.place_type !== 'nature' && !data.address?.trim()) {
-      throw new PlacesApiError('address is required unless place_type is nature', 'INVALID_BODY', 400, {
-        error: {
-          code: 'INVALID_BODY',
-          message: 'address is required unless place_type is nature',
-          details: { address: 'required unless place_type is nature' },
-        },
-      });
-    }
-    if (typeof data.lat !== 'number' || typeof data.lng !== 'number') {
-      throw new PlacesApiError('lat and lng are required', 'INVALID_BODY', 400, {
-        error: {
-          code: 'INVALID_BODY',
-          message: 'lat and lng are required',
-          details: { lat: 'required', lng: 'required' },
+          message: 'Invalid request body',
+          details,
         },
       });
     }
 
-    const place_id = `place_${Date.now()}`;
-    const place_slug = `${slugify(data.place_name)}-${Date.now()}`;
+    const place_id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `place_${Date.now()}`;
+    const place_slug = `${slugify(payload.place_name)}-${Date.now()}`;
+    const inferred = inferLocationFromAddress(payload.address);
     const newPlace: PlaceSearchResult = {
       place_id,
       place_slug,
-      place_name: data.place_name,
-      place_type: data.place_type,
-      address: data.address ?? '',
-      city: '',
-      state_province: '',
-      country: '',
-      activity_types: data.activity_types,
-      description: data.description ?? '',
+      place_name: payload.place_name,
+      place_type: payload.place_type,
+      address: payload.address ?? '',
+      city: inferred.city,
+      state_province: inferred.state_province,
+      country: inferred.country,
+      activity_types: payload.activity_types,
+      description: payload.description ?? '',
       cover_image: null,
-      lat: data.lat,
-      lng: data.lng,
+      lat: payload.lat,
+      lng: payload.lng,
       is_approved: false,
       ts_created: new Date().toISOString(),
     };
     submittedPlaces.push(newPlace);
 
     return {
-      submission_id: `sub_${Date.now()}`,
+      submission_id:
+        typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `sub_${Date.now()}`,
       place_id,
       place_slug,
       is_approved: false,

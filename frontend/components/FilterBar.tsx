@@ -17,6 +17,7 @@ interface FilterBarProps {
   approvedOnly: boolean;
   onApprovedOnlyToggle: () => void;
   mockMode: boolean;
+  onAddPlace: () => void;
 }
 
 export default function FilterBar({
@@ -31,6 +32,7 @@ export default function FilterBar({
   approvedOnly,
   onApprovedOnlyToggle,
   mockMode,
+  onAddPlace,
 }: FilterBarProps) {
   const [showFilters, setShowFilters] = useState(false);
   const [showLocations, setShowLocations] = useState(false);
@@ -143,6 +145,15 @@ export default function FilterBar({
             className="w-full rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
           />
         </div>
+
+        <button
+          type="button"
+          onClick={onAddPlace}
+          className="rounded-full bg-orange-500 px-3.5 py-2 text-sm font-medium text-white hover:bg-orange-600"
+          aria-haspopup="dialog"
+        >
+          Add a place
+        </button>
 
         {mockMode && (
           <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">Mock data</span>

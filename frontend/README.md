@@ -51,9 +51,9 @@ Typed client in `lib/` for:
 
 - `GET /search`
 - `GET /place/{place_id}`
-- `POST /submit` (typed function only; no submit form UI in this PR)
+- `POST /submit`
 
-Mock mode is used when the base URL is unset, or when `NEXT_PUBLIC_USE_MOCKS=true`. The mock catalog is ~28 places across several countries, mixed place types, some `is_approved: true` and some false. `POST /submit` in mock mode appends the place so it would show on the map without an Approved tag.
+Mock mode is used when the base URL is unset, or when `NEXT_PUBLIC_USE_MOCKS=true`. The mock catalog is ~28 places across several countries, mixed place types, some `is_approved: true` and some false. `POST /submit` in mock mode validates the body (including field `details` on 400s) and appends the place so later searches include it without an Approved tag.
 
 ## Contract this UI is built against
 
@@ -79,17 +79,26 @@ With neither `bbox` nor `lat`/`lng`, `/search` returns the **global catalog**, p
 
 **GET /place/{place_id}:** flat public object — search summary fields plus optional `place_website_url`, `amenities[]`, `tags[]`, `place_type_metadata{}`, `external_ratings_ai_generated{}`, `hours_of_operation` (string or `null`), `ts_last_updated`. Missing or null optionals are skipped in the details drawer. 404 if not found.
 
-**POST /submit body:** `place_name`, `place_type`, `activity_types` (non-empty `cold_plunge`/`sauna`), `lat`, `lng` (required; not latitude/longitude), `address` (required unless nature), optional `description` and `email`. **201:** `{ submission_id, place_id, place_slug, is_approved: false }`. No verification step.
+**POST /submit body:** `place_name`, `place_type`, `activity_types` (non-empty `cold_plunge`/`sauna`), `lat`, `lng` (required; not latitude/longitude), `address` (required unless nature), optional `description` and `email`. **201:** `{ submission_id, place_id, place_slug, is_approved: false }`. No verification step. Indexing is async on the real backend, so `/search` may take a second or two to include the new place.
 
 **Errors:** `{ error: { code, message, details? } }`. `details` is the per-field map on 400s from `/submit`.
+
+## Add a place
+
+The top bar **Add a place** button opens a form panel that uses the same focus and Escape behavior as the details drawer.
+
+- Click the map to drop or move a pin, or choose **Use map center**. Chosen `lat` / `lng` are shown (and can be typed). Without a Mapbox token, use the current location chip’s coordinates instead.
+- Address is required unless place type is Nature. **Find on map** geocodes the address with Mapbox when `NEXT_PUBLIC_MAPBOX_TOKEN` is set; without a token it is skipped with a short note.
+- Client-side validation mirrors the `POST /submit` contract before the request is sent. A 400 maps `error.details` onto the matching fields and also shows `error.message`.
+- On 201 the form closes, the pending place (`is_approved: false`, no Approved tag) is merged into the map and list until `/search` returns it, the map flies to it, and a brief success message appears.
 
 ## Layout
 
 Sweatpals-style map-first view:
 
-- Top bar: location chip, filter icon, Sauna / Cold plunge chips, place-type filters, search
+- Top bar: location chip, filter icon, Sauna / Cold plunge chips, place-type filters, search, **Add a place**
 - Left: white rounded list floating over the map (`N places in {area}`), cards with thumbnail, Approved tag, title, place type, city, favorite star
-- Right / background: full-screen Mapbox map. Clusters and pins are a GeoJSON source with symbol layers (black teardrop + count; orange pin). Zoom +/− and locate-me stay reachable when the details drawer is open.
+- Right / background: full-screen Mapbox map. Clusters and pins are a GeoJSON source with symbol layers (black teardrop + count; orange pin). Zoom +/− and locate-me stay reachable when the details drawer or add-place form is open.
 - Map move (debounced) re-queries `/search` with `bbox`; list shows what’s in view
 - Hover/select syncs card ↔ pin; click opens a details drawer via `GET /place/{place_id}`
 
