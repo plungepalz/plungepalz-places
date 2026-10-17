@@ -10,15 +10,20 @@ import {
   PIN_HALO_RADIUS,
   PIN_HALO_RADIUS_EXPRESSION,
   PIN_ICON_SIZE,
-  PIN_ICON_SIZE_EXPRESSION,
-  PIN_IMAGE_EXPRESSION,
+  WCAG_AA_NORMAL,
   clusterColorForCount,
+  clusterLabelPairs,
   clusterLeafHasPlace,
   clusterRadiusForCount,
+  clusterTextColorForCount,
+  contrastRatio,
+  expressionContainsFeatureState,
   pinHaloRadius,
   pinIconSize,
   pinImageForState,
   pinVisualState,
+  placeIdInFilter,
+  placesMapLayerSpecs,
   shouldScrollChildIntoView,
   stepByPointCount,
 } from './map-style';
@@ -26,7 +31,6 @@ import {
 test('brand orange token is a single hex used by pins and accents', () => {
   assert.equal(BRAND.orange, '#f97316');
   assert.equal(BRAND.orangeSelected, '#ea580c');
-  assert.equal(BRAND.clusterMedium, BRAND.orange);
 });
 
 test('cluster radius and color step at <10, <50, 50+', () => {
@@ -60,6 +64,18 @@ test('cluster step expressions match the count helpers', () => {
   ]);
 });
 
+test('cluster count labels meet WCAG AA against their fills', () => {
+  for (const { count, fill, text } of clusterLabelPairs()) {
+    const ratio = contrastRatio(fill, text);
+    assert.ok(
+      ratio >= WCAG_AA_NORMAL,
+      `count ${count}: ${text} on ${fill} contrast ${ratio.toFixed(2)} < ${WCAG_AA_NORMAL}`
+    );
+  }
+  assert.equal(clusterTextColorForCount(3), BRAND.clusterTextOnSmall);
+  assert.equal(clusterTextColorForCount(10), BRAND.clusterText);
+});
+
 test('pin visual state prefers selected over hover', () => {
   assert.equal(pinVisualState('a', 'a', 'b'), 'hover');
   assert.equal(pinVisualState('b', 'a', 'b'), 'selected');
@@ -77,9 +93,38 @@ test('pin icon, halo, and image follow the visual state', () => {
   assert.equal(pinHaloRadius('selected'), PIN_HALO_RADIUS.selected);
   assert.equal(pinImageForState('selected'), 'pin-place-active');
   assert.equal(pinImageForState('hover'), 'pin-place');
-  assert.equal(PIN_IMAGE_EXPRESSION[2], 'pin-place-active');
-  assert.deepEqual(PIN_ICON_SIZE_EXPRESSION[2], PIN_ICON_SIZE.selected);
-  assert.deepEqual(PIN_HALO_RADIUS_EXPRESSION[4], PIN_HALO_RADIUS.hover);
+  assert.ok(expressionContainsFeatureState(PIN_HALO_RADIUS_EXPRESSION));
+});
+
+test('no layer layout property uses feature-state (Mapbox paint-only)', () => {
+  assert.equal(
+    expressionContainsFeatureState({
+      'icon-size': ['case', ['boolean', ['feature-state', 'hover'], false], 1.2, 1],
+    }),
+    true
+  );
+
+  const layers = placesMapLayerSpecs({
+    hoveredPlaceId: 'hover-id',
+    selectedPlaceId: 'selected-id',
+    highlightedClusterId: 9,
+  });
+  assert.ok(layers.some((layer) => layer.id === 'unclustered-point'));
+  for (const layer of layers) {
+    assert.equal(
+      expressionContainsFeatureState(layer.layout ?? {}),
+      false,
+      `${layer.id} layout must not contain feature-state`
+    );
+  }
+  const base = layers.find((layer) => layer.id === 'unclustered-point')!;
+  assert.equal(base.layout?.['icon-image'], 'pin-place');
+  assert.equal(base.layout?.['icon-size'], PIN_ICON_SIZE.default);
+  const selected = layers.find((layer) => layer.id === 'unclustered-point-selected')!;
+  assert.deepEqual(selected.filter, placeIdInFilter(['selected-id']));
+  assert.equal(selected.layout?.['icon-image'], 'pin-place-active');
+  const halo = layers.find((layer) => layer.id === 'pin-halo')!;
+  assert.equal(expressionContainsFeatureState(halo.paint), true);
 });
 
 test('cluster leaf lookup is a cheap place_id scan', () => {

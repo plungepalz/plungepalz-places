@@ -60,6 +60,7 @@ export default function HomePage() {
   const requestIdRef = useRef(0);
   const filterSlotRef = useRef<HTMLDivElement>(null);
   const [chromeTop, setChromeTop] = useState(96);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
@@ -152,6 +153,7 @@ export default function HomePage() {
   const handleLocationChange = (next: LocationPreset) => {
     setDetailsPlaceId(null);
     setAddPlaceOpen(false);
+    setSelectedPlaceId(null);
     setLeftPreset(false);
     setLocation(next);
     setMapZoom(next.zoom);
@@ -194,6 +196,7 @@ export default function HomePage() {
 
   const handleCloseDetails = useCallback(() => {
     setDetailsPlaceId(null);
+    setSelectedPlaceId(null);
   }, []);
 
   const handleCloseAddPlace = useCallback(() => {
@@ -203,6 +206,7 @@ export default function HomePage() {
 
   const handleOpenAddPlace = () => {
     setDetailsPlaceId(null);
+    setSelectedPlaceId(null);
     setAddPlaceOpen(true);
   };
 
@@ -318,6 +322,7 @@ export default function HomePage() {
             isLoading={isLoading}
             locationName={locationName}
             error={error}
+            filterHeaderInset={filtersOpen}
           />
         </div>
       </div>
@@ -346,6 +351,7 @@ export default function HomePage() {
           onApprovedOnlyToggle={() => setApprovedOnly((prev) => !prev)}
           mockMode={isMockMode}
           onAddPlace={handleOpenAddPlace}
+          onFiltersOpenChange={setFiltersOpen}
         />
       </div>
 

@@ -19,6 +19,7 @@ interface FilterBarProps {
   onApprovedOnlyToggle: () => void;
   mockMode: boolean;
   onAddPlace: () => void;
+  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 export default function FilterBar({
@@ -35,9 +36,14 @@ export default function FilterBar({
   onApprovedOnlyToggle,
   mockMode,
   onAddPlace,
+  onFiltersOpenChange,
 }: FilterBarProps) {
   const [showFilters, setShowFilters] = useState(false);
   const [showLocations, setShowLocations] = useState(false);
+
+  useEffect(() => {
+    onFiltersOpenChange?.(showFilters);
+  }, [showFilters, onFiltersOpenChange]);
   const locationRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -167,7 +173,7 @@ export default function FilterBar({
 
       <div
         data-place-type-filters
-        className={`pointer-events-auto absolute left-0 right-0 top-full z-50 mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-lg ring-1 ring-black/5 transition duration-200 ease-out ${
+        className={`pointer-events-auto absolute left-0 right-0 top-full z-50 mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-[0_12px_32px_rgba(0,0,0,0.16)] ring-1 ring-black/10 backdrop-blur-sm transition duration-200 ease-out ${
           showFilters
             ? 'translate-y-0 opacity-100'
             : 'pointer-events-none invisible -translate-y-1 opacity-0'

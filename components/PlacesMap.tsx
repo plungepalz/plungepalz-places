@@ -16,15 +16,7 @@ import {
   pinHintCenterX,
   worldwideFraming,
 } from '@/lib/map-camera';
-import {
-  CLUSTER_COLOR_EXPRESSION,
-  CLUSTER_RADIUS_EXPRESSION,
-  CLUSTER_TEXT_SIZE_EXPRESSION,
-  PIN_HALO_RADIUS_EXPRESSION,
-  PIN_ICON_SIZE_EXPRESSION,
-  PIN_IMAGE_EXPRESSION,
-  clusterLeafHasPlace,
-} from '@/lib/map-style';
+import { clusterLeafHasPlace, placesMapLayerSpecs } from '@/lib/map-style';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -524,11 +516,59 @@ export default function PlacesMap({
     const props = feature?.properties;
     if (locationPickMode) {
       map.getCanvas().style.cursor = props?.cluster ? 'pointer' : 'crosshair';
+    } else if (props?.cluster || props?.place_id) {
+      map.getCanvas().style.cursor = 'pointer';
     } else {
-      map.getCanvas().style.cursor = feature ? 'pointer' : '';
+      map.getCanvas().style.cursor = '';
     }
-    onHoverPlace(props?.place_id && !props.cluster ? props.place_id : null);
   };
+
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !imagesReady) return;
+    const pinLayers = ['unclustered-point', 'unclustered-point-hover', 'unclustered-point-selected'];
+    const placeIdFromFeatures = (features: unknown): string | null => {
+      const first = Array.isArray(features) ? features[0] : undefined;
+      const props = (first as { properties?: { place_id?: string } } | undefined)?.properties;
+      return props?.place_id ?? null;
+    };
+    const onEnter = (event: { features?: unknown; point?: { x: number; y: number } }) => {
+      const placeId = placeIdFromFeatures(event.features);
+      map.getCanvas().style.cursor = locationPickMode ? 'crosshair' : 'pointer';
+      if (placeId && !locationPickMode) onHoverPlace(placeId);
+    };
+    const onLeave = (event: { point?: { x: number; y: number } }) => {
+      const hits = event.point
+        ? map.queryRenderedFeatures([event.point.x, event.point.y], { layers: pinLayers })
+        : [];
+      const nextId = placeIdFromFeatures(hits);
+      if (nextId && !locationPickMode) {
+        onHoverPlace(nextId);
+        return;
+      }
+      map.getCanvas().style.cursor = locationPickMode ? 'crosshair' : '';
+      if (!locationPickMode) onHoverPlace(null);
+    };
+    let attached = false;
+    const attach = () => {
+      if (attached || !map.getLayer('unclustered-point')) return;
+      attached = true;
+      for (const layer of pinLayers) {
+        map.on('mouseenter', layer, onEnter);
+        map.on('mouseleave', layer, onLeave);
+      }
+    };
+    attach();
+    map.on('idle', attach);
+    return () => {
+      map.off('idle', attach);
+      if (!attached) return;
+      for (const layer of pinLayers) {
+        map.off('mouseenter', layer, onEnter);
+        map.off('mouseleave', layer, onLeave);
+      }
+    };
+  }, [imagesReady, locationPickMode, onHoverPlace]);
 
   const handleMoveEnd = useCallback(
     (event: ViewStateChangeEvent) => {
@@ -595,7 +635,17 @@ export default function PlacesMap({
         mapboxAccessToken={accessToken}
         attributionControl
         style={{ width: '100%', height: '100%' }}
-        interactiveLayerIds={imagesReady ? ['clusters', 'cluster-count', 'unclustered-point'] : []}
+        interactiveLayerIds={
+          imagesReady
+            ? [
+                'clusters',
+                'cluster-count',
+                'unclustered-point',
+                'unclustered-point-hover',
+                'unclustered-point-selected',
+              ]
+            : []
+        }
         cursor="auto"
         onLoad={handleLoad}
         onMoveEnd={handleMoveEnd}
@@ -617,71 +667,20 @@ export default function PlacesMap({
             clusterRadius={60}
             promoteId="place_id"
           >
-            <Layer
-              id="clusters"
-              type="circle"
-              filter={['has', 'point_count']}
-              paint={{
-                'circle-color': CLUSTER_COLOR_EXPRESSION as never,
-                'circle-radius': CLUSTER_RADIUS_EXPRESSION as never,
-                'circle-stroke-width': 2,
-                'circle-stroke-color': BRAND.clusterStroke,
-              }}
-            />
-            {highlightedClusterId != null && (
+            {placesMapLayerSpecs({
+              hoveredPlaceId,
+              selectedPlaceId,
+              highlightedClusterId,
+            }).map((layer) => (
               <Layer
-                id="cluster-highlight"
-                type="circle"
-                filter={['==', ['get', 'cluster_id'], highlightedClusterId]}
-                paint={{
-                  'circle-color': BRAND.orangeSelected,
-                  'circle-radius': CLUSTER_RADIUS_EXPRESSION as never,
-                  'circle-stroke-width': 4,
-                  'circle-stroke-color': BRAND.orangeSoft,
-                  'circle-opacity': 0.95,
-                }}
+                key={layer.id}
+                id={layer.id}
+                type={layer.type}
+                filter={layer.filter as never}
+                layout={(layer.layout ?? {}) as never}
+                paint={(layer.paint ?? {}) as never}
               />
-            )}
-            <Layer
-              id="cluster-count"
-              type="symbol"
-              filter={['has', 'point_count']}
-              layout={{
-                'text-field': ['get', 'point_count_abbreviated'],
-                'text-size': CLUSTER_TEXT_SIZE_EXPRESSION as never,
-                'text-allow-overlap': true,
-                'text-ignore-placement': true,
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-              }}
-              paint={{
-                'text-color': BRAND.clusterText,
-                'text-halo-color': 'rgba(0,0,0,0.35)',
-                'text-halo-width': 1,
-              }}
-            />
-            <Layer
-              id="pin-halo"
-              type="circle"
-              filter={['!', ['has', 'point_count']]}
-              paint={{
-                'circle-radius': PIN_HALO_RADIUS_EXPRESSION as never,
-                'circle-color': BRAND.orange,
-                'circle-opacity': 0.28,
-                'circle-translate': [0, -10],
-              }}
-            />
-            <Layer
-              id="unclustered-point"
-              type="symbol"
-              filter={['!', ['has', 'point_count']]}
-              layout={{
-                'icon-image': PIN_IMAGE_EXPRESSION as never,
-                'icon-anchor': 'bottom',
-                'icon-allow-overlap': true,
-                'icon-ignore-placement': true,
-                'icon-size': PIN_ICON_SIZE_EXPRESSION as never,
-              }}
-            />
+            ))}
           </Source>
         )}
         {draftLocation && (

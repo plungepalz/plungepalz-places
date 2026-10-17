@@ -6,10 +6,11 @@ export const BRAND = {
   orangeSoft: '#ffedd5',
   orangeDeep: '#c2410c',
   clusterSmall: '#fdba74',
-  clusterMedium: '#f97316',
-  clusterLarge: '#c2410c',
+  clusterMedium: '#c2410c',
+  clusterLarge: '#7c2d12',
   clusterStroke: '#ffffff',
   clusterText: '#ffffff',
+  clusterTextOnSmall: '#431407',
 } as const;
 
 export type BrandColor = (typeof BRAND)[keyof typeof BRAND];

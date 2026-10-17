@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { placesListHeading } from '@/lib/list-heading';
-import { shouldScrollChildIntoView } from '@/lib/map-style';
+import { FILTER_OVERLAY_HEADER_INSET, shouldScrollChildIntoView } from '@/lib/map-style';
 import type { PlaceSearchResult } from '@/lib/types';
 import PlaceCard from './PlaceCard';
 
@@ -20,6 +20,7 @@ interface PlacesListProps {
   isLoading: boolean;
   locationName: string;
   error: string | null;
+  filterHeaderInset?: boolean;
 }
 
 export default function PlacesList({
@@ -36,6 +37,7 @@ export default function PlacesList({
   isLoading,
   locationName,
   error,
+  filterHeaderInset = false,
 }: PlacesListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -57,7 +59,10 @@ export default function PlacesList({
       data-places-list
       className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5"
     >
-      <div className="border-b border-gray-100 px-4 py-3">
+      <div
+        className="border-b border-gray-100 px-4 py-3"
+        style={filterHeaderInset ? { paddingTop: FILTER_OVERLAY_HEADER_INSET } : undefined}
+      >
         <h2 className="text-base font-semibold text-gray-900">
           {placesListHeading(places.length, total, locationName, { hasMore })}
         </h2>
