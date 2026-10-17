@@ -125,7 +125,16 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** Format a viewport as `minLng,minLat,maxLng,maxLat` with values always in range. */
+/** Wrap longitude into (-180, 180]. 180 itself becomes -180. */
+export function wrapLng(lng: number): number {
+  return ((((lng + 180) % 360) + 360) % 360) - 180;
+}
+
+/**
+ * Format a viewport as `minLng,minLat,maxLng,maxLat`.
+ * Lat is clamped to [-90, 90]. Lng is wrapped, not clamped, so a box that
+ * crosses the antimeridian is sent as minLng > maxLng (backend / mock split it).
+ */
 export function formatBbox(bounds: MapBounds): string {
   const minLat = clamp(bounds.minLat, -90, 90);
   const maxLat = clamp(bounds.maxLat, -90, 90);
@@ -134,7 +143,11 @@ export function formatBbox(bounds: MapBounds): string {
   if (!Number.isFinite(lngSpan) || lngSpan >= 360) {
     return `-180,${minLat},180,${maxLat}`;
   }
-  const minLng = clamp(bounds.minLng, -180, 180);
-  const maxLng = clamp(bounds.maxLng, -180, 180);
+  const minLng = wrapLng(bounds.minLng);
+  let maxLng = wrapLng(bounds.maxLng);
+  // wrap(180) is -180; keep a non-crossing raw box from collapsing to the west.
+  if (bounds.maxLng > bounds.minLng && maxLng === -180) {
+    maxLng = 180;
+  }
   return `${minLng},${minLat},${maxLng},${maxLat}`;
 }

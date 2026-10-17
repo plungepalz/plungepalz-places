@@ -65,9 +65,12 @@ class MockApiClient implements PlacesClient {
         });
       }
       const [minLng, minLat, maxLng, maxLat] = parts;
-      places = places.filter(
-        (p) => p.lng >= minLng && p.lng <= maxLng && p.lat >= minLat && p.lat <= maxLat
-      );
+      places = places.filter((p) => {
+        const latInBox = p.lat >= minLat && p.lat <= maxLat;
+        const lngInBox =
+          minLng <= maxLng ? p.lng >= minLng && p.lng <= maxLng : p.lng >= minLng || p.lng <= maxLng;
+        return latInBox && lngInBox;
+      });
     } else if (params.lat !== undefined && params.lng !== undefined) {
       const radiusKm = params.radius_km ?? 10;
       places = places.filter((p) => haversineKm(params.lat!, params.lng!, p.lat, p.lng) <= radiusKm);
