@@ -1,37 +1,39 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { LIST_PANEL_RIGHT, lngToVisibleX, listPanelRightEdge, worldFitZoom } from './map-camera';
+import {
+  LIST_PANEL_RIGHT,
+  PACIFIC_SEAM_LNG,
+  WORLDWIDE_COMFORT_LNG,
+  lngScreenCopies,
+  listPanelRightEdge,
+  mapboxHeightMinZoom,
+  worldwideFraming,
+} from './map-camera';
 
-const WORLDWIDE_LNG = -20;
-const US_CLUSTER_LNG = -98.6;
-const HAWAII_LNG = -157.8;
-const FIJI_LNG = 178.0;
+const PLACES = [
+  ['Hawaii', -157.8],
+  ['US', -98.6],
+  ['Australia', 151.2],
+  ['NZ', 174.8],
+  ['Fiji', 178.0],
+] as const;
 
-function assertWorldwideFraming(canvasWidth: number) {
-  const panelRight = listPanelRightEdge(canvasWidth);
-  const zoom = worldFitZoom(canvasWidth, panelRight);
-  const visible = canvasWidth - panelRight;
-  const worldPx = 512 * 2 ** zoom;
-  assert.ok(worldPx <= visible + 1, `world ${worldPx}px must fit in visible ${visible}px at ${canvasWidth}`);
-  for (const [name, lng] of [
-    ['US cluster', US_CLUSTER_LNG],
-    ['Hawaii', HAWAII_LNG],
-    ['Fiji', FIJI_LNG],
-  ] as const) {
-    const x = lngToVisibleX(lng, WORLDWIDE_LNG, zoom, canvasWidth, panelRight);
-    // Wrap into the primary world copy around the visible center.
-    const world = 512 * 2 ** zoom;
-    let screenX = x;
-    const visibleCenter = panelRight + visible / 2;
-    while (screenX < visibleCenter - world / 2) screenX += world;
-    while (screenX > visibleCenter + world / 2) screenX -= world;
-    assert.ok(
-      screenX > panelRight,
-      `${name} at x=${screenX.toFixed(1)} must sit right of the list (x>${panelRight}) on ${canvasWidth}`
+const CLUSTER_INSET = 12;
+
+function assertPlacesInGap(canvasWidth: number, canvasHeight: number) {
+  const framing = worldwideFraming(canvasWidth, canvasHeight);
+  assert.equal(framing.panelRight, LIST_PANEL_RIGHT);
+  assert.equal(framing.lat, 20);
+  for (const [name, lng] of PLACES) {
+    const copies = lngScreenCopies(lng, framing.lng, framing.zoom, canvasWidth, framing.panelRight);
+    const inGap = copies.some(
+      (x) => x > framing.panelRight + CLUSTER_INSET && x < canvasWidth - CLUSTER_INSET
     );
     assert.ok(
-      screenX < canvasWidth,
-      `${name} at x=${screenX.toFixed(1)} must sit left of the canvas edge on ${canvasWidth}`
+      inGap,
+      `${name} (${lng}) copies [${copies.map((x) => x.toFixed(1)).join(', ')}] must sit in the gap ` +
+        `(${framing.panelRight + CLUSTER_INSET}..${canvasWidth - CLUSTER_INSET}) ` +
+        `on ${canvasWidth}x${canvasHeight} zoom=${framing.zoom.toFixed(3)} lng=${framing.lng.toFixed(2)}`
     );
   }
 }
@@ -42,7 +44,29 @@ test('list panel right edge matches the floating list (16 + 380)', () => {
   assert.equal(listPanelRightEdge(1280), 396);
 });
 
-test('Worldwide framing keeps US, Hawaii, and Fiji in the visible gap on 1440 and 1280', () => {
-  assertWorldwideFraming(1440);
-  assertWorldwideFraming(1280);
+test('1280x900 uses the height min zoom and a Pacific seam, not a gap-fit zoom', () => {
+  const framing = worldwideFraming(1280, 900);
+  const heightMin = mapboxHeightMinZoom(900);
+  assert.ok(Math.abs(framing.zoom - heightMin) < 1e-9);
+  assert.ok(framing.worldPx > framing.gap);
+  assert.equal(framing.overflow, true);
+  assert.notEqual(framing.lng, WORLDWIDE_COMFORT_LNG);
+  const seamCopies = lngScreenCopies(
+    PACIFIC_SEAM_LNG,
+    framing.lng,
+    framing.zoom,
+    1280,
+    framing.panelRight
+  );
+  const seamAtPanel = seamCopies.some((x) => Math.abs(x - framing.panelRight) < 1);
+  assert.ok(seamAtPanel, `Pacific seam -170 should sit on the panel edge, copies=${seamCopies}`);
+  assertPlacesInGap(1280, 900);
+});
+
+test('1440x900 keeps the comfortable lng -20 framing and fits the world in the gap', () => {
+  const framing = worldwideFraming(1440, 900);
+  assert.equal(framing.overflow, false);
+  assert.equal(framing.lng, WORLDWIDE_COMFORT_LNG);
+  assert.ok(framing.worldPx <= framing.gap + 1);
+  assertPlacesInGap(1440, 900);
 });

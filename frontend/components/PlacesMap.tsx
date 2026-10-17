@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MapGL, { Layer, Marker, Source } from 'react-map-gl/mapbox';
 import type { MapMouseEvent, MapRef } from 'react-map-gl/mapbox';
 import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
-import { listPanelRightEdge, worldFitZoom } from '@/lib/map-camera';
+import { listPanelRightEdge, worldwideFraming } from '@/lib/map-camera';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -249,8 +249,13 @@ export default function PlacesMap({
     const size = { width: container.clientWidth, height: container.clientHeight };
     const padding = flyPadding(panelOpen, flyRequest.exactZoom, size);
     let zoom = resolveFlyZoom(currentZoom, flyRequest);
+    let longitude = flyRequest.longitude;
+    let latitude = flyRequest.latitude;
     if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
-      zoom = worldFitZoom(size.width, padding.left);
+      const framing = worldwideFraming(size.width, size.height);
+      zoom = framing.zoom;
+      longitude = framing.lng;
+      latitude = framing.lat;
     }
     if (flyEndHandlerRef.current) {
       map.off('moveend', flyEndHandlerRef.current);
@@ -273,7 +278,7 @@ export default function PlacesMap({
     flyEndHandlerRef.current = onFlyEnd;
     map.once('moveend', onFlyEnd);
     map.flyTo({
-      center: [flyRequest.longitude, flyRequest.latitude],
+      center: [longitude, latitude],
       zoom,
       duration: 800,
       padding,
