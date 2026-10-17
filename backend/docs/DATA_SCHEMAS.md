@@ -50,6 +50,7 @@
 | claimed_ts | String | ISO timestamp UTC when claimed; omitted if unclaimed |
 | ai_autofill_ts | String | ISO timestamp UTC when AI autofill last completed; omitted until then |
 | ai_autofill_status | String | pending \| complete \| failed; omitted if never attempted |
+| ai_autofill_claimed_ts | String | ISO timestamp UTC when the current/last autofill claim was taken; a pending claim older than 5 minutes may be reclaimed |
 
 `hours_of_operation` is **not** a top-level Places_Places attribute. The public GET /place API lifts it from `place_type_metadata.hours_of_operation` (business / gym_amenity) when present, otherwise returns `null`.
 
@@ -168,7 +169,7 @@
   "place_name": "Plunge Lab",
   "place_type": "business",
   "visibility": "public",
-  "place_slug": "plunge-lab-salt-lake-city",
+  "place_slug": "plunge-lab-salt-lake-city-34567890",
   "address": "457 E 300 S, Salt Lake City, UT 84111",
   "city": "Salt Lake City",
   "state_province": "UT",

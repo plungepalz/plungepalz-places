@@ -197,7 +197,7 @@ Resources:
           ENVIRONMENT: "prod"
           TABLE_SUBMISSIONS: "Places_Submissions"
           TABLE_PLACES: "Places_Places"
-          ANTHROPIC_MODEL: "claude-haiku-4-5-20251001"
+          ANTHROPIC_MODEL_ID: "claude-3-5-haiku-latest"
       Code:
         ZipFile: |
           import json
@@ -521,7 +521,7 @@ Resources:
       RestApiId: !Ref PlacesRestApi
       ResourceId: !Ref ResourceSubmitAIAutofill
       HttpMethod: POST
-      AuthorizationType: AWS_IAM
+      AuthorizationType: NONE
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST

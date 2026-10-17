@@ -65,7 +65,7 @@ The place is immediately GetByID-able and Search-able (unless `approved_only=tru
 **Auth: AWS_IAM** — admin-triggered only; not a public route. **Not** invoked by Submit. No verification-code gate.
 
 1. Load submission and/or existing place (`place_id` or `submission.place_id_generated`).
-2. **Claim first** with a conditional `SET ai_autofill_status = pending` (`attribute_not_exists(ai_autofill_status) OR ai_autofill_status NOT IN (pending, complete)`). **409** and **no** Google/Anthropic calls on ConditionalCheckFailed. `failed` can retry.
+2. **Claim first** with a conditional `SET ai_autofill_status = pending, ai_autofill_claimed_ts = now` (`attribute_exists(place_id)`; allowed when status is missing, not `pending`/`complete`, or `pending` with `ai_autofill_claimed_ts` older than 5 minutes). **409** (or **404** if the place is gone) and **no** Google/Anthropic calls on ConditionalCheckFailed. `failed` and stale `pending` can retry.
 3. Call `generate_place_record()` from the `generate_place_with_ai` layer.
 4. On success, `UpdateItem` **only** AI fields plus `ai_autofill_status=complete` and `ai_autofill_ts`. Do not replace user-submitted name/type/coords/address.
 5. On failure, set `ai_autofill_status=failed`. Provider error strings are logged, never returned.
@@ -106,7 +106,7 @@ Model: `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_
 
 ## Idempotency
 
-- **Places_SubmitAIAutofill:** Conditional claim `SET ai_autofill_status = pending` before any paid outbound call. 409 if already `pending` or `complete`. `failed` may retry.
+- **Places_SubmitAIAutofill:** Conditional claim `SET ai_autofill_status = pending, ai_autofill_claimed_ts = now` before any paid outbound call (`attribute_exists(place_id)`). 409 if `complete` or a fresh `pending` (younger than 5 minutes). `failed` and stale `pending` may retry.
 - **Places_AlgoliaSync:** `save_objects` by `objectID=place_id`; deletes of missing IDs are ignored.
 
 ---

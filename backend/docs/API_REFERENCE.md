@@ -29,7 +29,7 @@ See [SCHEMA_MAPPING](#schema-mapping-vs-data_schemasmd) for DynamoDB vs API fiel
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | q | string | No | Text query |
-| bbox | string | No | Map viewport `minLng,minLat,maxLng,maxLat` (**preferred** geo). Wins over lat/lng/radius when present. Lat is clamped to ±90 and lng to ±180. A box that crosses the antimeridian (`minLng > maxLng` after clamp) is split into two Algolia `insideBoundingBox` boxes. |
+| bbox | string | No | Map viewport `minLng,minLat,maxLng,maxLat` (**preferred** geo). Wins over lat/lng/radius when present. Lat is clamped to ±90. Lng is **wrapped** with `((x+180)%360)-180` (Mapbox may send unwrapped values). A raw span `maxLng-minLng >= 360` is the whole world. After wrap, `minLng > maxLng` splits into two Algolia `insideBoundingBox` boxes. |
 | lat | number | No | Geo alternative. Requires `lng`. Range [-90, 90]. |
 | lng | number | No | Geo alternative. Requires `lat`. Range [-180, 180]. |
 | radius_km | number | No | Geo radius in km (default 10). Ignored when `bbox` is present. |
@@ -43,7 +43,7 @@ If **neither `bbox` nor `lat`/`lng`** is provided, Search returns the **global c
 
 Always excludes `internal_status=rejected` and `visibility=hidden`. Never returns `internal_status`, `internal_comments`, or `ts_created_unix`.
 
-Algolia only paginates the first `paginationLimitedTo` hits (default **1000**). `has_more` is `(page+1)*limit < min(nbHits, paginationLimitedTo or 1000)`. Search never requests a page past that cap; `Load more` must stop when `has_more` is false even if `total` (raw `nbHits`) is larger.
+Algolia only paginates the first `paginationLimitedTo` hits (default **1000**, `ALGOLIA_PAGINATION_CAP`). Search uses `offset=page*limit` and `length=min(limit, cap-offset)` (not `page`/`hitsPerPage`). If `offset >= cap`, it returns empty results with `has_more=false` and does not call Algolia. `has_more` is `(page+1)*limit < min(nbHits, paginationLimitedTo or 1000)` using the same cap helper. `Load more` must stop when `has_more` is false even if `total` (raw `nbHits`) is larger.
 
 Each element of `places` is a **PlaceSummary** (`ts_created` is ISO 8601 UTC, same name as DynamoDB).
 
@@ -83,7 +83,7 @@ Each element of `places` is a **PlaceSummary** (`ts_created` is ISO 8601 UTC, sa
 
 | Code | Meaning |
 |------|---------|
-| 400 | Malformed/non-numeric bbox, out-of-range point `lat`/`lng`, unknown enum, bad limit/page, partial lat/lng. Out-of-range **bbox** values are clamped, not rejected. |
+| 400 | Malformed/non-numeric bbox, out-of-range point `lat`/`lng`, unknown enum, bad limit/page, partial lat/lng. Out-of-range **bbox** latitudes are clamped; longitudes are wrapped. |
 | 500 | Internal error |
 
 ---
@@ -228,7 +228,7 @@ Empty strings are never written. H3 `h3_r7` / `h3_r5` / `h3_r4` are set when the
 
 Touches only AI-generated fields: `description` (only if currently empty), `place_type_metadata`, `amenities`, `tags`, `external_ratings_ai_generated`, `google_places_api_data`. User-submitted fields are preserved.
 
-Spend: `ANTHROPIC_MODEL` (default current Haiku `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` is also accepted), `ANTHROPIC_MAX_TOKENS` (default 1024, cap 2048). Before any Google or Anthropic call the handler claims the job with a conditional `SET ai_autofill_status = pending` (allowed when the attribute is missing or not `pending`/`complete`, so `failed` can retry). ConditionalCheckFailed → **409** and no outbound calls. Success sets `ai_autofill_status=complete` and `ai_autofill_ts`. Failure sets `ai_autofill_status=failed`. Provider error strings are logged server-side and never returned.
+Spend: `ANTHROPIC_MODEL` (default current Haiku `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` is also accepted), `ANTHROPIC_MAX_TOKENS` (default 1024, cap 2048). Before any Google or Anthropic call the handler claims the job with a conditional `SET ai_autofill_status = pending, ai_autofill_claimed_ts = now` (`attribute_exists(place_id)`; allowed when status is missing, not `pending`/`complete`, or `pending` with `ai_autofill_claimed_ts` older than 5 minutes). ConditionalCheckFailed → **409** (or **404** if the place is gone) and no outbound calls. Success sets `ai_autofill_status=complete` and `ai_autofill_ts`. Failure sets `ai_autofill_status=failed`. Provider error strings are logged server-side and never returned.
 
 ### Request Body
 
@@ -268,7 +268,7 @@ Provide `submission_id` and/or `place_id`. `submission_id` loads `place_id_gener
 | 400 | Missing ids / missing location |
 | 401 | IAM auth failed (API Gateway) |
 | 404 | Submission or place not found |
-| 409 | Already claimed or completed (`ai_autofill_status` is `pending` or `complete`) |
+| 409 | Already claimed or completed (`pending` younger than 5 minutes, or `complete`) |
 | 500 | AI autofill failed (generic message; provider errors are not returned) |
 
 ---
@@ -569,6 +569,7 @@ Storage (DynamoDB) keeps DATA_SCHEMAS.md names. The response layer maps:
 | POST /submit `lat`/`lng` | `lat`/`lng` | Older API_REFERENCE used `latitude`/`longitude` — those names are not accepted in MVP |
 | `ai_autofill_ts` | `ai_autofill_ts` | Set when autofill completes. Omitted until then. |
 | `ai_autofill_status` | `ai_autofill_status` | `pending` \| `complete` \| `failed`. Claim guard before any paid outbound call. |
+| `ai_autofill_claimed_ts` | `ai_autofill_claimed_ts` | Set when a claim is taken. A `pending` claim older than 5 minutes may be reclaimed. |
 
 Conflicts flagged, not silently renamed:
 

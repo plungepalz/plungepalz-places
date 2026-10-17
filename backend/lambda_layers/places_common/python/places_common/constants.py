@@ -12,7 +12,25 @@ MIN_SEARCH_LIMIT = 1
 DEFAULT_RADIUS_KM = 10.0
 
 # Algolia only paginates the first paginationLimitedTo hits (default 1000).
+# Single source of truth for the request clamp and has_more.
 ALGOLIA_PAGINATION_CAP = 1000
+
+# Reclaim a stale pending autofill after this many seconds.
+AI_AUTOFILL_STALE_PENDING_SECONDS = 300
+
+
+def algolia_pagination_cap(raw: dict | None = None) -> int:
+    """Return paginationLimitedTo from an Algolia response, else ALGOLIA_PAGINATION_CAP."""
+    if raw:
+        value = raw.get("paginationLimitedTo")
+        if value is not None:
+            try:
+                cap = int(value)
+                if cap > 0:
+                    return cap
+            except (TypeError, ValueError):
+                pass
+    return ALGOLIA_PAGINATION_CAP
 
 MAX_PLACE_NAME_LEN = 200
 MAX_ADDRESS_LEN = 500

@@ -72,8 +72,8 @@ Search always adds `NOT internal_status:rejected AND NOT visibility:hidden`.
 
 `place_type` and `activity_types` query params are **comma-separated lists**.
 
-`bbox` uses `insideBoundingBox` (Algolia order: minLat,minLng,maxLat,maxLng — converted from our minLng,minLat,maxLng,maxLat). Out-of-range lat/lng on the bbox are **clamped** (±90 / ±180). A viewport that crosses the antimeridian (`minLng > maxLng`) is sent as **two** boxes (Algolia accepts a list). Geo alternative uses `aroundLatLng` + `aroundRadius` (meters).
+`bbox` uses `insideBoundingBox` (Algolia order: minLat,minLng,maxLat,maxLng — converted from our minLng,minLat,maxLng,maxLat). Bbox **lat** is clamped to ±90; **lng** is wrapped with `((x+180)%360)-180`. A raw span `maxLng-minLng >= 360` is the whole world. After wrap, `minLng > maxLng` is sent as **two** boxes. Geo alternative uses `aroundLatLng` + `aroundRadius` (meters).
 
 ## Pagination cap
 
-Algolia only retrieves the first `paginationLimitedTo` hits (index default **1000**). `Places_Search` computes `has_more` against `min(nbHits, paginationLimitedTo or 1000)` and never requests a `page`/`hitsPerPage` window past that cap. Clients must stop loading when `has_more` is false; `total` may still report the raw `nbHits` above the cap.
+Algolia only retrieves the first `paginationLimitedTo` hits (index default **1000**, `ALGOLIA_PAGINATION_CAP` in `places_common.constants`). `Places_Search` requests with `offset=page*limit` and `length=min(limit, cap-offset)` — never `page`/`hitsPerPage`, which would skip rows when the last window is shortened. If `offset >= cap`, it returns empty results and does not query Algolia. `has_more` uses the same `algolia_pagination_cap()` helper: `(page+1)*limit < min(nbHits, paginationLimitedTo or 1000)`. Clients must stop loading when `has_more` is false; `total` may still report the raw `nbHits` above the cap.

@@ -17,6 +17,7 @@ claim on ai_autofill_status before any Google/Anthropic call
 
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import boto3
@@ -32,6 +33,7 @@ from places_common import (
     utc_now,
 )
 from places_common.constants import (
+    AI_AUTOFILL_STALE_PENDING_SECONDS,
     AI_AUTOFILL_STATUS_COMPLETE,
     AI_AUTOFILL_STATUS_FAILED,
     AI_AUTOFILL_STATUS_PENDING,
@@ -77,26 +79,46 @@ def _generic_autofill_error():
     return error_response(500, "INTERNAL_ERROR", "AI autofill failed")
 
 
+def _stale_claim_cutoff() -> str:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=AI_AUTOFILL_STALE_PENDING_SECONDS)
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _claim_autofill(table_places, place_id: str):
-    """Claim the job before any paid outbound call. failed can retry."""
+    """Claim the job before any paid outbound call. failed and stale pending can retry."""
+    claimed_ts = utc_now()
     try:
         table_places.update_item(
             Key={"place_id": place_id},
-            UpdateExpression="SET ai_autofill_status = :pending",
+            UpdateExpression=(
+                "SET ai_autofill_status = :pending, ai_autofill_claimed_ts = :claimed_ts"
+            ),
             ConditionExpression=(
-                "(attribute_not_exists(ai_autofill_status) "
-                "OR NOT ai_autofill_status IN (:pending, :complete)) "
-                "AND attribute_not_exists(ai_autofill_ts)"
+                "attribute_exists(place_id) "
+                "AND attribute_not_exists(ai_autofill_ts) "
+                "AND ("
+                "attribute_not_exists(ai_autofill_status) "
+                "OR NOT ai_autofill_status IN (:pending, :complete) "
+                "OR (ai_autofill_status = :pending AND ai_autofill_claimed_ts < :stale_before)"
+                ")"
             ),
             ExpressionAttributeValues={
                 ":pending": AI_AUTOFILL_STATUS_PENDING,
                 ":complete": AI_AUTOFILL_STATUS_COMPLETE,
+                ":claimed_ts": claimed_ts,
+                ":stale_before": _stale_claim_cutoff(),
             },
         )
         return None
     except ClientError as exc:
         code = (exc.response.get("Error") or {}).get("Code", "")
         if code == "ConditionalCheckFailedException":
+            try:
+                existing = table_places.get_item(Key={"place_id": place_id}).get("Item")
+            except Exception:
+                existing = True
+            if not existing:
+                return error_response(404, "NOT_FOUND", "Place not found")
             return error_response(409, "CONFLICT", "Place already AI-enriched (idempotency)")
         logger.exception("Failed to claim AI autofill for place_id=%s", place_id)
         return error_response(500, "INTERNAL_ERROR", "Failed to claim AI autofill")

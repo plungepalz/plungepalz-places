@@ -13,7 +13,7 @@ from places_common import (
     place_summary,
     success_response,
 )
-from places_common.constants import ALGOLIA_PAGINATION_CAP
+from places_common.constants import algolia_pagination_cap
 from places_common.records import should_delete_from_algolia
 
 
@@ -44,8 +44,6 @@ def _build_filters(params: dict) -> str:
 def _search_options(params: dict) -> dict:
     opts = {
         "filters": _build_filters(params),
-        "hitsPerPage": params["limit"],
-        "page": params["page"],
         "attributesToRetrieve": [
             "place_id",
             "place_slug",
@@ -86,17 +84,25 @@ def handler(event, context):
 
     limit = params["limit"]
     page = params["page"]
-    opts = _search_options(params)
     offset = page * limit
-    discard_hits = False
-    if offset >= ALGOLIA_PAGINATION_CAP:
-        # Never request a page past Algolia's pagination cap. Fetch metadata only.
-        opts["page"] = 0
-        opts["hitsPerPage"] = 1
-        discard_hits = True
-    else:
-        opts["page"] = page
-        opts["hitsPerPage"] = min(limit, ALGOLIA_PAGINATION_CAP - offset)
+    cap = algolia_pagination_cap()
+    if offset >= cap:
+        return success_response(
+            200,
+            {
+                "places": [],
+                "total": 0,
+                "page": page,
+                "limit": limit,
+                "has_more": False,
+            },
+        )
+
+    opts = _search_options(params)
+    # offset/length (not page/hitsPerPage) so shrinking the last window
+    # still starts at page*limit. Same cap as has_more.
+    opts["offset"] = offset
+    opts["length"] = min(limit, cap - offset)
 
     try:
         index = _get_index()
@@ -104,9 +110,9 @@ def handler(event, context):
     except Exception:
         return error_response(500, "INTERNAL_ERROR", "Search failed")
 
-    hits = [] if discard_hits else (raw.get("hits") or [])
+    hits = raw.get("hits") or []
     total = int(raw.get("nbHits") if raw.get("nbHits") is not None else len(hits))
-    retrievable = min(total, _algolia_pagination_cap(raw))
+    retrievable = min(total, algolia_pagination_cap(raw))
 
     places = []
     for hit in hits:
@@ -122,7 +128,7 @@ def handler(event, context):
         summary.pop("visibility", None)
         places.append(summary)
 
-    has_more = (page + 1) * limit < retrievable
+    has_more = (offset + limit) < retrievable
     return success_response(
         200,
         {
@@ -133,16 +139,3 @@ def handler(event, context):
             "has_more": has_more,
         },
     )
-
-
-def _algolia_pagination_cap(raw: dict | None) -> int:
-    if raw:
-        value = raw.get("paginationLimitedTo")
-        if value is not None:
-            try:
-                cap = int(value)
-                if cap > 0:
-                    return cap
-            except (TypeError, ValueError):
-                pass
-    return ALGOLIA_PAGINATION_CAP

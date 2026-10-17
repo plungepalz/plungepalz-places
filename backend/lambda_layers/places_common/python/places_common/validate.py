@@ -148,15 +148,23 @@ def parse_enum_csv(
     return out
 
 
+def _wrap_lng(lng: float) -> float:
+    """Wrap longitude into (-180, 180]. 180 folds to -180."""
+    wrapped = ((lng + 180.0) % 360.0) - 180.0
+    if wrapped == 180.0:
+        return -180.0
+    return wrapped
+
+
 def parse_bbox(
     raw: Any, details: dict[str, str]
 ) -> list[tuple[float, float, float, float]] | None:
     """Parse bbox=minLng,minLat,maxLng,maxLat.
 
-    Clamps lat to ±90 and lng to ±180 (Mapbox world zoom can exceed those).
-    When the box crosses the antimeridian (minLng > maxLng after clamp),
-    splits into two boxes for Algolia insideBoundingBox.
-    400 only for non-numeric or malformed input.
+    Clamps lat to ±90. Wraps lng with ((x+180)%360)-180 (Mapbox may send
+    unwrapped longitudes past ±180). A raw span of maxLng-minLng >= 360 is
+    the whole world. After wrap, minLng > maxLng splits into two Algolia
+    insideBoundingBox boxes. 400 only for non-numeric or malformed input.
     """
     if raw is None or raw == "":
         return None
@@ -183,21 +191,25 @@ def parse_bbox(
         _field_error("bbox", "bbox values must be finite numbers", details)
         return None
     min_lng, min_lat, max_lng, max_lat = nums
-    min_lng = max(-180.0, min(180.0, min_lng))
-    max_lng = max(-180.0, min(180.0, max_lng))
     min_lat = max(-90.0, min(90.0, min_lat))
     max_lat = max(-90.0, min(90.0, max_lat))
     if min_lat >= max_lat:
         _field_error("bbox", "bbox minLat must be less than maxLat", details)
         return None
 
+    if max_lng - min_lng >= 360.0:
+        return [(-180.0, min_lat, 180.0, max_lat)]
+
+    min_lng = _wrap_lng(min_lng)
+    max_lng = _wrap_lng(max_lng)
+
     boxes: list[tuple[float, float, float, float]] = []
     if min_lng > max_lng:
-        # Antimeridian crossing: west piece then east piece.
         if min_lng < 180.0:
             boxes.append((min_lng, min_lat, 180.0, max_lat))
         if max_lng > -180.0:
             boxes.append((-180.0, min_lat, max_lng, max_lat))
+        boxes = [b for b in boxes if b[0] < b[2]]
         if not boxes:
             _field_error("bbox", "bbox is empty after normalizing", details)
             return None

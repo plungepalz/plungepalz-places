@@ -79,28 +79,45 @@ def test_search_400_bad_bbox(fake_algolia, monkeypatch):
         assert "bbox" in body["error"]["details"]
 
 
-def test_search_bbox_clamps_out_of_range(fake_algolia, monkeypatch):
+def test_search_bbox_wraps_unwrapped_lng_and_splits(fake_algolia, monkeypatch):
+    """170,-30,190,10 wraps 190 → -170 and splits across the antimeridian."""
     fake_algolia.search_result = {"hits": [], "nbHits": 0}
     mod = _mod(fake_algolia, monkeypatch)
-    resp = mod.handler(api_event(query={"bbox": "-200,40,-170,41"}), None)
-    assert resp["statusCode"] == 200
-    opts = fake_algolia.searches[0][1]
-    assert opts["insideBoundingBox"] == [[40.0, -180.0, 41.0, -170.0]]
-
-
-def test_search_bbox_antimeridian_split(fake_algolia, monkeypatch):
-    fake_algolia.search_result = {"hits": [], "nbHits": 0}
-    mod = _mod(fake_algolia, monkeypatch)
-    resp = mod.handler(api_event(query={"bbox": "170,-10,-170,10"}), None)
+    resp = mod.handler(api_event(query={"bbox": "170,-30,190,10"}), None)
     assert resp["statusCode"] == 200
     opts = fake_algolia.searches[0][1]
     assert opts["insideBoundingBox"] == [
-        [-10.0, 170.0, 10.0, 180.0],
-        [-10.0, -180.0, 10.0, -170.0],
+        [-30.0, 170.0, 10.0, 180.0],
+        [-30.0, -180.0, 10.0, -170.0],
     ]
 
 
-def test_search_bbox_whole_world(fake_algolia, monkeypatch):
+def test_search_bbox_wraps_west_past_180_and_splits(fake_algolia, monkeypatch):
+    """-200,10,-150,30 wraps -200 → 160, then 160 > -150 so it splits."""
+    fake_algolia.search_result = {"hits": [], "nbHits": 0}
+    mod = _mod(fake_algolia, monkeypatch)
+    resp = mod.handler(api_event(query={"bbox": "-200,10,-150,30"}), None)
+    assert resp["statusCode"] == 200
+    opts = fake_algolia.searches[0][1]
+    assert opts["insideBoundingBox"] == [
+        [10.0, 160.0, 30.0, 180.0],
+        [10.0, -180.0, 30.0, -150.0],
+    ]
+
+
+def test_search_bbox_prewrapped_antimeridian_split(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {"hits": [], "nbHits": 0}
+    mod = _mod(fake_algolia, monkeypatch)
+    resp = mod.handler(api_event(query={"bbox": "170,-30,-170,10"}), None)
+    assert resp["statusCode"] == 200
+    opts = fake_algolia.searches[0][1]
+    assert opts["insideBoundingBox"] == [
+        [-30.0, 170.0, 10.0, 180.0],
+        [-30.0, -180.0, 10.0, -170.0],
+    ]
+
+
+def test_search_bbox_span_at_least_360_is_whole_world(fake_algolia, monkeypatch):
     fake_algolia.search_result = {"hits": [], "nbHits": 0}
     mod = _mod(fake_algolia, monkeypatch)
     resp = mod.handler(api_event(query={"bbox": "-200,-100,200,100"}), None)
@@ -159,7 +176,11 @@ def test_search_limit_cap_500_ok(fake_algolia, monkeypatch):
     mod = _mod(fake_algolia, monkeypatch)
     resp = mod.handler(api_event(query={"limit": "500"}), None)
     assert resp["statusCode"] == 200
-    assert fake_algolia.searches[0][1]["hitsPerPage"] == 500
+    opts = fake_algolia.searches[0][1]
+    assert opts["offset"] == 0
+    assert opts["length"] == 500
+    assert "page" not in opts
+    assert "hitsPerPage" not in opts
 
 
 def test_search_bbox_wins_over_geo(fake_algolia, monkeypatch):
@@ -273,18 +294,38 @@ def test_search_never_requests_past_pagination_cap(fake_algolia, monkeypatch):
     body = parse_body(mod.handler(api_event(query={"limit": "100", "page": "10"}), None))
     assert body["has_more"] is False
     assert body["places"] == []
+    assert fake_algolia.searches == []
+
+
+def test_search_offset_length_near_cap_limit_300_page_3(fake_algolia, monkeypatch):
+    """limit=300&page=3 must request offset=900,length=100 (hits 900-999), not page=3."""
+    fake_algolia.search_result = {"hits": [_hit(place_id="near-cap")], "nbHits": 2500}
+    mod = _mod(fake_algolia, monkeypatch)
+    body = parse_body(mod.handler(api_event(query={"limit": "300", "page": "3"}), None))
+    assert body["has_more"] is False
     opts = fake_algolia.searches[0][1]
-    assert opts["page"] * opts["hitsPerPage"] < 1000
-    assert opts["page"] * opts["hitsPerPage"] + opts["hitsPerPage"] <= 1000
+    assert opts["offset"] == 900
+    assert opts["length"] == 100
+    assert "page" not in opts
+    assert "hitsPerPage" not in opts
 
 
-def test_search_clamps_hits_per_page_to_remaining_cap(fake_algolia, monkeypatch):
+def test_search_offset_past_cap_is_empty_no_request(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {"hits": [_hit()], "nbHits": 2500}
+    mod = _mod(fake_algolia, monkeypatch)
+    body = parse_body(mod.handler(api_event(query={"limit": "300", "page": "4"}), None))
+    assert body["places"] == []
+    assert body["has_more"] is False
+    assert fake_algolia.searches == []
+
+
+def test_search_clamps_length_to_remaining_cap(fake_algolia, monkeypatch):
     fake_algolia.search_result = {"hits": [_hit()], "nbHits": 2500}
     mod = _mod(fake_algolia, monkeypatch)
     mod.handler(api_event(query={"limit": "150", "page": "6"}), None)
     opts = fake_algolia.searches[0][1]
-    assert opts["page"] == 6
-    assert opts["hitsPerPage"] == 100  # 900 + 100 = 1000, not 1050
+    assert opts["offset"] == 900
+    assert opts["length"] == 100  # 900 + 100 = 1000, not 1050
 
 
 def test_search_activity_and_place_type_filters(fake_algolia, monkeypatch):
