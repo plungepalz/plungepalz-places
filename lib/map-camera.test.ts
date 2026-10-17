@@ -14,6 +14,7 @@ import {
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
+  hideListForWorldwidePreset,
   isUserMapMove,
   layoutInsets,
   lngScreenCopies,
@@ -201,11 +202,38 @@ test('1440x900 keeps the comfortable lng -20 framing and fits the world in the g
   assertPlacesInGap(1440, 900);
 });
 
-test('Worldwide framing at 768 with a collapsed list uses the full width', () => {
+test('Worldwide framing at 768 with a collapsed list fits the whole world', () => {
   const framing = worldwideFraming(768, 900, { left: 0, right: 0 });
   assert.equal(framing.panelRight, 0);
   assert.equal(framing.rightPadding, 0);
   assert.equal(framing.gap, 768);
+  assert.equal(framing.overflow, false);
+  assert.equal(framing.lng, WORLDWIDE_COMFORT_LNG);
+  assert.equal(framing.lat, 20);
+  assert.ok(framing.zoom < mapboxHeightMinZoom(900));
+  assert.ok(framing.worldPx <= framing.gap + 1);
+  assertPlacesInGap(768, 900, { left: 0, right: 0 });
+});
+
+test('hideListForWorldwidePreset is only narrow Worldwide while still on the chip', () => {
+  assert.equal(hideListForWorldwidePreset(768, true, false), true);
+  assert.equal(hideListForWorldwidePreset(768, true, true), false);
+  assert.equal(hideListForWorldwidePreset(1280, true, false), false);
+  assert.equal(hideListForWorldwidePreset(1440, true, false), false);
+  assert.equal(hideListForWorldwidePreset(768, false, false), false);
+});
+
+test('flyPadding with forced collapse at 768 Worldwide uses the full width', () => {
+  const padding = flyPadding(false, true, { width: 768, height: 900 }, true);
+  assert.equal(padding.left, 0);
+  assert.equal(padding.right, 0);
+});
+
+test('768 with the list still uses the height-min floor (collapse is what lowers zoom)', () => {
+  const withList = worldwideFraming(768, 900);
+  assert.equal(withList.panelRight, LIST_PANEL_RIGHT);
+  assert.ok(Math.abs(withList.zoom - mapboxHeightMinZoom(900)) < 1e-9);
+  assert.equal(withList.overflow, true);
 });
 
 test('Worldwide framing subtracts drawer right padding from the visible gap', () => {

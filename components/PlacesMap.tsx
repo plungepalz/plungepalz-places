@@ -45,6 +45,8 @@ interface PlacesMapProps {
   /** Pixels from the top so the pin-drop hint sits below the filter chrome. */
   hintTop?: number;
   mapboxToken?: string;
+  /** Collapse list occupancy (drawer collision or Worldwide at 768). */
+  collapseList?: boolean;
 }
 
 function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
@@ -203,6 +205,7 @@ export default function PlacesMap({
   onUserCameraMove,
   hintTop = 96,
   mapboxToken,
+  collapseList = false,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -383,10 +386,13 @@ export default function PlacesMap({
     const currentZoom = map.getZoom();
     const container = map.getContainer();
     const size = { width: container.clientWidth, height: container.clientHeight };
-    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size);
+    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size, collapseList);
     let zoom = resolveFlyZoom(currentZoom, flyRequest);
     let longitude = flyRequest.longitude;
     let latitude = flyRequest.latitude;
+    if (!flyRequest.exactZoom) {
+      onUserCameraMove?.();
+    }
     if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
       const framing = worldwideFraming(size.width, size.height, {
         left: padding.left,
@@ -432,7 +438,7 @@ export default function PlacesMap({
     );
     flyEndHandlerRef.current = onFlyEnd;
     onFlyComplete();
-  }, [flyRequest, onFlyComplete, panelOpen]);
+  }, [collapseList, flyRequest, onFlyComplete, onUserCameraMove, panelOpen]);
 
   const zoomBy = (delta: number) => {
     const map = mapRef.current?.getMap();
@@ -585,7 +591,7 @@ export default function PlacesMap({
     <div
       data-pin-hint
       className="pointer-events-none absolute z-20 -translate-x-1/2 rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white shadow-lg"
-      style={{ left: pinHintCenterX(canvasSize.width, panelOpen), top: hintTop }}
+      style={{ left: pinHintCenterX(canvasSize.width, panelOpen, collapseList), top: hintTop }}
     >
       Click the map to drop a pin
     </div>
@@ -630,6 +636,7 @@ export default function PlacesMap({
       <MapGL
         ref={mapRef}
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
+        minZoom={0}
         projection="mercator"
         mapStyle="mapbox://styles/mapbox/light-v11"
         mapboxAccessToken={accessToken}

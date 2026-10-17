@@ -8,9 +8,17 @@ import PlaceDetailsPanel from '@/components/PlaceDetailsPanel';
 import PlacesList from '@/components/PlacesList';
 import { client, isMockMode } from '@/lib/client';
 import { isPlacesApiError } from '@/lib/errors';
-import { listLocationName, locationChipLabel } from '@/lib/list-location-name';
+import {
+  createListHeadingMachine,
+  headingZoomForSearch,
+  listHeadingText,
+  mapBoundsKey,
+  settleListHeadingRequest,
+  startListHeadingRequest,
+  type ListHeadingSnapshot,
+} from '@/lib/list-heading-state';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
-import { shouldCollapseList } from '@/lib/map-camera';
+import { hideListForWorldwidePreset, shouldCollapseList } from '@/lib/map-camera';
 import { mergeLocalPlaces } from '@/lib/merge-local-places';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
@@ -57,13 +65,25 @@ export default function HomePage() {
   const [leftPreset, setLeftPreset] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(1280);
   const mapBoundsRef = useRef<MapBounds | null>(null);
-  const requestIdRef = useRef(0);
+  const lastPresetBoundsKeyRef = useRef('');
+  const headingMachineRef = useRef(createListHeadingMachine());
+  const searchContextRef = useRef({
+    hasMap: false,
+    location: DEFAULT_LOCATION,
+    leftPreset: false,
+    mapZoom: null as number | null,
+  });
+  const [heading, setHeading] = useState<ListHeadingSnapshot | null>(null);
   const filterSlotRef = useRef<HTMLDivElement>(null);
   const [chromeTop, setChromeTop] = useState(96);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
+
+  useEffect(() => {
+    searchContextRef.current = { hasMap, location, leftPreset, mapZoom };
+  }, [hasMap, location, leftPreset, mapZoom]);
 
   const localFilters = useMemo(
     () => ({
@@ -104,20 +124,45 @@ export default function HomePage() {
 
   const performSearch = useCallback(
     async (pageNum: number, append: boolean, bounds: MapBounds | null) => {
-      const requestId = ++requestIdRef.current;
+      const started = startListHeadingRequest(headingMachineRef.current);
+      headingMachineRef.current = started;
+      const requestId = started.requestId;
+      const context = {
+        hasMap: searchContextRef.current.hasMap,
+        location: searchContextRef.current.location,
+        leftPreset: searchContextRef.current.leftPreset,
+        zoom: headingZoomForSearch(
+          searchContextRef.current.leftPreset,
+          searchContextRef.current.mapZoom,
+          searchContextRef.current.location
+        ),
+      };
       setIsLoading(true);
       try {
         const response = await client.search(buildParams(pageNum, bounds));
-        if (requestId !== requestIdRef.current) return;
+        const settled = settleListHeadingRequest(
+          headingMachineRef.current,
+          requestId,
+          {
+            shown: response.places.length,
+            total: response.total,
+            hasMore: response.has_more,
+            places: response.places,
+          },
+          context
+        );
+        headingMachineRef.current = settled;
+        if (settled.pending) return;
         const returnedIds = new Set(response.places.map((place) => place.place_id));
         setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
         setServerPlaces((prev) => (append ? [...prev, ...response.places] : response.places));
         setTotal(response.total);
         setPage(response.page);
         setHasMore(response.has_more);
+        setHeading(settled.heading);
         setError(null);
       } catch (err) {
-        if (requestId !== requestIdRef.current) return;
+        if (requestId !== headingMachineRef.current.requestId) return;
         setError(isPlacesApiError(err) ? err.message : 'Search failed');
         if (!append) {
           setServerPlaces([]);
@@ -125,7 +170,7 @@ export default function HomePage() {
           setHasMore(false);
         }
       } finally {
-        if (requestId === requestIdRef.current) setIsLoading(false);
+        if (requestId === headingMachineRef.current.requestId) setIsLoading(false);
       }
     },
     [buildParams]
@@ -138,11 +183,20 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
+    if (!leftPreset) {
+      lastPresetBoundsKeyRef.current = mapBoundsKey(mapBounds);
+      const handle = window.setTimeout(() => {
+        performSearch(0, false, null);
+      }, 200);
+      return () => window.clearTimeout(handle);
+    }
+    const key = mapBoundsKey(mapBounds);
+    if (!key || key === lastPresetBoundsKeyRef.current) return;
     const handle = window.setTimeout(() => {
       performSearch(0, false, mapBounds);
-    }, mapBounds ? 450 : 200);
+    }, 450);
     return () => window.clearTimeout(handle);
-  }, [performSearch, mapBounds]);
+  }, [performSearch, leftPreset, mapBounds]);
 
   useEffect(() => {
     if (!successMessage) return;
@@ -176,6 +230,7 @@ export default function HomePage() {
     setDetailsPlaceId(placeId);
     setAddPlaceOpen(false);
     if (place) {
+      setLeftPreset(true);
       setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
     }
   };
@@ -228,6 +283,7 @@ export default function HomePage() {
     setDraftLocation(null);
     setSelectedPlaceId(place.place_id);
     setDetailsPlaceId(place.place_id);
+    setLeftPreset(true);
     setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
     setSuccessMessage('Place submitted. It is pending review and is not approved yet.');
   };
@@ -241,14 +297,18 @@ export default function HomePage() {
     });
   };
 
-  const locationName = useMemo(
-    () => listLocationName({ hasMap, zoom: mapZoom, places, location, leftPreset }),
-    [hasMap, mapZoom, places, location, leftPreset]
-  );
-  const chipLabel = locationChipLabel(location, leftPreset);
+  const headingText = listHeadingText(heading, extraCount);
+  const chipLabel = heading?.chipLabel ?? location.label;
+  const locationName = heading?.locationName ?? (location.id === 'worldwide' ? 'the world' : location.label);
 
   const panelOpen = Boolean(detailsPlaceId) || addPlaceOpen;
-  const collapseList = shouldCollapseList(viewportWidth, panelOpen);
+  const hideWorldwideList = hideListForWorldwidePreset(
+    viewportWidth,
+    location.id === 'worldwide',
+    leftPreset
+  );
+  const hideListForDrawer = shouldCollapseList(viewportWidth, panelOpen);
+  const collapseList = hideListForDrawer || hideWorldwideList;
 
   useLayoutEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -296,17 +356,18 @@ export default function HomePage() {
           onUserCameraMove={handleUserCameraMove}
           hintTop={chromeTop}
           mapboxToken={mapboxToken}
+          collapseList={collapseList}
         />
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-20">
         <div
           data-places-list-slot
-          className={`absolute bottom-4 left-4 w-[min(100%-2rem,380px)] ${
-            collapseList ? 'hidden' : 'pointer-events-auto'
-          }`}
+          className={`absolute left-4 w-[min(100%-2rem,380px)] ${
+            hideListForDrawer ? 'hidden' : 'pointer-events-auto'
+          } ${hideWorldwideList ? '' : 'bottom-4'}`}
           style={{ top: chromeTop, transition: 'top 200ms ease' }}
-          aria-hidden={collapseList}
+          aria-hidden={hideListForDrawer}
         >
           <PlacesList
             places={places}
@@ -317,10 +378,14 @@ export default function HomePage() {
             onSelectPlace={handleSelectFromList}
             onHoverPlace={setHoveredPlaceId}
             onToggleFavorite={handleToggleFavorite}
-            onLoadMore={() => performSearch(page + 1, true, mapBoundsRef.current)}
+            onLoadMore={() =>
+              performSearch(page + 1, true, leftPreset ? mapBoundsRef.current : null)
+            }
             hasMore={hasMore}
             isLoading={isLoading}
             locationName={locationName}
+            heading={headingText}
+            compact={hideWorldwideList}
             error={error}
             filterHeaderInset={filtersOpen}
           />

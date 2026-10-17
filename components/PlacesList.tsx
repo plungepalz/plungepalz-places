@@ -21,6 +21,10 @@ interface PlacesListProps {
   locationName: string;
   error: string | null;
   filterHeaderInset?: boolean;
+  /** Settled header text; when null, keep-previous or show a loading title. */
+  heading?: string | null;
+  /** Header-only panel so Worldwide can frame the full world at 768. */
+  compact?: boolean;
 }
 
 export default function PlacesList({
@@ -38,6 +42,8 @@ export default function PlacesList({
   locationName,
   error,
   filterHeaderInset = false,
+  heading = null,
+  compact = false,
 }: PlacesListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -57,17 +63,23 @@ export default function PlacesList({
   return (
     <div
       data-places-list
-      className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5"
+      className={`flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5 ${
+        compact ? 'h-auto' : 'h-full'
+      }`}
     >
       <div
         className="border-b border-gray-100 px-4 py-3"
         style={filterHeaderInset ? { paddingTop: FILTER_OVERLAY_HEADER_INSET } : undefined}
       >
         <h2 className="text-base font-semibold text-gray-900">
-          {placesListHeading(places.length, total, locationName, { hasMore })}
+          {heading ??
+            (isLoading && places.length === 0
+              ? 'Loading places…'
+              : placesListHeading(places.length, total, locationName, { hasMore }))}
         </h2>
       </div>
 
+      {compact ? null : (
       <div ref={scrollRef} className="flex-1 space-y-1 overflow-y-auto px-2 py-2">
         {error && (
           <div className="m-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
@@ -114,6 +126,7 @@ export default function PlacesList({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

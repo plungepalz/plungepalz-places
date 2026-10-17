@@ -21,6 +21,8 @@ export const PACIFIC_SEAM_LNG = -170;
 /** Comfortable Worldwide center when one world fits in the visible gap. */
 export const WORLDWIDE_COMFORT_LNG = -20;
 export const WORLDWIDE_LAT = 20;
+/** Hide/collapse the list while framing Worldwide so the whole world can fit. */
+export const NARROW_VIEWPORT = 768;
 
 export function wrapLng(lng: number): number {
   return ((((lng + 180) % 360) + 360) % 360) - 180;
@@ -43,11 +45,26 @@ export function drawerOccupiedWidth(canvasWidth: number): number {
 /**
  * At 768px the 380px list and 28rem drawer cannot sit side by side.
  * Collapse the list while a panel is open so the map keeps a usable strip.
+ * `forceCollapse` also hides the list (Worldwide on a narrow viewport).
  */
-export function shouldCollapseList(canvasWidth: number, panelOpen: boolean): boolean {
+export function shouldCollapseList(
+  canvasWidth: number,
+  panelOpen: boolean,
+  forceCollapse = false
+): boolean {
+  if (forceCollapse) return true;
   if (!panelOpen) return false;
   const listRight = listPanelRightEdge(canvasWidth);
   return canvasWidth - listRight - drawerOccupiedWidth(canvasWidth) < MIN_MAP_STRIP;
+}
+
+/** Collapse the list while the Worldwide preset is active on a narrow canvas. */
+export function hideListForWorldwidePreset(
+  canvasWidth: number,
+  isWorldwide: boolean,
+  leftPreset: boolean
+): boolean {
+  return isWorldwide && !leftPreset && canvasWidth <= NARROW_VIEWPORT;
 }
 
 export interface LayoutInsets {
@@ -59,8 +76,12 @@ export interface LayoutInsets {
 }
 
 /** List / drawer occupancy used by flyTo padding, Worldwide framing, and chrome. */
-export function layoutInsets(canvasWidth: number, panelOpen: boolean): LayoutInsets {
-  const collapseList = shouldCollapseList(canvasWidth, panelOpen);
+export function layoutInsets(
+  canvasWidth: number,
+  panelOpen: boolean,
+  forceCollapse = false
+): LayoutInsets {
+  const collapseList = shouldCollapseList(canvasWidth, panelOpen, forceCollapse);
   const listRight = collapseList ? 0 : listPanelRightEdge(canvasWidth);
   const drawerOccupied = panelOpen ? drawerOccupiedWidth(canvasWidth) : 0;
   const maxHorizontal = Math.max(0, canvasWidth - 80);
@@ -80,9 +101,10 @@ export function layoutInsets(canvasWidth: number, panelOpen: boolean): LayoutIns
 export function flyPadding(
   panelOpen: boolean,
   exactZoom: boolean | undefined,
-  size: { width: number; height: number }
+  size: { width: number; height: number },
+  forceCollapse = false
 ) {
-  const insets = layoutInsets(size.width, panelOpen);
+  const insets = layoutInsets(size.width, panelOpen, forceCollapse);
   const maxVertical = Math.max(0, size.height - 80);
   let left = insets.left;
   let right = panelOpen
@@ -111,8 +133,8 @@ export function mapControlsRightPx(canvasWidth: number, panelOpen: boolean): num
 }
 
 /** Horizontal center of the visible map strip (pin-drop hint). */
-export function pinHintCenterX(canvasWidth: number, panelOpen: boolean): number {
-  const collapseList = shouldCollapseList(canvasWidth, panelOpen);
+export function pinHintCenterX(canvasWidth: number, panelOpen: boolean, forceCollapse = false): number {
+  const collapseList = shouldCollapseList(canvasWidth, panelOpen, forceCollapse);
   const left = collapseList ? 0 : listPanelRightEdge(canvasWidth);
   const right = panelOpen ? canvasWidth - drawerOccupiedWidth(canvasWidth) : canvasWidth;
   return (left + right) / 2;
@@ -173,6 +195,10 @@ export function easeOutCubic(t: number): number {
  * When the allowed world is wider than the visible gap (list on the left, and
  * optionally the details drawer on the right), put the world edge at lng -170
  * on the gap’s left edge. When the world fits, keep lng -20.
+ *
+ * On a narrow full-width canvas (list collapsed at 768), allow zoom below the
+ * Mapbox height floor so one world still fits in the gap. 1280/1440 keep the
+ * height-min / comfort framing and antimeridian seam.
  */
 export function worldwideFraming(
   canvasWidth: number,
@@ -184,7 +210,11 @@ export function worldwideFraming(
   const gap = Math.max(canvasWidth - panelRight - rightPadding, 1);
   const heightMinZoom = mapboxHeightMinZoom(canvasHeight);
   const widthFitZoom = Math.log2(gap / MERCATOR_TILE_SIZE);
-  const zoom = Math.max(heightMinZoom, Math.min(WORLD_FIT_ZOOM_MAX, widthFitZoom));
+  const narrowFullWidth = panelRight <= 0 && canvasWidth <= NARROW_VIEWPORT;
+  const minZoomFloor = narrowFullWidth
+    ? Math.min(heightMinZoom, Math.max(widthFitZoom, 0))
+    : heightMinZoom;
+  const zoom = Math.max(minZoomFloor, Math.min(WORLD_FIT_ZOOM_MAX, widthFitZoom));
   const worldPx = mercatorWorldPx(zoom);
   const overflow = worldPx > gap + 1;
   const lng = overflow
