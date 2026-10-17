@@ -48,17 +48,23 @@ function flyPadding(
   exactZoom: boolean | undefined,
   size: { width: number; height: number }
 ) {
-  if (exactZoom) {
-    return { top: 0, bottom: 0, left: 0, right: 0 };
-  }
   const maxHorizontal = Math.max(0, size.width - 80);
   const maxVertical = Math.max(0, size.height - 80);
+  // Preset flights (Worldwide, city chips) still offset by the list so the
+  // visible map — not the full canvas under the panel — is centered.
   let left = Math.min(LIST_PADDING_LEFT, Math.floor(maxHorizontal * 0.45));
-  let right = Math.min(panelOpen ? PANEL_PADDING_RIGHT : 56, Math.floor(maxHorizontal * 0.45));
+  let right = panelOpen
+    ? Math.min(PANEL_PADDING_RIGHT, Math.floor(maxHorizontal * 0.45))
+    : exactZoom
+      ? 0
+      : Math.min(56, Math.floor(maxHorizontal * 0.45));
   if (left + right > maxHorizontal && left + right > 0) {
     const scale = maxHorizontal / (left + right);
     left = Math.floor(left * scale);
     right = Math.floor(right * scale);
+  }
+  if (exactZoom) {
+    return { top: 0, bottom: 0, left, right };
   }
   return {
     top: Math.min(96, Math.floor(maxVertical * 0.25)),
@@ -66,6 +72,27 @@ function flyPadding(
     left,
     right,
   };
+}
+
+function paddingIsZero(map: MapboxMap): boolean {
+  const padding = map.getPadding();
+  return (
+    (padding.top ?? 0) === 0 &&
+    (padding.right ?? 0) === 0 &&
+    (padding.bottom ?? 0) === 0 &&
+    (padding.left ?? 0) === 0
+  );
+}
+
+/** Drop leftover flyTo padding without shifting what is on screen. */
+function clearPaddingKeepView(map: MapboxMap): void {
+  if (paddingIsZero(map)) return;
+  const canvas = map.getCanvas();
+  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+  map.jumpTo({
+    center: [visual.lng, visual.lat],
+    padding: ZERO_PADDING,
+  });
 }
 
 const PIN_PATH =
@@ -143,6 +170,7 @@ export default function PlacesMap({
   mapboxToken,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
+  const flyEndHandlerRef = useRef<(() => void) | null>(null);
   const [imagesReady, setImagesReady] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
@@ -192,6 +220,11 @@ export default function PlacesMap({
   }, [reportViewport]);
 
   const detailsOpen = panelOpen && !locationPickMode;
+  const detailsOpenRef = useRef(detailsOpen);
+
+  useEffect(() => {
+    detailsOpenRef.current = detailsOpen;
+  }, [detailsOpen]);
 
   useEffect(() => {
     if (detailsOpen) return;
@@ -203,7 +236,7 @@ export default function PlacesMap({
   useEffect(() => {
     if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;
     const map = mapRef.current.getMap();
-    map.setPadding(ZERO_PADDING);
+    clearPaddingKeepView(map);
     // Visual canvas center, not Mapbox's padded getCenter() leftover from flyTo.
     const canvas = map.getCanvas();
     const point = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
@@ -216,6 +249,10 @@ export default function PlacesMap({
     const currentZoom = mapRef.current.getZoom();
     const zoom = resolveFlyZoom(currentZoom, flyRequest);
     const container = map.getContainer();
+    if (flyEndHandlerRef.current) {
+      map.off('moveend', flyEndHandlerRef.current);
+      flyEndHandlerRef.current = null;
+    }
     mapRef.current.flyTo({
       center: [flyRequest.longitude, flyRequest.latitude],
       zoom,
@@ -225,6 +262,16 @@ export default function PlacesMap({
         height: container.clientHeight,
       }),
     });
+    const onFlyEnd = () => {
+      flyEndHandlerRef.current = null;
+      if (detailsOpenRef.current) return;
+      const live = mapRef.current?.getMap();
+      if (live) clearPaddingKeepView(live);
+    };
+    // onFlyComplete nulls flyRequest and would rerun this effect; do not
+    // unregister here or leftover padding would never clear after presets.
+    flyEndHandlerRef.current = onFlyEnd;
+    map.once('moveend', onFlyEnd);
     onFlyComplete();
   }, [flyRequest, onFlyComplete, panelOpen]);
 
@@ -232,7 +279,7 @@ export default function PlacesMap({
     const map = mapRef.current?.getMap();
     if (!map) return;
     if (!detailsOpen) {
-      map.setPadding(ZERO_PADDING);
+      clearPaddingKeepView(map);
     }
     map.zoomTo(map.getZoom() + delta, { duration: 200 });
   };
@@ -277,7 +324,7 @@ export default function PlacesMap({
         if (error || zoom == null) return;
         const map = mapRef.current?.getMap();
         if (map && !detailsOpen) {
-          map.setPadding(ZERO_PADDING);
+          clearPaddingKeepView(map);
         }
         mapRef.current?.easeTo({ center: clusterCenter, zoom, duration: 500 });
       });
@@ -333,6 +380,7 @@ export default function PlacesMap({
         ref={mapRef}
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
         projection="mercator"
+        renderWorldCopies={false}
         mapStyle="mapbox://styles/mapbox/light-v11"
         mapboxAccessToken={accessToken}
         attributionControl

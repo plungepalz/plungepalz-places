@@ -133,7 +133,7 @@ The top bar **Add a place** button opens a **non-modal** dialog (`role="dialog"`
 Sweatpals-style map-first view:
 
 - Top bar: location chip, filter icon, Sauna / Cold plunge chips, place-type filters, search, **Add a place**
-- Left: white rounded list floating over the map (`N places in {area}`), cards with thumbnail, Approved tag, title, place type, city (omitted when null), favorite star
+- Left: white rounded list floating over the map (`N places in {area}`, or `Showing X of Y` when `/search` `has_more` is true or the page is capped), cards with thumbnail, Approved tag, title, place type, city (omitted when null), favorite star
 - Right / background: full-screen Mapbox map. Clusters and pins are a GeoJSON source with symbol layers (black teardrop + count; orange pin). Zoom +/− and locate-me stay reachable when the details drawer or add-place form is open.
 - Map move (debounced) re-queries `/search` with `bbox`; list shows what’s in view
 - Hover/select syncs card ↔ pin; click opens a details drawer via `GET /place/{place_id}`
