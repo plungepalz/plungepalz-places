@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MapGL, { Layer, Marker, Source } from 'react-map-gl/mapbox';
 import type { MapMouseEvent, MapRef } from 'react-map-gl/mapbox';
 import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
+import { listPanelRightEdge, worldFitZoom } from '@/lib/map-camera';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -33,8 +34,6 @@ interface PlacesMapProps {
 
 /** Right-side details / add-place drawer: 28rem + right-4 + gap. */
 const PANEL_PADDING_RIGHT = 496;
-/** Left list panel: ~380px + left-4. */
-const LIST_PADDING_LEFT = 400;
 const ZERO_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
 
 function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
@@ -50,9 +49,8 @@ function flyPadding(
 ) {
   const maxHorizontal = Math.max(0, size.width - 80);
   const maxVertical = Math.max(0, size.height - 80);
-  // Preset flights (Worldwide, city chips) still offset by the list so the
-  // visible map — not the full canvas under the panel — is centered.
-  let left = Math.min(LIST_PADDING_LEFT, Math.floor(maxHorizontal * 0.45));
+  // Line the padded viewport up with the list’s right edge (x≈396).
+  let left = listPanelRightEdge(size.width);
   let right = panelOpen
     ? Math.min(PANEL_PADDING_RIGHT, Math.floor(maxHorizontal * 0.45))
     : exactZoom
@@ -246,32 +244,40 @@ export default function PlacesMap({
   useEffect(() => {
     if (!flyRequest || !mapRef.current) return;
     const map = mapRef.current.getMap();
-    const currentZoom = mapRef.current.getZoom();
-    const zoom = resolveFlyZoom(currentZoom, flyRequest);
+    const currentZoom = map.getZoom();
     const container = map.getContainer();
+    const size = { width: container.clientWidth, height: container.clientHeight };
+    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size);
+    let zoom = resolveFlyZoom(currentZoom, flyRequest);
+    if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
+      zoom = worldFitZoom(size.width, padding.left);
+    }
     if (flyEndHandlerRef.current) {
       map.off('moveend', flyEndHandlerRef.current);
       flyEndHandlerRef.current = null;
     }
-    mapRef.current.flyTo({
-      center: [flyRequest.longitude, flyRequest.latitude],
-      zoom,
-      duration: 800,
-      padding: flyPadding(panelOpen, flyRequest.exactZoom, {
-        width: container.clientWidth,
-        height: container.clientHeight,
-      }),
-    });
     const onFlyEnd = () => {
       flyEndHandlerRef.current = null;
       if (detailsOpenRef.current) return;
       const live = mapRef.current?.getMap();
-      if (live) clearPaddingKeepView(live);
+      if (!live) return;
+      const canvas = live.getCanvas();
+      const visual = live.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+      live.jumpTo({
+        center: [visual.lng, visual.lat],
+        padding: ZERO_PADDING,
+      });
     };
     // onFlyComplete nulls flyRequest and would rerun this effect; do not
     // unregister here or leftover padding would never clear after presets.
     flyEndHandlerRef.current = onFlyEnd;
     map.once('moveend', onFlyEnd);
+    map.flyTo({
+      center: [flyRequest.longitude, flyRequest.latitude],
+      zoom,
+      duration: 800,
+      padding,
+    });
     onFlyComplete();
   }, [flyRequest, onFlyComplete, panelOpen]);
 
@@ -380,7 +386,6 @@ export default function PlacesMap({
         ref={mapRef}
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
         projection="mercator"
-        renderWorldCopies={false}
         mapStyle="mapbox://styles/mapbox/light-v11"
         mapboxAccessToken={accessToken}
         attributionControl
