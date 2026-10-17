@@ -23,7 +23,8 @@
 | address | String | Full street address |
 | city | String | City name |
 | state_province | String | State or province |
-| country | String | Country code or name |
+| postal_code | String | Optional postal / ZIP code. Omitted when unknown. |
+| country | String | Country code or name. US records are stored as `USA` (not ISO `US`). |
 | activity_types | List[String] | ["cold_plunge"] or ["sauna"] or both |
 | description | String | AI-generated or manual description |
 | place_type_metadata | Map | See sub-schemas below |
@@ -173,6 +174,7 @@
   "address": "457 E 300 S, Salt Lake City, UT 84111",
   "city": "Salt Lake City",
   "state_province": "UT",
+  "postal_code": "84111",
   "country": "USA",
   "activity_types": ["cold_plunge", "sauna"],
   "description": "A dedicated cold plunge and sauna studio in downtown SLC.",
@@ -261,7 +263,7 @@
 
 ### original_submission_record_json
 
-Contains: `place_name`, `place_type`, `activity_types`, `address`, `lat`, `lng`, `country`, `state_province`, `city`, `description`, `place_website_url`, `place_type_metadata`. For nature places, `address` may be null when `lat`/`lng` are provided.
+Contains: `place_name`, `place_type`, `activity_types`, `address`, `lat`, `lng`, `country`, `state_province`, `city`, `postal_code`, `description`, `place_website_url`, `place_type_metadata`. `postal_code` is optional and omitted when unknown. For nature places, `address` may be null when `lat`/`lng` are provided.
 
 ### ai_autofill_result
 
@@ -290,9 +292,10 @@ Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`,
     "place_type": "business",
     "lat": 40.7607,
     "lng": -111.8743,
-    "country": "US",
+    "country": "USA",
     "state_province": "UT",
     "city": "Salt Lake City",
+    "postal_code": "84111",
     "address": "457 E 300 S, Suite D, Salt Lake City, UT 84111",
     "description": "The world's first triple contrast café combining commercial-grade Blue Cube cold plunges (38–56°F), a traditional cedar Finnish sauna with aromatherapy, and specialty espresso from Seattle-based Hyacinth Coffee. No time limits on your stay.",
     "activity_types": ["cold_plunge", "sauna"],
@@ -337,7 +340,7 @@ Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`,
     "place_type": "nature",
     "lat": 40.5974,
     "lng": -111.5853,
-    "country": "US",
+    "country": "USA",
     "state_province": "UT",
     "city": "Brighton",
     "address": null,

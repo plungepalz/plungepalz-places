@@ -184,6 +184,9 @@ MVP: **no verification codes** and **no AI autofill** on this path. Creates an `
 | activity_types | yes | non-empty subset of `cold_plunge`, `sauna` |
 | lat, lng | yes | numbers in range |
 | address | yes unless `place_type` is `nature` | string, max 500 characters |
+| city | no | optional; when present, wins over the value parsed from `address` |
+| state_province | no | optional; when present, wins over the value parsed from `address` |
+| postal_code | no | optional; when present, wins over the value parsed from `address` |
 | description | no | string, max 2000 characters |
 | email | no | basic format check if present |
 
@@ -573,6 +576,7 @@ Storage (DynamoDB) keeps DATA_SCHEMAS.md names. The response layer maps:
 | `ai_autofill_ts` | `ai_autofill_ts` | Set when autofill completes. Omitted until then. |
 | `ai_autofill_status` | `ai_autofill_status` | `pending` \| `complete` \| `failed`. Claim guard before any paid outbound call. |
 | `ai_autofill_claimed_ts` | `ai_autofill_claimed_ts` | Set when a claim is taken. A `pending` claim older than 5 minutes may be reclaimed. |
+| `postal_code` | `postal_code` | Optional. Stored on Places_Places and copied onto the Algolia object when present. Omitted when missing. Not a PlaceSummary or GetByID field. |
 
 Conflicts flagged, not silently renamed:
 

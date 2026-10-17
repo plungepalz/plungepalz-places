@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from places_common.records import parse_address_parts
 from places_common.validate import validate_submit_body
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -71,16 +72,19 @@ def test_seed_file_has_required_coverage_and_valid_payloads():
     for entry in entries:
         assert entry.get("source_url")
         payload = seed.submit_payload(entry)
-        expected = validate_submit_body(
-            {
-                "place_name": entry["name"],
-                "place_type": entry["place_type"],
-                "activity_types": entry["activity_types"],
-                "lat": entry["lat"],
-                "lng": entry["lng"],
-                **({"address": entry["address"]} if entry.get("address") else {}),
-            }
-        )
+        body = {
+            "place_name": entry["name"],
+            "place_type": entry["place_type"],
+            "activity_types": entry["activity_types"],
+            "lat": entry["lat"],
+            "lng": entry["lng"],
+        }
+        if entry.get("address"):
+            body["address"] = entry["address"]
+        for field in ("city", "state_province", "postal_code"):
+            if entry.get(field):
+                body[field] = entry[field]
+        expected = validate_submit_body(body)
         assert payload == expected
         assert "website" not in payload
         assert "source_url" not in payload
@@ -89,6 +93,56 @@ def test_seed_file_has_required_coverage_and_valid_payloads():
         assert len(payload["place_name"]) <= 200
         if payload.get("address"):
             assert len(payload["address"]) <= 500
+
+
+def test_seed_cities_have_no_digits_or_bare_region_codes():
+    seed = _load_seed_mod()
+    entries = seed.load_seed_entries(SEED_FILE)
+    checked = 0
+    for entry in entries:
+        address = entry.get("address")
+        if not isinstance(address, str) or not address.strip():
+            continue
+        parsed = parse_address_parts(address)
+        city = entry.get("city") or parsed.get("city")
+        assert city, entry.get("name")
+        assert city.strip()
+        assert not any(ch.isdigit() for ch in city), (entry.get("name"), city)
+        assert not (
+            len(city) in (2, 3) and city.isalpha() and city.isupper()
+        ), (entry.get("name"), city)
+        checked += 1
+    assert checked >= 30
+
+
+def test_us_seed_entries_keep_country_usa():
+    seed = _load_seed_mod()
+    entries = seed.load_seed_entries(SEED_FILE)
+    us_entries = [
+        entry
+        for entry in entries
+        if isinstance(entry.get("address"), str) and entry["address"].rstrip().endswith("USA")
+    ]
+    assert len(us_entries) >= 8
+    for entry in us_entries:
+        parsed = parse_address_parts(entry["address"])
+        assert parsed.get("country") == "USA", entry["name"]
+        assert parsed.get("city")
+        assert parsed.get("state_province")
+
+
+def test_submit_payload_explicit_location_fields_pass_through():
+    seed = _load_seed_mod()
+    entry = _sample_entry(
+        city="Explicit City",
+        state_province="EX",
+        postal_code="99999",
+    )
+    payload = seed.submit_payload(entry)
+    assert payload["city"] == "Explicit City"
+    assert payload["state_province"] == "EX"
+    assert payload["postal_code"] == "99999"
+    assert payload["address"] == entry["address"]
 
 
 def test_dry_run_makes_no_requests(tmp_path, capsys, monkeypatch):

@@ -416,10 +416,33 @@ def validate_submit_body(body: dict) -> dict[str, Any]:
     else:
         email = None
 
+    def _optional_location_field(field: str) -> str | None:
+        value = body.get(field)
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            _field_error(field, f"{field} must be a string", details)
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) > MAX_PLACE_NAME_LEN:
+            _field_error(
+                field,
+                f"{field} must be <= {MAX_PLACE_NAME_LEN} characters",
+                details,
+            )
+            return None
+        return value
+
+    city = _optional_location_field("city")
+    state_province = _optional_location_field("state_province")
+    postal_code = _optional_location_field("postal_code")
+
     if details:
         raise ValidationError("Invalid request body", details)
 
-    return {
+    result = {
         "place_name": place_name,
         "place_type": place_type,
         "activity_types": activity_types,
@@ -429,6 +452,13 @@ def validate_submit_body(body: dict) -> dict[str, Any]:
         "description": description,
         "email": email,
     }
+    if city:
+        result["city"] = city
+    if state_province:
+        result["state_province"] = state_province
+    if postal_code:
+        result["postal_code"] = postal_code
+    return result
 
 
 def validate_review_body(body: dict) -> dict[str, Any]:

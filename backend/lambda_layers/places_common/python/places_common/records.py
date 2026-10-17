@@ -235,8 +235,107 @@ def generate_place_slug(
     return base
 
 
+_COUNTRY_RE = re.compile(r"^[A-Za-z][A-Za-z\s.]{1,}$")
+_CA_PROVINCE_POSTAL_RE = re.compile(
+    r"^([A-Za-z]{2})\s+([A-Za-z]\d[A-Za-z]\s*\d[A-Za-z]\d)$"
+)
+_US_STATE_ZIP_RE = re.compile(r"^([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$")
+_US_STATE_ONLY_RE = re.compile(r"^([A-Za-z]{2})$")
+_AU_LOCALITY_RE = re.compile(
+    r"^(.+?)\s+(NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+(\d{4})$",
+    re.IGNORECASE,
+)
+_JP_LOCALITY_RE = re.compile(r"^(.+?)\s+(\d{3}-\d{4})$")
+_UK_LOCALITY_RE = re.compile(
+    r"^(.+?)\s+([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})$",
+    re.IGNORECASE,
+)
+_SE_LOCALITY_RE = re.compile(r"^(\d{3}\s+\d{2})\s+(.+)$")
+_LEADING_POSTAL_RE = re.compile(r"^(\d{3,5})\s+(.+)$")
+_TRAILING_POSTAL_RE = re.compile(r"^(.+?)\s+(\d{4,5})$")
+
+
+def _parse_locality_part(region: str, previous: str | None) -> dict[str, str]:
+    """Parse the last non-country comma-part into city / state_province / postal_code."""
+    out: dict[str, str] = {}
+
+    ca = _CA_PROVINCE_POSTAL_RE.fullmatch(region)
+    if ca:
+        out["state_province"] = ca.group(1).upper()
+        out["postal_code"] = ca.group(2)
+        if previous:
+            out["city"] = previous
+        return out
+
+    us_zip = _US_STATE_ZIP_RE.fullmatch(region)
+    if us_zip:
+        out["state_province"] = us_zip.group(1).upper()
+        out["postal_code"] = us_zip.group(2)
+        if previous:
+            out["city"] = previous
+        return out
+
+    us_st = _US_STATE_ONLY_RE.fullmatch(region)
+    if us_st:
+        out["state_province"] = us_st.group(1).upper()
+        if previous:
+            out["city"] = previous
+        return out
+
+    au = _AU_LOCALITY_RE.fullmatch(region)
+    if au:
+        out["city"] = au.group(1).strip()
+        out["state_province"] = au.group(2).upper()
+        out["postal_code"] = au.group(3)
+        return out
+
+    jp = _JP_LOCALITY_RE.fullmatch(region)
+    if jp:
+        out["city"] = jp.group(1).strip()
+        out["postal_code"] = jp.group(2)
+        return out
+
+    uk = _UK_LOCALITY_RE.fullmatch(region)
+    if uk:
+        out["city"] = uk.group(1).strip()
+        out["postal_code"] = uk.group(2)
+        return out
+
+    se = _SE_LOCALITY_RE.fullmatch(region)
+    if se:
+        out["postal_code"] = se.group(1)
+        out["city"] = se.group(2).strip()
+        return out
+
+    lead = _LEADING_POSTAL_RE.fullmatch(region)
+    if lead:
+        out["postal_code"] = lead.group(1)
+        out["city"] = lead.group(2).strip()
+        return out
+
+    trail = _TRAILING_POSTAL_RE.fullmatch(region)
+    if trail:
+        out["city"] = trail.group(1).strip()
+        out["postal_code"] = trail.group(2)
+        return out
+
+    out["city"] = region
+    if previous:
+        maybe_state = _US_STATE_ONLY_RE.fullmatch(previous)
+        if maybe_state:
+            out["state_province"] = maybe_state.group(1).upper()
+    return out
+
+
 def parse_address_parts(address: str | None) -> dict[str, str]:
-    """Best-effort city / state_province / country from a street address."""
+    """Best-effort city / state_province / country / postal_code from a street address.
+
+    Handles US ``City, ST 12345``, Canadian ``City, PR A1A 1A1``, Australian
+    ``City ST NNNN``, Japanese ``City NNN-NNNN``, UK ``City POSTCODE``,
+    NZ/KR ``City NNNN``, and FI/DE/NO/IS/SE ``NNNNN City`` (including Swedish
+    ``132 81 Saltsjö-Boo``). Country is taken from a trailing name token such
+    as ``USA``; it is never inferred just because the last part has digits.
+    """
     if not address or not isinstance(address, str):
         return {}
     parts = [p.strip() for p in address.split(",") if p.strip()]
@@ -247,31 +346,19 @@ def parse_address_parts(address: str | None) -> dict[str, str]:
         return out
 
     last = parts[-1]
-    # "USA" / "United States" / "US"
-    if re.fullmatch(r"[A-Za-z][A-Za-z\s.]{1,}", last) and not re.search(r"\d", last):
+    # "USA" / "United States" / "Finland" — keep the token as written (no ISO remap).
+    if _COUNTRY_RE.fullmatch(last) and not re.search(r"\d", last):
         out["country"] = last
         rest = parts[:-1]
     else:
         rest = parts
-        out["country"] = "US"
 
     if not rest:
-        return out
+        return {k: v for k, v in out.items() if v}
 
     region = rest[-1]
-    # "UT 84111" or "UT"
-    state_zip = re.match(r"^([A-Za-z]{2})(?:\s+\d[\d-]*)?$", region)
-    if state_zip:
-        out["state_province"] = state_zip.group(1).upper()
-        if len(rest) >= 2:
-            out["city"] = rest[-2]
-    else:
-        out["city"] = region
-        if len(rest) >= 2:
-            maybe_state = rest[-2]
-            m = re.match(r"^([A-Za-z]{2})$", maybe_state)
-            if m:
-                out["state_province"] = m.group(1).upper()
+    previous = rest[-2] if len(rest) >= 2 else None
+    out.update(_parse_locality_part(region, previous))
     return {k: v for k, v in out.items() if v}
 
 
@@ -356,6 +443,9 @@ def algolia_object_from_place(place: dict) -> dict:
         "internal_status": place.get("internal_status"),
         "visibility": place.get("visibility") or "public",
     }
+    postal_code = place.get("postal_code")
+    if postal_code not in (None, ""):
+        obj["postal_code"] = postal_code
     unix = ts_to_unix(obj.get("ts_created"))
     if unix is not None:
         obj["ts_created_unix"] = unix

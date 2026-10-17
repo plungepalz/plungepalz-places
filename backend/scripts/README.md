@@ -17,7 +17,7 @@ python scripts/seed_places.py --base-url "$PLACES_API_BASE_URL" --output scripts
 
 `--base-url` overrides `PLACES_API_BASE_URL`.
 
-Each seed row has `name`, `place_type`, `activity_types`, `lat`, `lng`, `address` (required except `nature`), optional `website`, and `source_url` (the OSM or official page used for coordinates). Only documented submit fields are posted (`place_name`, `place_type`, `activity_types`, `lat`, `lng`, `address`).
+Each seed row has `name`, `place_type`, `activity_types`, `lat`, `lng`, `address` (required except `nature`), optional `website`, and `source_url` (the OSM or official page used for coordinates). Optional `city`, `state_province`, and `postal_code` on a seed row are posted as well and win over values parsed from `address`. Only documented submit fields are posted (`place_name`, `place_type`, `activity_types`, `lat`, `lng`, `address`, plus those optional location fields when present).
 
 Idempotency:
 
@@ -41,6 +41,20 @@ python scripts/review_place.py --from-file scripts/seed_data/.seed_places_create
 ```
 
 `--from-file` reads `place_ids` (or a `created` array) from the seed output file. `--limit` (requires `--from-file`, must be >= 1) reviews the first N ids. Do not run this against production unless you intend to flip those places.
+
+## Fix city / postal_code (`fix_city.py`) — UNRUN
+
+Operator script to rewrite `city` (and optional `state_province` / `postal_code`) on existing `Places_Places` rows. It is **not** invoked by CI or this PR and must not be pointed at deployed data unless an operator intends that write.
+
+It updates **only** those location attributes. It never changes `internal_status`, `place_slug`, or `ts_last_updated`. Credentials come from the standard AWS env/profile chain only.
+
+```bash
+python scripts/fix_city.py --from-file path/to/city_fixes.json --dry-run
+python scripts/fix_city.py --from-file path/to/city_fixes.json --limit 10
+python scripts/fix_city.py --from-file path/to/city_fixes.json --table Places_Places
+```
+
+Each JSON object is `{place_id, old_city, new_city, new_state_province?, new_postal_code?}`. Live updates use `ConditionExpression attribute_exists(place_id) AND city = :old`. `--dry-run` does `ConsistentRead` `GetItem` and reports `would_update` / `already_fixed` / `mismatch`. Conditional check failures count as `skipped_mismatch`.
 
 ## Other scripts
 
