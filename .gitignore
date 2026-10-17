@@ -17,6 +17,7 @@ build/
 .coverage
 htmlcov/
 .tox/
+/coverage
 
 # IDE & OS
 .idea/
@@ -28,9 +29,32 @@ Thumbs.db
 # Secrets
 .env
 .env.*
+.env*
 !.env.example
 *.pem
 
 # Lambda / AWS
 *.zip
 !backend/lambda_layers/**/*.zip
+
+# Node / Next.js
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+/.next/
+/out/
+/build
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+AGENTS.md
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

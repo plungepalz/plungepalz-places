@@ -4,17 +4,16 @@ Local Next.js app for browsing a global map of sauna and cold plunge locations. 
 
 ## Setup
 
-Requires **Node.js 22 or later** (`mapbox-gl` does not install cleanly on older Node). `frontend/.nvmrc` pins 22; `package.json` `engines.node` is `>=22`.
+Requires **Node.js 22 or later** (`mapbox-gl` does not install cleanly on older Node). `.nvmrc` at the repo root pins 22; `package.json` `engines.node` is `>=22`.
 
 ```bash
-cd frontend
 npm install
 cp .env.example .env.local
 ```
 
 ## Running locally against the dev API
 
-1. Use Node 22 (`nvm use` in `frontend/` reads `.nvmrc`).
+1. Use Node 22 (`nvm use` at the repo root reads `.nvmrc`).
 2. `npm install`
 3. Copy `.env.example` to `.env.local` (never commit `.env.local`).
 4. Set the API URL from CloudFormation stack `plungepalz-places-dev`, output `ApiBaseUrl`:
