@@ -3,13 +3,13 @@
 # deploy.sh - Deploy PlungePalz Places Dev Infrastructure to AWS us-east-1
 #
 # Usage:
-#   ./deploy.sh [--guided] [--env-file PATH]
+#   ./deploy.sh [OPTIONS]
 #
 # Options:
 #   --guided            Run SAM deploy in guided mode (interactive)
-#   --env-file PATH     Path to env file with Algolia/Google/Anthropic credentials
-#                       Expected variables: ALGOLIA_APP_ID, ALGOLIA_SEARCH_API_KEY,
-#                       ALGOLIA_WRITE_API_KEY, GOOGLE_PLACES_API_KEY, ANTHROPIC_API_KEY
+#   --env-file PATH     Path to env file with Algolia/Google credentials
+#   --budget-email EMAIL Email for budget alerts
+#   --yes               Skip confirmation prompts (for non-interactive runs)
 #
 # Environment Variables:
 #   AWS_PROFILE     AWS CLI profile (default: plungepalz-dev)
@@ -23,13 +23,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-LAYER_SOURCE="$BACKEND_ROOT/lambda_layers/generate_place_with_ai"
-LAYER_BUILD="$SCRIPT_DIR/.aws-sam/build/GeneratePlaceWithAILayer"
 
 STACK_NAME="plungepalz-places-dev"
+ARTIFACTS_STACK_NAME="plungepalz-places-dev-artifacts"
 REQUIRED_REGION="us-east-1"
 DEFAULT_PROFILE="plungepalz-dev"
-PYTHON_VERSION="3.13"
 
 # Use AWS_PROFILE from environment, or default
 AWS_PROFILE="${AWS_PROFILE:-$DEFAULT_PROFILE}"
@@ -38,6 +36,17 @@ export AWS_PROFILE
 # Parse command-line arguments
 GUIDED_MODE=0
 ENV_FILE=""
+BUDGET_EMAIL=""
+YES_MODE=0
+
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >&2
+}
+
+error() {
+    log "ERROR: $*"
+    exit 1
+}
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -49,6 +58,14 @@ while [[ $# -gt 0 ]]; do
             ENV_FILE="$2"
             shift 2
             ;;
+        --budget-email)
+            BUDGET_EMAIL="$2"
+            shift 2
+            ;;
+        --yes)
+            YES_MODE=1
+            shift
+            ;;
         *)
             error "Unknown option: $1"
             ;;
@@ -59,21 +76,11 @@ done
 # Functions
 # ==============================================================
 
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >&2
-}
-
-error() {
-    log "ERROR: $*"
-    exit 1
-}
-
 check_dependencies() {
     log "Checking dependencies..."
     command -v aws >/dev/null 2>&1 || error "aws CLI not found. Install: https://aws.amazon.com/cli/"
     command -v sam >/dev/null 2>&1 || error "AWS SAM CLI not found. Install: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"
     command -v python3 >/dev/null 2>&1 || error "python3 not found"
-    command -v pip3 >/dev/null 2>&1 || error "pip3 not found"
 }
 
 check_region() {
@@ -93,120 +100,164 @@ check_region() {
 
 validate_profile() {
     log "Validating AWS profile '$AWS_PROFILE'..."
-    if ! aws sts get-caller-identity --profile "$AWS_PROFILE" >/dev/null 2>&1; then
+    if ! ACCOUNT_ID=$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query Account --output text 2>/dev/null); then
         error "Failed to authenticate with profile '$AWS_PROFILE'. Check your credentials."
     fi
-    ACCOUNT_ID=$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query Account --output text)
+    export ACCOUNT_ID
     log "✓ Authenticated as account: $ACCOUNT_ID"
 }
 
-build_layer_dependencies() {
-    log "Building Lambda layer dependencies..."
+create_artifacts_bucket() {
+    local bucket_name="plungepalz-places-dev-artifacts-${ACCOUNT_ID}"
     
-    if [[ ! -f "$LAYER_SOURCE/requirements.txt" ]]; then
-        error "Layer requirements.txt not found at: $LAYER_SOURCE/requirements.txt"
+    log "Checking artifacts bucket..."
+    
+    if aws s3 ls "s3://${bucket_name}" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null 2>&1; then
+        log "✓ Artifacts bucket exists: $bucket_name"
+        echo "$bucket_name"
+        return 0
     fi
     
-    # Create build directory
-    mkdir -p "$LAYER_BUILD/python"
+    log "Creating artifacts stack: $ARTIFACTS_STACK_NAME"
     
-    # Install dependencies with manylinux2014_x86_64 platform for Lambda compatibility
-    log "Installing dependencies from $LAYER_SOURCE/requirements.txt"
-    pip3 install \
-        --platform manylinux2014_x86_64 \
-        --only-binary=:all: \
-        --python-version "$PYTHON_VERSION" \
-        --implementation cp \
-        --target "$LAYER_BUILD/python" \
-        --upgrade \
-        -r "$LAYER_SOURCE/requirements.txt"
+    local template_body
+    template_body=$(cat <<'EOF'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: PlungePalz Places Dev - SAM Artifacts Bucket
+Parameters:
+  BucketName:
+    Type: String
+Resources:
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+Outputs:
+  BucketName:
+    Value: !Ref ArtifactsBucket
+EOF
+)
     
-    # Copy layer source code
-    if [[ -d "$LAYER_SOURCE/python" ]]; then
-        log "Copying layer source code..."
-        cp -r "$LAYER_SOURCE/python/"* "$LAYER_BUILD/python/"
+    if ! aws cloudformation deploy \
+        --template-body "$template_body" \
+        --stack-name "$ARTIFACTS_STACK_NAME" \
+        --parameter-overrides "BucketName=${bucket_name}" \
+        --region "$REQUIRED_REGION" \
+        --profile "$AWS_PROFILE" \
+        --no-fail-on-empty-changeset >/dev/null 2>&1; then
+        error "Failed to create artifacts bucket stack"
     fi
     
-    log "✓ Layer dependencies built"
+    log "✓ Artifacts bucket created: $bucket_name"
+    echo "$bucket_name"
+}
+
+build_sam_template() {
+    log "Building SAM template..."
+    cd "$SCRIPT_DIR"
+    
+    # Clean build directory
+    rm -rf .aws-sam/build
+    
+    # Build with SAM (includes layer dependencies)
+    if ! sam build --profile "$AWS_PROFILE" 2>&1 | grep -v "^$"; then
+        error "SAM build failed"
+    fi
+    
+    log "✓ SAM build complete"
 }
 
 validate_template() {
     log "Validating SAM template..."
     cd "$SCRIPT_DIR"
     
-    # Basic SAM validation
-    if ! sam validate --lint 2>&1; then
+    # Validate built template
+    if ! sam validate --lint --profile "$AWS_PROFILE" 2>&1; then
         error "Template validation failed"
     fi
     
     log "✓ Template validation passed"
 }
 
-load_env_file() {
+parse_env_file() {
     local env_file="$1"
     
     if [[ ! -f "$env_file" ]]; then
         error "Env file not found: $env_file"
     fi
     
-    log "Loading environment variables from: $env_file"
+    log "Parsing environment file: $env_file"
     
-    # Source the file to load variables
-    # shellcheck disable=SC1090
-    set -a
-    source "$env_file"
-    set +a
+    # Parse only specific variables (don't source entire file)
+    ALGOLIA_APP_ID=$(grep -E '^ALGOLIA_APP_ID=' "$env_file" | cut -d= -f2- | tr -d '"' || echo "")
+    ALGOLIA_SEARCH_API_KEY=$(grep -E '^ALGOLIA_SEARCH_API_KEY=' "$env_file" | cut -d= -f2- | tr -d '"' || echo "")
+    ALGOLIA_WRITE_API_KEY=$(grep -E '^ALGOLIA_WRITE_API_KEY=' "$env_file" | cut -d= -f2- | tr -d '"' || echo "")
+    ANTHROPIC_MODEL_ID=$(grep -E '^ANTHROPIC_MODEL_ID=' "$env_file" | cut -d= -f2- | tr -d '"' || echo "")
     
-    # Validate required variables are set
-    local required_vars=(
-        "ALGOLIA_APP_ID"
-        "ALGOLIA_SEARCH_API_KEY"
-        "ALGOLIA_WRITE_API_KEY"
-        "GOOGLE_PLACES_API_KEY"
-        "ANTHROPIC_API_KEY"
-    )
+    # Validate required variables
+    [[ -z "$ALGOLIA_APP_ID" ]] && error "ALGOLIA_APP_ID not found in $env_file"
+    [[ -z "$ALGOLIA_SEARCH_API_KEY" ]] && error "ALGOLIA_SEARCH_API_KEY not found in $env_file"
+    [[ -z "$ALGOLIA_WRITE_API_KEY" ]] && error "ALGOLIA_WRITE_API_KEY not found in $env_file"
     
-    for var in "${required_vars[@]}"; do
-        if [[ -z "${!var:-}" ]]; then
-            error "Required variable '$var' not found in $env_file"
-        fi
-    done
-    
-    log "✓ All required variables loaded from env file"
+    log "✓ Required variables parsed from env file"
 }
 
 write_ssm_parameters() {
     log "Writing SSM parameters (SecureString for API keys)..."
     
-    # Disable command tracing to prevent leaking secrets
-    { set +x; } 2>/dev/null
+    # Create temp file with mode 600 for secure parameter passing
+    local temp_file
+    temp_file=$(mktemp)
+    chmod 600 "$temp_file"
+    trap 'rm -f "$temp_file"' EXIT
     
-    local params=(
-        "/plungepalz-places-dev/algolia/app_id:String:$ALGOLIA_APP_ID"
-        "/plungepalz-places-dev/algolia/search_api_key:SecureString:$ALGOLIA_SEARCH_API_KEY"
-        "/plungepalz-places-dev/algolia/write_api_key:SecureString:$ALGOLIA_WRITE_API_KEY"
-        "/plungepalz-places-dev/google/places_api_key:SecureString:$GOOGLE_PLACES_API_KEY"
-        "/plungepalz-places-dev/anthropic/api_key:SecureString:$ANTHROPIC_API_KEY"
-    )
+    # Write app_id (String)
+    printf '{"Name":"/plungepalz-places-dev/algolia/app_id","Type":"String","Value":"%s","Overwrite":true}' "$ALGOLIA_APP_ID" > "$temp_file"
+    if ! aws ssm put-parameter --cli-input-json "file://$temp_file" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null 2>&1; then
+        error "Failed to write /plungepalz-places-dev/algolia/app_id"
+    fi
     
-    for param_spec in "${params[@]}"; do
-        IFS=':' read -r param_name param_type param_value <<< "$param_spec"
-        
-        log "  Writing $param_name (type: $param_type)..."
-        
-        if ! aws ssm put-parameter \
-            --name "$param_name" \
-            --type "$param_type" \
-            --value "$param_value" \
-            --overwrite \
-            --profile "$AWS_PROFILE" \
-            --region "$REQUIRED_REGION" \
-            >/dev/null 2>&1; then
-            error "Failed to write SSM parameter: $param_name"
+    # Write search_api_key (SecureString)
+    printf '{"Name":"/plungepalz-places-dev/algolia/search_api_key","Type":"SecureString","Value":"%s","Overwrite":true}' "$ALGOLIA_SEARCH_API_KEY" > "$temp_file"
+    if ! aws ssm put-parameter --cli-input-json "file://$temp_file" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null 2>&1; then
+        error "Failed to write /plungepalz-places-dev/algolia/search_api_key"
+    fi
+    
+    # Write write_api_key (SecureString)
+    printf '{"Name":"/plungepalz-places-dev/algolia/write_api_key","Type":"SecureString","Value":"%s","Overwrite":true}' "$ALGOLIA_WRITE_API_KEY" > "$temp_file"
+    if ! aws ssm put-parameter --cli-input-json "file://$temp_file" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null 2>&1; then
+        error "Failed to write /plungepalz-places-dev/algolia/write_api_key"
+    fi
+    
+    # Write google/places_api_key if exists (SecureString)
+    if [[ -n "${GOOGLE_PLACES_API_KEY:-}" ]]; then
+        printf '{"Name":"/plungepalz-places-dev/google/places_api_key","Type":"SecureString","Value":"%s","Overwrite":true}' "$GOOGLE_PLACES_API_KEY" > "$temp_file"
+        if ! aws ssm put-parameter --cli-input-json "file://$temp_file" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null 2>&1; then
+            log "⚠ Warning: Failed to write /plungepalz-places-dev/google/places_api_key"
         fi
-    done
+    fi
     
-    log "✓ All SSM parameters written successfully (values not logged)"
+    rm -f "$temp_file"
+    log "✓ SSM parameters written successfully (values not logged)"
 }
 
 check_ssm_parameters() {
@@ -216,8 +267,6 @@ check_ssm_parameters() {
         "/plungepalz-places-dev/algolia/app_id"
         "/plungepalz-places-dev/algolia/search_api_key"
         "/plungepalz-places-dev/algolia/write_api_key"
-        "/plungepalz-places-dev/google/places_api_key"
-        "/plungepalz-places-dev/anthropic/api_key"
     )
     
     local missing_params=()
@@ -238,15 +287,18 @@ check_ssm_parameters() {
         log "Or manually with: ./setup-ssm-params.sh"
         log ""
         
-        if [[ "$GUIDED_MODE" -eq 0 ]]; then
-            read -p "Continue deployment anyway? [y/N] " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                error "Deployment cancelled"
+        if [[ "$YES_MODE" -eq 0 ]]; then
+            if [[ -t 0 ]]; then
+                read -r -p "Continue deployment anyway? [y/N] " reply
+                if [[ ! $reply =~ ^[Yy]$ ]]; then
+                    error "Deployment cancelled"
+                fi
+            else
+                error "Missing SSM parameters and not running interactively (use --yes to override)"
             fi
         fi
     else
-        log "✓ All SSM parameters exist"
+        log "✓ All required SSM parameters exist"
     fi
 }
 
@@ -254,23 +306,47 @@ deploy_stack() {
     log "Deploying stack '$STACK_NAME' to $REQUIRED_REGION..."
     cd "$SCRIPT_DIR"
     
+    local artifacts_bucket
+    artifacts_bucket=$(create_artifacts_bucket)
+    
     local guided_flag=""
     if [[ "$GUIDED_MODE" -eq 1 ]]; then
         guided_flag="--guided"
         log "Running in guided mode..."
     fi
     
-    # Deploy with SAM
+    # Build parameter overrides
+    local param_overrides=""
+    if [[ -n "$BUDGET_EMAIL" ]]; then
+        param_overrides="BudgetNotificationEmail=$BUDGET_EMAIL"
+    fi
+    if [[ -n "${ANTHROPIC_MODEL_ID:-}" ]]; then
+        if [[ -n "$param_overrides" ]]; then
+            param_overrides="$param_overrides AnthropicModelId=$ANTHROPIC_MODEL_ID"
+        else
+            param_overrides="AnthropicModelId=$ANTHROPIC_MODEL_ID"
+        fi
+    fi
+    
+    local param_flag=""
+    if [[ -n "$param_overrides" ]]; then
+        param_flag="--parameter-overrides $param_overrides"
+    fi
+    
+    # Deploy built template with SAM
     # shellcheck disable=SC2086
     sam deploy \
         $guided_flag \
+        --template-file .aws-sam/build/template.yaml \
         --stack-name "$STACK_NAME" \
         --region "$REQUIRED_REGION" \
-        --capabilities CAPABILITY_NAMED_IAM \
-        --resolve-s3 \
+        --s3-bucket "$artifacts_bucket" \
+        --s3-prefix "sam-artifacts" \
+        --capabilities CAPABILITY_IAM \
         --no-fail-on-empty-changeset \
         --tags "project=plungepalz-places" "env=dev" \
-        --profile "$AWS_PROFILE"
+        --profile "$AWS_PROFILE" \
+        $param_flag
     
     log "✓ Stack deployed successfully"
 }
@@ -278,31 +354,33 @@ deploy_stack() {
 print_outputs() {
     log "Fetching stack outputs..."
     
-    OUTPUTS=$(aws cloudformation describe-stacks \
+    local outputs
+    outputs=$(aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
         --region "$REQUIRED_REGION" \
         --profile "$AWS_PROFILE" \
         --query 'Stacks[0].Outputs' \
         --output table 2>/dev/null || echo "")
     
-    if [[ -n "$OUTPUTS" ]]; then
+    if [[ -n "$outputs" ]]; then
         echo ""
         echo "=========================================="
         echo "Stack Outputs:"
         echo "=========================================="
-        echo "$OUTPUTS"
+        echo "$outputs"
         echo ""
     fi
     
-    API_URL=$(aws cloudformation describe-stacks \
+    local api_url
+    api_url=$(aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
         --region "$REQUIRED_REGION" \
         --profile "$AWS_PROFILE" \
         --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue" \
         --output text 2>/dev/null || echo "")
     
-    if [[ -n "$API_URL" ]]; then
-        log "API Base URL: $API_URL"
+    if [[ -n "$api_url" ]]; then
+        log "API Base URL: $api_url"
     fi
 }
 
@@ -321,15 +399,15 @@ main() {
     validate_profile
     check_region
     
-    # If env file provided, load and write SSM parameters
+    # If env file provided, parse and write SSM parameters
     if [[ -n "$ENV_FILE" ]]; then
-        load_env_file "$ENV_FILE"
+        parse_env_file "$ENV_FILE"
         write_ssm_parameters
     else
         check_ssm_parameters
     fi
     
-    build_layer_dependencies
+    build_sam_template
     validate_template
     deploy_stack
     print_outputs

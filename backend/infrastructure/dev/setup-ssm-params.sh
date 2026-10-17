@@ -27,87 +27,71 @@ error() {
 
 # Validate AWS credentials
 log "Validating AWS profile '$AWS_PROFILE'..."
-if ! aws sts get-caller-identity --profile "$AWS_PROFILE" >/dev/null 2>&1; then
+if ! ACCOUNT_ID=$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query Account --output text 2>/dev/null); then
     error "Failed to authenticate with profile '$AWS_PROFILE'. Check your credentials."
 fi
 
-log "✓ Authenticated to AWS"
+log "✓ Authenticated to AWS (account: $ACCOUNT_ID)"
 echo ""
 
 # Prompt for each parameter
-echo "Enter API credentials (values will not be echoed):"
+echo "Enter API credentials (secret values will not be echoed):"
 echo ""
 
-read -p "Algolia App ID: " ALGOLIA_APP_ID
-read -s -p "Algolia Search API Key (read-only): " ALGOLIA_SEARCH_API_KEY
+read -r -p "Algolia App ID: " ALGOLIA_APP_ID
+[[ -z "$ALGOLIA_APP_ID" ]] && error "Algolia App ID cannot be empty"
+
+read -r -s -p "Algolia Search API Key (read-only): " ALGOLIA_SEARCH_API_KEY
 echo ""
-read -s -p "Algolia Write API Key: " ALGOLIA_WRITE_API_KEY
+[[ -z "$ALGOLIA_SEARCH_API_KEY" ]] && error "Algolia Search API Key cannot be empty"
+
+read -r -s -p "Algolia Write API Key: " ALGOLIA_WRITE_API_KEY
 echo ""
-read -s -p "Google Places API Key: " GOOGLE_PLACES_API_KEY
+[[ -z "$ALGOLIA_WRITE_API_KEY" ]] && error "Algolia Write API Key cannot be empty"
+
+read -r -s -p "Google Places API Key (optional, press Enter to skip): " GOOGLE_PLACES_API_KEY
 echo ""
-read -s -p "Anthropic API Key: " ANTHROPIC_API_KEY
-echo ""
+
 echo ""
 
 # Confirm before writing
-log "Ready to write 5 parameters to SSM in $REQUIRED_REGION"
-read -p "Continue? [y/N] " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+log "Ready to write SSM parameters to $REQUIRED_REGION"
+read -r -p "Continue? [y/N] " reply
+if [[ ! $reply =~ ^[Yy]$ ]]; then
     error "Cancelled"
 fi
 
 log "Writing SSM parameters..."
 
+# Create temp file with mode 600 for secure parameter passing
+temp_file=$(mktemp)
+chmod 600 "$temp_file"
+trap 'rm -f "$temp_file"' EXIT
+
 # Write parameters (disable tracing to prevent leaking secrets)
 { set +x; } 2>/dev/null
 
-aws ssm put-parameter \
-    --name "/plungepalz-places-dev/algolia/app_id" \
-    --type "String" \
-    --value "$ALGOLIA_APP_ID" \
-    --overwrite \
-    --profile "$AWS_PROFILE" \
-    --region "$REQUIRED_REGION" \
-    >/dev/null
+# app_id (String)
+printf '{"Name":"/plungepalz-places-dev/algolia/app_id","Type":"String","Value":"%s","Overwrite":true}' "$ALGOLIA_APP_ID" > "$temp_file"
+aws ssm put-parameter --cli-input-json "file://$temp_file" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null
 
-aws ssm put-parameter \
-    --name "/plungepalz-places-dev/algolia/search_api_key" \
-    --type "SecureString" \
-    --value "$ALGOLIA_SEARCH_API_KEY" \
-    --overwrite \
-    --profile "$AWS_PROFILE" \
-    --region "$REQUIRED_REGION" \
-    >/dev/null
+# search_api_key (SecureString)
+printf '{"Name":"/plungepalz-places-dev/algolia/search_api_key","Type":"SecureString","Value":"%s","Overwrite":true}' "$ALGOLIA_SEARCH_API_KEY" > "$temp_file"
+aws ssm put-parameter --cli-input-json "file://$temp_file" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null
 
-aws ssm put-parameter \
-    --name "/plungepalz-places-dev/algolia/write_api_key" \
-    --type "SecureString" \
-    --value "$ALGOLIA_WRITE_API_KEY" \
-    --overwrite \
-    --profile "$AWS_PROFILE" \
-    --region "$REQUIRED_REGION" \
-    >/dev/null
+# write_api_key (SecureString)
+printf '{"Name":"/plungepalz-places-dev/algolia/write_api_key","Type":"SecureString","Value":"%s","Overwrite":true}' "$ALGOLIA_WRITE_API_KEY" > "$temp_file"
+aws ssm put-parameter --cli-input-json "file://$temp_file" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null
 
-aws ssm put-parameter \
-    --name "/plungepalz-places-dev/google/places_api_key" \
-    --type "SecureString" \
-    --value "$GOOGLE_PLACES_API_KEY" \
-    --overwrite \
-    --profile "$AWS_PROFILE" \
-    --region "$REQUIRED_REGION" \
-    >/dev/null
+# google/places_api_key (SecureString, optional)
+if [[ -n "$GOOGLE_PLACES_API_KEY" ]]; then
+    printf '{"Name":"/plungepalz-places-dev/google/places_api_key","Type":"SecureString","Value":"%s","Overwrite":true}' "$GOOGLE_PLACES_API_KEY" > "$temp_file"
+    aws ssm put-parameter --cli-input-json "file://$temp_file" --profile "$AWS_PROFILE" --region "$REQUIRED_REGION" >/dev/null
+fi
 
-aws ssm put-parameter \
-    --name "/plungepalz-places-dev/anthropic/api_key" \
-    --type "SecureString" \
-    --value "$ANTHROPIC_API_KEY" \
-    --overwrite \
-    --profile "$AWS_PROFILE" \
-    --region "$REQUIRED_REGION" \
-    >/dev/null
+rm -f "$temp_file"
 
-log "✓ All parameters written successfully"
+log "✓ All parameters written successfully (values not logged)"
 log ""
 log "To verify (app_id only):"
 log "  aws ssm get-parameter --name /plungepalz-places-dev/algolia/app_id --profile $AWS_PROFILE --region $REQUIRED_REGION"

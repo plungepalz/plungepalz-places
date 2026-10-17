@@ -5,11 +5,17 @@ Description: >
   Region: us-east-1
   Self-contained dev stack with DynamoDB, Lambda, API Gateway, and Algolia integration
 
+Rules:
+  EnforceUsEast1:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'us-east-1']
+        AssertDescription: This stack MUST be deployed to us-east-1 only
+
 Parameters:
-  AllowedOrigins:
-    Type: CommaDelimitedList
+  AllowedOrigin:
+    Type: String
     Default: http://localhost:3000
-    Description: Comma-separated CORS allowed origins
+    Description: CORS allowed origin (single origin)
   
   BudgetAmountUSD:
     Type: Number
@@ -18,8 +24,26 @@ Parameters:
   
   BudgetNotificationEmail:
     Type: String
-    Description: Email address for budget alerts
-    AllowedPattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+    Default: support@plungepalz.com
+    Description: Email address for budget alerts (leave empty to skip budget creation)
+    AllowedPattern: ^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})?$
+  
+  EnableAlgoliaSync:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Enable Places_AlgoliaSync function (requires handler implementation)
+  
+  AnthropicModelId:
+    Type: String
+    Default: claude-3-5-haiku-latest
+    Description: Anthropic model ID for AI generation
+
+Conditions:
+  CreateBudget: !Not [!Equals [!Ref BudgetNotificationEmail, '']]
+  EnableAlgoliaSyncCondition: !Equals [!Ref EnableAlgoliaSync, 'true']
 
 Globals:
   Function:
@@ -130,13 +154,6 @@ Resources:
           Value: dev
 
   # ==============================================================
-  # SSM Parameters
-  # Note: Parameters are created externally via deploy.sh --env-file
-  # or manually via setup-ssm-params.sh. The template does NOT create them
-  # to avoid hardcoding secrets or exposing them in CloudFormation.
-  # ==============================================================
-
-  # ==============================================================
   # Lambda Layer
   # ==============================================================
   
@@ -148,10 +165,68 @@ Resources:
       ContentUri: ../../lambda_layers/generate_place_with_ai/
       CompatibleRuntimes:
         - python3.13
-        - python3.12
-        - python3.11
     Metadata:
       BuildMethod: python3.13
+
+  # ==============================================================
+  # API Gateway
+  # ==============================================================
+
+  PlacesApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: plungepalz-places-dev-api
+      StageName: dev
+      Cors:
+        AllowOrigin: !Sub "'${AllowedOrigin}'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowMethods: "'GET,POST,OPTIONS'"
+        MaxAge: "'600'"
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${AllowedOrigin}'"
+              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${AllowedOrigin}'"
+              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+      MethodSettings:
+        - ResourcePath: "/~1search"
+          HttpMethod: GET
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+        - ResourcePath: "/~1submit"
+          HttpMethod: POST
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+        - ResourcePath: "/*/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 20
+          ThrottlingRateLimit: 10
+      Tags:
+        project: plungepalz-places
+        env: dev
+
+  # ==============================================================
+  # DLQ for AlgoliaSync
+  # ==============================================================
+
+  AlgoliaSyncDLQ:
+    Type: AWS::SQS::Queue
+    Condition: EnableAlgoliaSyncCondition
+    Properties:
+      QueueName: plungepalz-places-dev-algolia-sync-dlq
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
 
   # ==============================================================
   # Lambda Functions
@@ -170,11 +245,15 @@ Resources:
           TABLE_PLACES: !Ref PlacesTable
           ALGOLIA_APP_ID_PARAM: /plungepalz-places-dev/algolia/app_id
           ALGOLIA_SEARCH_KEY_PARAM: /plungepalz-places-dev/algolia/search_api_key
+      Events:
+        GetSearch:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PlacesApi
+            Path: /search
+            Method: GET
       LoggingConfig:
         LogGroup: !Ref PlacesSearchLogGroup
-      Tags:
-        project: plungepalz-places
-        env: dev
 
   PlacesGetByIDFunction:
     Type: AWS::Serverless::Function
@@ -187,11 +266,15 @@ Resources:
       Environment:
         Variables:
           TABLE_PLACES: !Ref PlacesTable
+      Events:
+        GetPlace:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PlacesApi
+            Path: /place/{place_id}
+            Method: GET
       LoggingConfig:
         LogGroup: !Ref PlacesGetByIDLogGroup
-      Tags:
-        project: plungepalz-places
-        env: dev
 
   PlacesSubmitFunction:
     Type: AWS::Serverless::Function
@@ -208,16 +291,20 @@ Resources:
           TABLE_SUBMISSIONS: !Ref SubmissionsTable
           TABLE_PLACES: !Ref PlacesTable
           GOOGLE_PLACES_API_KEY_PARAM: /plungepalz-places-dev/google/places_api_key
-          ANTHROPIC_API_KEY_PARAM: /plungepalz-places-dev/anthropic/api_key
-          ANTHROPIC_MODEL_ID: claude-3-5-haiku-latest
+          ANTHROPIC_MODEL_ID: !Ref AnthropicModelId
+      Events:
+        PostSubmit:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PlacesApi
+            Path: /submit
+            Method: POST
       LoggingConfig:
         LogGroup: !Ref PlacesSubmitLogGroup
-      Tags:
-        project: plungepalz-places
-        env: dev
 
   PlacesAlgoliaSyncFunction:
     Type: AWS::Serverless::Function
+    Condition: EnableAlgoliaSyncCondition
     Properties:
       FunctionName: Places_AlgoliaSync
       CodeUri: ../../lambda_functions/Places_AlgoliaSync/
@@ -238,11 +325,12 @@ Resources:
             StartingPosition: LATEST
             BatchSize: 10
             MaximumRetryAttempts: 2
+            BisectBatchOnFunctionError: true
+            DestinationConfig:
+              OnFailure:
+                Destination: !GetAtt AlgoliaSyncDLQ.Arn
       LoggingConfig:
         LogGroup: !Ref PlacesAlgoliaSyncLogGroup
-      Tags:
-        project: plungepalz-places
-        env: dev
 
   PlacesAdminReviewFunction:
     Type: AWS::Serverless::Function
@@ -255,11 +343,17 @@ Resources:
       Environment:
         Variables:
           TABLE_PLACES: !Ref PlacesTable
+      Events:
+        PostReview:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PlacesApi
+            Path: /plungepalz_admin/review
+            Method: POST
+            Auth:
+              Authorizer: AWS_IAM
       LoggingConfig:
         LogGroup: !Ref PlacesAdminReviewLogGroup
-      Tags:
-        project: plungepalz-places
-        env: dev
 
   # ==============================================================
   # CloudWatch Log Groups (14-day retention)
@@ -300,6 +394,7 @@ Resources:
 
   PlacesAlgoliaSyncLogGroup:
     Type: AWS::Logs::LogGroup
+    Condition: EnableAlgoliaSyncCondition
     Properties:
       LogGroupName: /aws/lambda/Places_AlgoliaSync
       RetentionInDays: 14
@@ -327,7 +422,6 @@ Resources:
   PlacesSearchRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: plungepalz-places-dev-search-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -369,7 +463,6 @@ Resources:
   PlacesGetByIDRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: plungepalz-places-dev-getbyid-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -398,7 +491,6 @@ Resources:
   PlacesSubmitRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: plungepalz-places-dev-submit-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -428,10 +520,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - ssm:GetParameter
-                  - ssm:GetParameters
                 Resource:
                   - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/google/*"
-                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/anthropic/*"
       Tags:
         - Key: project
           Value: plungepalz-places
@@ -440,8 +530,8 @@ Resources:
 
   PlacesAlgoliaSyncRole:
     Type: AWS::IAM::Role
+    Condition: EnableAlgoliaSyncCondition
     Properties:
-      RoleName: plungepalz-places-dev-algolia-sync-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -474,6 +564,15 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/app_id"
                   - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/write_api_key"
+        - PolicyName: SQSDLQAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt AlgoliaSyncDLQ.Arn
       Tags:
         - Key: project
           Value: plungepalz-places
@@ -483,7 +582,6 @@ Resources:
   PlacesAdminReviewRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: plungepalz-places-dev-admin-review-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -504,6 +602,11 @@ Resources:
                   - dynamodb:UpdateItem
                 Resource:
                   - !GetAtt PlacesTable.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:Query
+                Resource:
+                  - !Sub "${PlacesTable.Arn}/index/status-ts-index"
       Tags:
         - Key: project
           Value: plungepalz-places
@@ -511,185 +614,12 @@ Resources:
           Value: dev
 
   # ==============================================================
-  # API Gateway REST API
-  # ==============================================================
-
-  PlacesApi:
-    Type: AWS::Serverless::Api
-    Properties:
-      Name: plungepalz-places-dev-api
-      StageName: dev
-      Cors:
-        AllowOrigin: !Sub
-          - "'${Origins}'"
-          - Origins: !Join ["','", !Ref AllowedOrigins]
-        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-        AllowMethods: "'GET,POST,OPTIONS'"
-        MaxAge: "'600'"
-      GatewayResponses:
-        DEFAULT_4XX:
-          ResponseParameters:
-            Headers:
-              Access-Control-Allow-Origin: !Sub
-                - "'${Origin}'"
-                - Origin: !Select [0, !Ref AllowedOrigins]
-              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-        DEFAULT_5XX:
-          ResponseParameters:
-            Headers:
-              Access-Control-Allow-Origin: !Sub
-                - "'${Origin}'"
-                - Origin: !Select [0, !Ref AllowedOrigins]
-              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-      MethodSettings:
-        - ResourcePath: "/search"
-          HttpMethod: GET
-          ThrottlingBurstLimit: 10
-          ThrottlingRateLimit: 5
-        - ResourcePath: "/submit"
-          HttpMethod: POST
-          ThrottlingBurstLimit: 10
-          ThrottlingRateLimit: 5
-      Tags:
-        project: plungepalz-places
-        env: dev
-
-  # ==============================================================
-  # API Gateway Routes
-  # ==============================================================
-
-  # GET /search
-  PlacesSearchApiPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt PlacesSearchFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesApi}/*"
-
-  PlacesSearchApiIntegration:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ResourceId: !GetAtt PlacesSearchResource.ResourceId
-      HttpMethod: GET
-      AuthorizationType: NONE
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PlacesSearchFunction.Arn}/invocations"
-
-  PlacesSearchResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ParentId: !GetAtt PlacesApi.RootResourceId
-      PathPart: search
-
-  # GET /place/{place_id}
-  PlacesGetByIDApiPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt PlacesGetByIDFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesApi}/*"
-
-  PlacesGetByIDApiIntegration:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ResourceId: !GetAtt PlacePlaceIdResource.ResourceId
-      HttpMethod: GET
-      AuthorizationType: NONE
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PlacesGetByIDFunction.Arn}/invocations"
-
-  PlaceResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ParentId: !GetAtt PlacesApi.RootResourceId
-      PathPart: place
-
-  PlacePlaceIdResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ParentId: !GetAtt PlaceResource.ResourceId
-      PathPart: "{place_id}"
-
-  # POST /submit
-  PlacesSubmitApiPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt PlacesSubmitFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesApi}/*"
-
-  PlacesSubmitApiIntegration:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ResourceId: !GetAtt SubmitResource.ResourceId
-      HttpMethod: POST
-      AuthorizationType: NONE
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PlacesSubmitFunction.Arn}/invocations"
-
-  SubmitResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ParentId: !GetAtt PlacesApi.RootResourceId
-      PathPart: submit
-
-  # POST /plungepalz_admin/review (AWS_IAM auth)
-  PlacesAdminReviewApiPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt PlacesAdminReviewFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesApi}/*"
-
-  PlacesAdminReviewApiIntegration:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ResourceId: !GetAtt AdminReviewResource.ResourceId
-      HttpMethod: POST
-      AuthorizationType: AWS_IAM
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PlacesAdminReviewFunction.Arn}/invocations"
-
-  AdminResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ParentId: !GetAtt PlacesApi.RootResourceId
-      PathPart: plungepalz_admin
-
-  AdminReviewResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref PlacesApi
-      ParentId: !GetAtt AdminResource.ResourceId
-      PathPart: review
-
-  # ==============================================================
   # AWS Budget
   # ==============================================================
 
   PlacesBudget:
     Type: AWS::Budgets::Budget
+    Condition: CreateBudget
     Properties:
       Budget:
         BudgetName: plungepalz-places-dev-monthly-budget
@@ -701,7 +631,6 @@ Resources:
         CostFilters:
           TagKeyValue:
             - "user:project$plungepalz-places"
-            - "user:env$dev"
       NotificationsWithSubscribers:
         - Notification:
             NotificationType: ACTUAL
@@ -756,6 +685,7 @@ Outputs:
     Value: !Ref PlacesSubmitFunction
 
   PlacesAlgoliaSyncFunctionName:
+    Condition: EnableAlgoliaSyncCondition
     Description: Places_AlgoliaSync Lambda function name
     Value: !Ref PlacesAlgoliaSyncFunction
 
