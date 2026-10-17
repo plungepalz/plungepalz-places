@@ -8,6 +8,7 @@ import PlaceDetailsPanel from '@/components/PlaceDetailsPanel';
 import PlacesList from '@/components/PlacesList';
 import { client, isMockMode } from '@/lib/client';
 import { isPlacesApiError } from '@/lib/errors';
+import { listLocationName } from '@/lib/list-location-name';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
 import { mergeLocalPlaces } from '@/lib/merge-local-places';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
@@ -51,6 +52,7 @@ export default function HomePage() {
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
+  const [mapZoom, setMapZoom] = useState<number | null>(null);
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const requestIdRef = useRef(0);
 
@@ -123,9 +125,10 @@ export default function HomePage() {
     [buildParams]
   );
 
-  const handleViewportChange = useCallback((bounds: MapBounds) => {
+  const handleViewportChange = useCallback((bounds: MapBounds, zoom: number) => {
     mapBoundsRef.current = bounds;
     setMapBounds(bounds);
+    setMapZoom(zoom);
   }, []);
 
   useEffect(() => {
@@ -143,7 +146,14 @@ export default function HomePage() {
 
   const handleLocationChange = (next: LocationPreset) => {
     setLocation(next);
-    setFlyRequest({ nonce: Date.now(), longitude: next.lng, latitude: next.lat, zoom: next.zoom });
+    setMapZoom(next.zoom);
+    setFlyRequest({
+      nonce: Date.now(),
+      longitude: next.lng,
+      latitude: next.lat,
+      zoom: next.zoom,
+      exactZoom: true,
+    });
     if (!hasMap) {
       mapBoundsRef.current = null;
       setMapBounds(null);
@@ -215,27 +225,10 @@ export default function HomePage() {
     });
   };
 
-  const locationName = useMemo(() => {
-    if (!hasMap || !mapBounds) {
-      return location.id === 'worldwide' ? 'the world' : location.label;
-    }
-    const counts = new Map<string, number>();
-    for (const place of places) {
-      const key = place.city || place.country;
-      if (!key) continue;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    let best = '';
-    let bestCount = 0;
-    for (const [key, count] of counts) {
-      if (count > bestCount) {
-        best = key;
-        bestCount = count;
-      }
-    }
-    if (bestCount >= 2) return best;
-    return location.label === 'United States' ? 'this area' : location.label;
-  }, [hasMap, mapBounds, places, location]);
+  const locationName = useMemo(
+    () => listLocationName({ hasMap, zoom: mapZoom, places, location }),
+    [hasMap, mapZoom, places, location]
+  );
 
   const panelOpen = Boolean(detailsPlaceId) || addPlaceOpen;
 
