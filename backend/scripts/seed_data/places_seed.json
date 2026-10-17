@@ -32,7 +32,7 @@
     },
     {
       "name": "FIX Medical Group Scottsdale",
-      "place_type": "gym_amenity",
+      "place_type": "business",
       "activity_types": ["cold_plunge", "sauna"],
       "address": "11333 N Scottsdale Rd Suite 140, Scottsdale, AZ 85254, USA",
       "lat": 33.5887091,
@@ -89,25 +89,6 @@
       "lng": -155.991648,
       "website": "https://www.hualalairesort.com/spa/",
       "source_url": "https://www.openstreetmap.org/node/5132030280"
-    },
-    {
-      "name": "To Sua Ocean Trench",
-      "place_type": "nature",
-      "activity_types": ["cold_plunge"],
-      "address": "Lotofaga, Aleipata, Upolu, Samoa",
-      "lat": -14.0438745,
-      "lng": -171.5623183,
-      "source_url": "https://www.openstreetmap.org/way/317700281"
-    },
-    {
-      "name": "Waimea Valley",
-      "place_type": "nature",
-      "activity_types": ["cold_plunge"],
-      "address": "59-864 Kamehameha Highway, Haleiwa, HI 96712, USA",
-      "lat": 21.636374,
-      "lng": -158.0548,
-      "website": "https://www.waimeavalley.net/",
-      "source_url": "https://www.openstreetmap.org/node/4472135689"
     },
     {
       "name": "Löyly",
@@ -318,14 +299,6 @@
       "source_url": "https://www.openstreetmap.org/relation/18238904"
     },
     {
-      "name": "Silver Lake",
-      "place_type": "nature",
-      "activity_types": ["cold_plunge"],
-      "lat": 40.6038899,
-      "lng": -111.5889326,
-      "source_url": "https://www.openstreetmap.org/relation/8466370"
-    },
-    {
       "name": "Thermae-Yu",
       "place_type": "business",
       "activity_types": ["sauna", "cold_plunge"],
@@ -364,16 +337,6 @@
       "lng": 151.2744078,
       "website": "https://icebergs.com.au/contact/",
       "source_url": "https://www.openstreetmap.org/way/173244796"
-    },
-    {
-      "name": "Dragon Hill Spa",
-      "place_type": "business",
-      "activity_types": ["sauna", "cold_plunge"],
-      "address": "40 Hangang-daero 21na-gil, Yongsan-gu, Seoul, South Korea",
-      "lat": 37.5277602,
-      "lng": 126.9639689,
-      "website": "https://english.visitseoul.net/attractions",
-      "source_url": "https://www.openstreetmap.org/way/469022818"
     },
     {
       "name": "Spa Land Centum City",

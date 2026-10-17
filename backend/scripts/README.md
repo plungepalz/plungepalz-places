@@ -24,9 +24,9 @@ Idempotency:
 1. Skip keys already stored in the local state file (default `scripts/seed_data/.seed_places_state.json`, gitignored).
 2. Before each submit, `GET /search?q={name}&lat={lat}&lng={lng}&radius_km=1` and skip a confident match (same normalized name within about 200 m). Matches are written back to the state file.
 
-`--dry-run` prints the exact POST bodies and makes **no** HTTP requests. `--limit N` processes only the first N seed rows.
+`--dry-run` prints the exact POST bodies and makes **no** HTTP requests. `--limit N` processes only the first N seed rows (`N` must be >= 1). `--sleep` (default `0.5`) waits that many seconds between API calls; `--sleep 0` disables it.
 
-A successful run writes created `place_id`s to `--output` (default `scripts/seed_data/.seed_places_created.json`, gitignored) so they can be approved later.
+A successful run **merges** created `place_id`s into `--output` (default `scripts/seed_data/.seed_places_created.json`, gitignored), de-duplicated, so a later partial run does not wipe ids that `review_place.py --from-file` still needs.
 
 ## Review / approve (`review_place.py`)
 
@@ -38,7 +38,7 @@ python scripts/review_place.py --place-id UUID --decision rejected --comments "d
 python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision active
 ```
 
-`--from-file` reads `place_ids` (or a `created` array) from the seed output file. `--limit` approves the first N ids. Do not run this against production unless you intend to flip those places to `active`.
+`--from-file` reads `place_ids` (or a `created` array) from the seed output file. `--limit` (requires `--from-file`, must be >= 1) approves the first N ids. Do not run this against production unless you intend to flip those places to `active`.
 
 ## Other scripts
 

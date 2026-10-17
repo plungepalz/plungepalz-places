@@ -6,6 +6,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 from places_common.validate import validate_submit_body
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -48,28 +50,22 @@ def near_phoenix(entry: dict) -> bool:
 
 
 def near_antimeridian(entry: dict) -> bool:
-    lat = float(entry["lat"])
-    lng = float(entry["lng"])
-    if abs(lng) >= 170:
-        return True
-    blob = f"{entry.get('name', '')} {entry.get('address', '')}".lower()
-    if any(token in blob for token in ("hawaii", "fiji", "new zealand", "samoa", "wailea", "haleiwa")):
-        return True
-    if 18.9 <= lat <= 22.5 and -160.5 <= lng <= -154.5:
-        return True
-    if -47.5 <= lat <= -34.0 and 166.0 <= lng <= 179.0:
-        return True
-    if -19.5 <= lat <= -16.0 and 176.0 <= lng <= 180.0:
-        return True
-    return False
+    """True when |lng| >= 170 (Pacific dateline). Hawaii is counted separately if needed."""
+    return abs(float(entry["lng"])) >= 170
 
 
 def test_seed_file_has_required_coverage_and_valid_payloads():
     seed = _load_seed_mod()
     entries = seed.load_seed_entries(SEED_FILE)
+    names = {entry["name"] for entry in entries}
     assert len(entries) >= 30
     assert sum(1 for e in entries if near_antimeridian(e)) >= 3
     assert sum(1 for e in entries if near_phoenix(e)) >= 3
+    assert names.isdisjoint(
+        {"Silver Lake", "Dragon Hill Spa", "To Sua Ocean Trench", "Waimea Valley"}
+    )
+    fix = next(e for e in entries if e["name"] == "FIX Medical Group Scottsdale")
+    assert fix["place_type"] == "business"
 
     for entry in entries:
         assert entry.get("source_url")
@@ -188,6 +184,8 @@ def test_existing_search_match_skips_submit(tmp_path, monkeypatch):
             str(tmp_path / "out.json"),
             "--base-url",
             "https://example.test/dev",
+            "--sleep",
+            "0",
         ]
     )
     assert seed.run(args) == 0
@@ -229,6 +227,8 @@ def test_submit_writes_state_and_output(tmp_path, monkeypatch):
             str(out_path),
             "--base-url",
             "https://example.test/dev",
+            "--sleep",
+            "0",
         ]
     )
     assert seed.run(args) == 0
@@ -260,3 +260,145 @@ def test_review_place_ids_from_seed_output():
     assert review.place_ids_from_output(payload) == ["p1", "p2", "p3"]
     assert review.place_ids_from_output(["x", {"place_id": "y"}]) == ["x", "y"]
     assert review.place_ids_from_output({"place_id": "solo"}) == ["solo"]
+
+
+def test_sleep_between_api_calls(tmp_path, monkeypatch):
+    seed = _load_seed_mod()
+    sleeps: list[float] = []
+    monkeypatch.setattr(seed.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    def _http(method, url, body=None, timeout=30.0):
+        if method == "GET":
+            return 200, {"places": []}
+        return 201, {
+            "place_id": "new-place",
+            "submission_id": "sub_1",
+            "place_slug": "loyly",
+            "is_approved": False,
+        }
+
+    monkeypatch.setattr(seed, "http_json", _http)
+    seed_file = tmp_path / "places.json"
+    seed_file.write_text(json.dumps({"places": [_sample_entry()]}))
+    args = seed.build_parser().parse_args(
+        [
+            "--seed-file",
+            str(seed_file),
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--output",
+            str(tmp_path / "out.json"),
+            "--base-url",
+            "https://example.test/dev",
+            "--sleep",
+            "0.25",
+        ]
+    )
+    assert seed.run(args) == 0
+    assert sleeps == [0.25]
+
+
+def test_dry_run_does_not_sleep(tmp_path, monkeypatch, capsys):
+    seed = _load_seed_mod()
+    sleeps: list[float] = []
+    monkeypatch.setattr(seed.time, "sleep", lambda seconds: sleeps.append(seconds))
+    seed_file = tmp_path / "places.json"
+    seed_file.write_text(json.dumps({"places": [_sample_entry()]}))
+    args = seed.build_parser().parse_args(
+        [
+            "--seed-file",
+            str(seed_file),
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--output",
+            str(tmp_path / "out.json"),
+            "--dry-run",
+            "--sleep",
+            "0.25",
+        ]
+    )
+    assert seed.run(args) == 0
+    assert sleeps == []
+
+
+def test_created_output_merges_and_dedupes(tmp_path, monkeypatch):
+    seed = _load_seed_mod()
+    out_path = tmp_path / "out.json"
+    out_path.write_text(
+        json.dumps(
+            {
+                "created": [{"key": "old", "place_id": "old-id", "place_name": "Old"}],
+                "place_ids": ["old-id"],
+            }
+        )
+    )
+
+    def _http(method, url, body=None, timeout=30.0):
+        if method == "GET":
+            return 200, {"places": []}
+        return 201, {
+            "place_id": "new-place",
+            "submission_id": "sub_1",
+            "place_slug": "loyly",
+            "is_approved": False,
+        }
+
+    monkeypatch.setattr(seed, "http_json", _http)
+    seed_file = tmp_path / "places.json"
+    seed_file.write_text(json.dumps({"places": [_sample_entry()]}))
+    args = seed.build_parser().parse_args(
+        [
+            "--seed-file",
+            str(seed_file),
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--output",
+            str(out_path),
+            "--base-url",
+            "https://example.test/dev",
+            "--sleep",
+            "0",
+        ]
+    )
+    assert seed.run(args) == 0
+    out = json.loads(out_path.read_text())
+    assert out["place_ids"] == ["old-id", "new-place"]
+    assert [row["place_id"] for row in out["created"]] == ["old-id", "new-place"]
+
+    # Re-run with the same new id already in the file: still one copy.
+    merged = seed.merge_created_output(out, [{"key": "x", "place_id": "new-place"}])
+    assert merged["place_ids"] == ["old-id", "new-place"]
+
+
+def test_seed_rejects_limit_below_one():
+    seed = _load_seed_mod()
+    parser = seed.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--limit", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--limit", "-3"])
+
+
+def test_review_rejects_limit_below_one():
+    review = _load_review_mod()
+    parser = review.build_parser()
+    args = parser.parse_args(
+        ["--from-file", "out.json", "--decision", "active", "--limit", "0"]
+    )
+    with pytest.raises(SystemExit):
+        review.validate_review_args(parser, args)
+    args = parser.parse_args(
+        ["--from-file", "out.json", "--decision", "active", "--limit", "-1"]
+    )
+    with pytest.raises(SystemExit):
+        review.validate_review_args(parser, args)
+
+
+def test_review_rejects_limit_without_from_file():
+    review = _load_review_mod()
+    parser = review.build_parser()
+    args = parser.parse_args(
+        ["--place-id", "place-1", "--decision", "active", "--limit", "2"]
+    )
+    with pytest.raises(SystemExit):
+        review.validate_review_args(parser, args)

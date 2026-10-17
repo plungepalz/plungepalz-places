@@ -108,7 +108,16 @@ def review_one(table, place_id: str, decision: str, comments: str | None) -> dic
     }
 
 
-def main() -> int:
+def validate_review_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.limit is not None and args.from_file is None:
+        parser.error("--limit requires --from-file")
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be >= 1")
+    if bool(args.place_id) == bool(args.from_file):
+        parser.error("provide exactly one of --place-id or --from-file")
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Approve or reject a PlungePalz place")
     parser.add_argument("--place-id", default=None, help="Places_Places.place_id")
     parser.add_argument(
@@ -120,7 +129,7 @@ def main() -> int:
         "--limit",
         type=int,
         default=None,
-        help="When using --from-file, review at most N place_ids (first N in file order)",
+        help="When using --from-file, review at most N place_ids (first N in file order; must be >= 1)",
     )
     parser.add_argument(
         "--decision",
@@ -129,10 +138,13 @@ def main() -> int:
         help="internal_status to set",
     )
     parser.add_argument("--comments", default=None, help="optional internal_comments")
-    args = parser.parse_args()
+    return parser
 
-    if bool(args.place_id) == bool(args.from_file):
-        parser.error("provide exactly one of --place-id or --from-file")
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate_review_args(parser, args)
 
     if args.from_file:
         place_ids = load_place_ids_from_file(Path(args.from_file))

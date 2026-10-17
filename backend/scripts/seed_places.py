@@ -22,6 +22,7 @@ import math
 import os
 import re
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -194,14 +195,67 @@ def find_existing_place(base_url: str, entry: dict[str, Any]) -> dict[str, Any] 
     return None
 
 
+def merge_created_output(existing: Any, created: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge this run's created rows into a previous output file, de-duplicated."""
+    rows: list[dict[str, Any]] = []
+    extra_ids: list[str] = []
+    if isinstance(existing, dict):
+        raw_created = existing.get("created") or []
+        if isinstance(raw_created, list):
+            rows.extend(item for item in raw_created if isinstance(item, dict))
+        extra_ids = [str(pid) for pid in (existing.get("place_ids") or []) if pid]
+    elif isinstance(existing, list):
+        rows.extend(item for item in existing if isinstance(item, dict))
+        extra_ids = [str(item) for item in existing if isinstance(item, str) and item]
+
+    rows.extend(item for item in created if isinstance(item, dict) and item.get("place_id"))
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        place_id = row.get("place_id")
+        if not place_id or place_id in seen:
+            continue
+        seen.add(str(place_id))
+        merged.append(row)
+    for place_id in extra_ids:
+        if place_id not in seen:
+            seen.add(place_id)
+            merged.append({"place_id": place_id})
+    return {
+        "created": merged,
+        "place_ids": [str(row["place_id"]) for row in merged],
+    }
+
+
 def write_created_output(path: Path, created: list[dict[str, Any]]) -> None:
-    save_json(
-        path,
-        {
-            "created": created,
-            "place_ids": [row["place_id"] for row in created],
-        },
-    )
+    existing: Any = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing = {}
+    save_json(path, merge_created_output(existing, created))
+
+
+def parse_positive_limit(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("--limit must be >= 1")
+    return parsed
+
+
+class RequestPacer:
+    """Sleep between API calls so search/submit are not sent back to back."""
+
+    def __init__(self, seconds: float):
+        self.seconds = float(seconds)
+        self._pending = False
+
+    def before_request(self) -> None:
+        if self._pending and self.seconds > 0:
+            time.sleep(self.seconds)
+        self._pending = True
 
 
 def run(args: argparse.Namespace) -> int:
@@ -219,6 +273,7 @@ def run(args: argparse.Namespace) -> int:
 
     dry_run = bool(args.dry_run)
     base_url = None if dry_run else resolve_base_url(args.base_url)
+    pacer = RequestPacer(getattr(args, "sleep", 0.5) or 0.0)
 
     for entry in entries:
         key = seed_key(entry)
@@ -239,6 +294,7 @@ def run(args: argparse.Namespace) -> int:
             continue
 
         try:
+            pacer.before_request()
             existing = find_existing_place(base_url, entry)
         except Exception as exc:
             failed.append({"key": key, "name": name, "reason": f"search: {exc}"})
@@ -254,6 +310,7 @@ def run(args: argparse.Namespace) -> int:
             continue
 
         try:
+            pacer.before_request()
             status, body = http_json("POST", f"{base_url}/submit", payload)
         except Exception as exc:
             failed.append({"key": key, "name": name, "reason": f"submit: {exc}"})
@@ -307,7 +364,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_OUTPUT_FILE),
         help="JSON file of created place_ids for review_place.py --from-file",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Process at most N seed entries")
+    parser.add_argument(
+        "--limit",
+        type=parse_positive_limit,
+        default=None,
+        help="Process at most N seed entries (must be >= 1)",
+    )
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=0.5,
+        help="Seconds to wait between API calls (default 0.5; 0 disables)",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
