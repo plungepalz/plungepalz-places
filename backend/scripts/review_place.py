@@ -6,7 +6,8 @@ same way Places_AdminReview does, so the DynamoDB stream can sync Algolia.
 
 ``--decision active`` flips ``is_approved`` to true (derived).
 ``--decision in_review`` restores the approval slice of a fresh POST /submit
-(internal_status=in_review, is_approved false, reviewed_* / reviewer cleared).
+(internal_status=in_review, is_approved false, internal_comments /
+internal_verified_ts / reviewed_* / reviewer cleared).
 
 IAM needed on the caller: dynamodb:GetItem, dynamodb:UpdateItem on TABLE_PLACES.
 

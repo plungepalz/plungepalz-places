@@ -102,7 +102,7 @@ See [docs/TESTING.md](docs/TESTING.md) and [.cursorrules](.cursorrules) for the 
 
 ### 5. Admin review CLI (DynamoDB, not SigV4)
 
-Approve, reject, or revert a place the same way `Places_AdminReview` does. `--decision in_review` restores the exact approval state of a fresh `POST /submit` (`internal_status=in_review`, `is_approved` false, `reviewed_ts` / `reviewer` and aliases cleared). Algolia updates via the Places_Places stream.
+Approve, reject, or revert a place the same way `Places_AdminReview` does. `--decision in_review` restores the exact approval state of a fresh `POST /submit` (`internal_status=in_review`, `is_approved` false, `internal_comments` / `internal_verified_ts` / `reviewed_ts` / `reviewer` and aliases cleared). Algolia updates via the Places_Places stream.
 
 ```bash
 cd backend

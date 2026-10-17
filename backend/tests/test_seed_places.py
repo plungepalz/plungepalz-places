@@ -428,6 +428,8 @@ def test_review_cli_single_revert(dynamodb_tables):
             "ts_reviewed": "2026-03-01T00:00:00Z",
             "reviewer": "admin",
             "internal_verified": True,
+            "internal_verified_ts": "2026-03-01T00:00:00Z",
+            "internal_comments": "demo approved",
         }
     )
     table.put_item(Item=item)
@@ -444,6 +446,8 @@ def test_review_cli_single_revert(dynamodb_tables):
     assert "reviewed_by" not in stored
     assert "ts_reviewed" not in stored
     assert "reviewer" not in stored
+    assert "internal_comments" not in stored
+    assert "internal_verified_ts" not in stored
 
 
 def test_review_cli_bulk_revert(dynamodb_tables, tmp_path, monkeypatch, capsys):
@@ -489,6 +493,8 @@ def test_review_cli_bulk_revert(dynamodb_tables, tmp_path, monkeypatch, capsys):
         assert "is_approved" not in stored
         assert "reviewed_ts" not in stored
         assert "reviewer" not in stored
+        assert "internal_comments" not in stored
+        assert "internal_verified_ts" not in stored
 
     leftover = table.get_item(Key={"place_id": "bulk-3"})["Item"]
     assert leftover["internal_status"] == "active"

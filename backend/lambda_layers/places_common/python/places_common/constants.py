@@ -6,10 +6,14 @@ VALID_INTERNAL_STATUSES = frozenset({"in_review", "active", "rejected"})
 VALID_VISIBILITY = frozenset({"public", "hidden"})
 VALID_REVIEW_DECISIONS = frozenset({"active", "rejected", "in_review"})
 
-# Approval metadata the active/reject path may persist (or leftover demo writes).
+# Approval/review metadata the active/reject path may persist (or leftover demo writes).
 # decision=in_review REMOVEs these so the item matches a fresh Places_Submit record.
+# Fresh Submit writes internal_verified=false and omits every name below
+# (DATA_SCHEMAS: internal_comments, internal_verified_ts; leftover reviewed_* / is_approved).
 REVIEW_REVERT_REMOVE_ATTRS = (
     "is_approved",
+    "internal_comments",
+    "internal_verified_ts",
     "reviewed_ts",
     "reviewed_by",
     "ts_reviewed",
@@ -21,6 +25,8 @@ REVIEW_APPROVAL_COMPARE_ATTRS = (
     "internal_status",
     "is_approved",
     "internal_verified",
+    "internal_comments",
+    "internal_verified_ts",
     "reviewed_ts",
     "reviewed_by",
     "ts_reviewed",

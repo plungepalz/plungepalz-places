@@ -382,8 +382,9 @@ def review_item_update_kwargs(
 
     No DynamoDB I/O. ``decision=in_review`` restores the approval slice of a
     fresh Places_Submit write: ``internal_status=in_review``,
-    ``internal_verified=false``, and REMOVE of stored approval flags
-    (``is_approved``, ``reviewed_ts``, ``reviewer``, and aliases).
+    ``internal_verified=false``, and REMOVE of review attrs Submit never
+    writes (``internal_comments``, ``internal_verified_ts``, ``is_approved``,
+    ``reviewed_ts``, ``reviewer``, and aliases). Comments are not SET on revert.
     """
     if not ts:
         ts = utc_now()
@@ -391,7 +392,7 @@ def review_item_update_kwargs(
     set_parts = ["internal_status = :st", "ts_last_updated = :ts"]
     values: dict[str, Any] = {":st": decision, ":ts": ts}
 
-    if comments is not None and comments != "":
+    if decision != "in_review" and comments is not None and comments != "":
         set_parts.append("internal_comments = :c")
         values[":c"] = comments
 

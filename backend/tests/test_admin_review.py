@@ -105,7 +105,8 @@ def test_admin_review_revert_matches_fresh_submit_approval_fields(dynamodb_table
         Key={"place_id": place_id},
         UpdateExpression=(
             "SET is_approved = :t, reviewed_ts = :rts, reviewed_by = :rb, "
-            "ts_reviewed = :tr, reviewer = :rv, internal_verified = :iv"
+            "ts_reviewed = :tr, reviewer = :rv, internal_verified = :iv, "
+            "internal_comments = :c, internal_verified_ts = :ivt"
         ),
         ExpressionAttributeValues={
             ":t": True,
@@ -114,6 +115,8 @@ def test_admin_review_revert_matches_fresh_submit_approval_fields(dynamodb_table
             ":tr": "2026-03-01T00:00:00Z",
             ":rv": "admin_user_1",
             ":iv": True,
+            ":c": "demo approved",
+            ":ivt": "2026-03-01T00:00:00Z",
         },
     )
 
@@ -134,6 +137,10 @@ def test_admin_review_revert_matches_fresh_submit_approval_fields(dynamodb_table
         assert attr not in fresh
     assert reverted["internal_verified"] is False
     assert fresh["internal_verified"] is False
+    assert "internal_comments" not in reverted
+    assert "internal_comments" not in fresh
+    assert "internal_verified_ts" not in reverted
+    assert "internal_verified_ts" not in fresh
     assert is_approved(reverted) is False
     assert is_approved(fresh) is False
 
