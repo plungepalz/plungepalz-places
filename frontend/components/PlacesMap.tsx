@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MapGL, { Layer, Marker, Source } from 'react-map-gl/mapbox';
 import type { MapMouseEvent, MapRef } from 'react-map-gl/mapbox';
 import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
+import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
@@ -240,15 +241,18 @@ export default function PlacesMap({
     onHoverPlace(props?.place_id && !props.cluster ? props.place_id : null);
   };
 
-  if (!mapboxToken) {
+  const accessToken = resolveMapboxToken(mapboxToken);
+
+  if (!accessToken) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-[#e8e4dc]">
+      <div data-places-map className="flex h-full w-full items-center justify-center bg-[#e8e4dc]">
         <div className="mx-6 max-w-md rounded-2xl bg-white p-8 text-center shadow-lg">
           <h3 className="text-lg font-semibold text-gray-900">Mapbox token required</h3>
           <p className="mt-2 text-sm leading-relaxed text-gray-600">
-            Add <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">NEXT_PUBLIC_MAPBOX_TOKEN</code> to{' '}
+            Add a real <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">NEXT_PUBLIC_MAPBOX_TOKEN</code> to{' '}
             <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">frontend/.env.local</code> to enable the
-            interactive map. The list and filters still work in mock mode.
+            interactive map. Blank values and the <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">.env.example</code>{' '}
+            placeholder are treated as no token. The list and filters still work.
           </p>
         </div>
       </div>
@@ -258,12 +262,12 @@ export default function PlacesMap({
   const highlightId = hoveredPlaceId || selectedPlaceId || '';
 
   return (
-    <div className="relative h-full w-full">
+    <div data-places-map className="relative h-full w-full">
       <MapGL
         ref={mapRef}
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
         mapStyle="mapbox://styles/mapbox/light-v11"
-        mapboxAccessToken={mapboxToken}
+        mapboxAccessToken={accessToken}
         attributionControl
         style={{ width: '100%', height: '100%' }}
         interactiveLayerIds={imagesReady ? ['clusters', 'unclustered-point'] : []}

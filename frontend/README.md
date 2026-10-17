@@ -22,6 +22,7 @@ cp .env.example .env.local
 ```bash
 aws cloudformation describe-stacks \
   --stack-name plungepalz-places-dev \
+  --profile plungepalz-dev \
   --region us-east-1 \
   --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue" \
   --output text
@@ -55,7 +56,7 @@ Restart `npm run dev` after changing env vars.
 | Symptom | What to check |
 |---|---|
 | Browser console CORS error, or network calls fail from the UI | Serve the app at **http://localhost:3000**. Another origin/port is not on the API allowlist. |
-| Map is a placeholder / “add a token” message | `NEXT_PUBLIC_MAPBOX_TOKEN` is still `pk.your_mapbox_token_here` or missing. List/filters still work. |
+| Map is a placeholder / “add a token” message | `NEXT_PUBLIC_MAPBOX_TOKEN` is missing, blank, or still the `.env.example` placeholder (`pk.your_mapbox_token_here`). The app treats those as no token and shows the map placeholder instead of loading Mapbox. List/filters still work. |
 | `400` with `{"error":{"code":"VALIDATION_ERROR",...}}` | The request params/body failed backend validation. Example: `limit` must be `<= 500`. Field-level `details` names the bad field. A missing place is `404` `{"error":{"code":"NOT_FOUND","message":"Place not found"}}`. |
 
 ## Scripts
@@ -73,7 +74,7 @@ Dev and build use webpack (`--webpack`) because `react-map-gl` v8 does not resol
 
 | Variable | Client? | Purpose |
 |---|---|---|
-| `NEXT_PUBLIC_MAPBOX_TOKEN` | yes | Mapbox GL token |
+| `NEXT_PUBLIC_MAPBOX_TOKEN` | yes | Mapbox GL token. Missing, blank, and `pk.your_mapbox_token_here` count as no token. |
 | `NEXT_PUBLIC_API_BASE_URL` | yes | Places API origin (no hardcoded fallback) |
 | `NEXT_PUBLIC_USE_MOCKS` | yes | `true` forces the in-memory mock client |
 
@@ -119,7 +120,7 @@ With neither `bbox` nor `lat`/`lng`, `/search` returns the **global catalog**, p
 
 ## Add a place
 
-The top bar **Add a place** button opens a **non-modal** dialog (`role="dialog"`, no `aria-modal`, no focus trap) so you can click the map behind it to drop a pin. Escape still closes it; focus moves to the close button on open and is restored on close.
+The top bar **Add a place** button opens a **non-modal** dialog (`role="dialog"`, no `aria-modal`, no focus trap) so you can click the map behind it to drop a pin. Escape closes it only when focus is inside the form or on the map (not when typing in the top-bar search). Focus moves to the close button on open and is restored on close.
 
 - Click the map to drop or move a pin, or choose **Use map center**. Chosen `lat` / `lng` are shown (and can be typed). Without a Mapbox token, use the current location chip’s coordinates instead.
 - Address is required unless place type is Nature. **Find on map** geocodes the address with Mapbox when `NEXT_PUBLIC_MAPBOX_TOKEN` is set; without a token it is skipped with a short note.
