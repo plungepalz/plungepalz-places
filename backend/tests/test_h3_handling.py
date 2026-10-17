@@ -50,22 +50,26 @@ def test_compute_h3_when_h3_unavailable():
     """Test that _compute_h3 returns None values when h3 is not available."""
     lat, lng = 40.7607, -111.8743
     
-    # Save h3 module if it exists
-    h3_module = sys.modules.get("h3")
+    # Save and remove h3 from sys.modules
+    h3_module = sys.modules.pop("h3", None)
     
     try:
-        # Remove h3 from sys.modules to simulate it not being installed
-        if "h3" in sys.modules:
-            del sys.modules["h3"]
+        # Mock builtins.__import__ to raise ImportError for h3
+        original_import = __import__
         
-        # Now call _compute_h3 which will try to import h3 and fail
-        h3_r7, h3_r5, h3_r4 = _compute_h3(lat, lng)
+        def mock_import(name, *args, **kwargs):
+            if name == "h3":
+                raise ImportError("No module named 'h3'")
+            return original_import(name, *args, **kwargs)
         
-        assert h3_r7 is None, f"Expected None when h3 unavailable, got: {h3_r7}"
-        assert h3_r5 is None, f"Expected None when h3 unavailable, got: {h3_r5}"
-        assert h3_r4 is None, f"Expected None when h3 unavailable, got: {h3_r4}"
+        with patch("builtins.__import__", side_effect=mock_import):
+            h3_r7, h3_r5, h3_r4 = _compute_h3(lat, lng)
+            
+            assert h3_r7 is None, f"Expected None when h3 unavailable, got: {h3_r7}"
+            assert h3_r5 is None, f"Expected None when h3 unavailable, got: {h3_r5}"
+            assert h3_r4 is None, f"Expected None when h3 unavailable, got: {h3_r4}"
     finally:
-        # Restore h3 module if it was installed
+        # Restore h3 module
         if h3_module is not None:
             sys.modules["h3"] = h3_module
 

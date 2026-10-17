@@ -2,7 +2,17 @@
 
 Testing conventions are defined in [`.cursorrules`](../.cursorrules). Summary:
 
-## Structure
+## Automated Tests (pytest)
+
+Run the test suite:
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest tests
+```
+
+## Manual Test Structure
 
 - **Test folders:** `tests/{LambdaName}/Test_XXX/`
 - **Example:** `tests/Places_SubmitAIAutofill/Test_001/`
