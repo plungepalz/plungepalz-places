@@ -216,6 +216,18 @@ Resources:
     Properties:
       Name: plungepalz-places-dev-api
       StageName: dev
+      # SAM's ApiGatewayDeployment.make_auto_deployable hashes str(swagger) (and
+      # Domain / function names). Cors and GatewayResponses keep Fn::Sub
+      # "'${AllowedOrigin}'" — SamApi.to_cloudformation does not
+      # resolve_parameter_refs those properties — so a parameter-only change
+      # updates RestApi Body after CloudFormation substitution but leaves the
+      # Deployment logical id unchanged (dev stage keeps the old MOCK OPTIONS
+      # and GatewayResponses). BinaryMediaTypes IS resolved before it is
+      # copied into swagger as x-amazon-apigateway-binary-media-types, so the
+      # literal origin becomes part of the hash. Vendor type with a parameter
+      # never matches JSON/form requests (not */* or type/*).
+      BinaryMediaTypes:
+        - !Sub "application/vnd.plungepalz.allowed-origin; origin=${AllowedOrigin}"
       Cors:
         AllowOrigin: !Sub "'${AllowedOrigin}'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
