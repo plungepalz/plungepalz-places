@@ -1,0 +1,778 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  PlungePalz Places API - DEV Environment
+  Region: us-east-1
+  Self-contained dev stack with DynamoDB, Lambda, API Gateway, and Algolia integration
+
+Parameters:
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+    Description: Comma-separated CORS allowed origins
+  
+  BudgetAmountUSD:
+    Type: Number
+    Default: 20
+    Description: Monthly budget alert threshold in USD
+  
+  BudgetNotificationEmail:
+    Type: String
+    Description: Email address for budget alerts
+    AllowedPattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 30
+    MemorySize: 256
+    Tags:
+      project: plungepalz-places
+      env: dev
+    Environment:
+      Variables:
+        ENVIRONMENT: dev
+
+Resources:
+  # ==============================================================
+  # DynamoDB Tables
+  # ==============================================================
+  
+  PlacesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Places_Places
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: place_id
+          AttributeType: S
+        - AttributeName: internal_status
+          AttributeType: S
+        - AttributeName: ts_created
+          AttributeType: S
+        - AttributeName: place_slug
+          AttributeType: S
+        - AttributeName: h3_r7
+          AttributeType: S
+        - AttributeName: h3_r5
+          AttributeType: S
+        - AttributeName: h3_r4
+          AttributeType: S
+      KeySchema:
+        - AttributeName: place_id
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      GlobalSecondaryIndexes:
+        - IndexName: status-ts-index
+          KeySchema:
+            - AttributeName: internal_status
+              KeyType: HASH
+            - AttributeName: ts_created
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: slug-index
+          KeySchema:
+            - AttributeName: place_slug
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: h3-r7-index
+          KeySchema:
+            - AttributeName: h3_r7
+              KeyType: HASH
+            - AttributeName: ts_created
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: h3-r5-index
+          KeySchema:
+            - AttributeName: h3_r5
+              KeyType: HASH
+            - AttributeName: ts_created
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: h3-r4-index
+          KeySchema:
+            - AttributeName: h3_r4
+              KeyType: HASH
+            - AttributeName: ts_created
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  SubmissionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Places_Submissions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: submission_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: submission_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  # ==============================================================
+  # SSM Parameters
+  # Note: Parameters are created externally via deploy.sh --env-file
+  # or manually via setup-ssm-params.sh. The template does NOT create them
+  # to avoid hardcoding secrets or exposing them in CloudFormation.
+  # ==============================================================
+
+  # ==============================================================
+  # Lambda Layer
+  # ==============================================================
+  
+  GeneratePlaceWithAILayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: plungepalz-places-dev-generate-place-ai
+      Description: Anthropic SDK and AI generation logic for PlungePalz Places Dev
+      ContentUri: ../../lambda_layers/generate_place_with_ai/
+      CompatibleRuntimes:
+        - python3.13
+        - python3.12
+        - python3.11
+    Metadata:
+      BuildMethod: python3.13
+
+  # ==============================================================
+  # Lambda Functions
+  # ==============================================================
+
+  PlacesSearchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Places_Search
+      CodeUri: ../../lambda_functions/Places_Search/
+      Handler: index.handler
+      Description: Search places by geo, type, activity
+      Role: !GetAtt PlacesSearchRole.Arn
+      Environment:
+        Variables:
+          TABLE_PLACES: !Ref PlacesTable
+          ALGOLIA_APP_ID_PARAM: /plungepalz-places-dev/algolia/app_id
+          ALGOLIA_SEARCH_KEY_PARAM: /plungepalz-places-dev/algolia/search_api_key
+      LoggingConfig:
+        LogGroup: !Ref PlacesSearchLogGroup
+      Tags:
+        project: plungepalz-places
+        env: dev
+
+  PlacesGetByIDFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Places_GetByID
+      CodeUri: ../../lambda_functions/Places_GetByID/
+      Handler: index.handler
+      Description: Fetch single place by place_id
+      Role: !GetAtt PlacesGetByIDRole.Arn
+      Environment:
+        Variables:
+          TABLE_PLACES: !Ref PlacesTable
+      LoggingConfig:
+        LogGroup: !Ref PlacesGetByIDLogGroup
+      Tags:
+        project: plungepalz-places
+        env: dev
+
+  PlacesSubmitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Places_Submit
+      CodeUri: ../../lambda_functions/Places_Submit/
+      Handler: index.handler
+      Description: Create submission with verification codes
+      Role: !GetAtt PlacesSubmitRole.Arn
+      Layers:
+        - !Ref GeneratePlaceWithAILayer
+      Environment:
+        Variables:
+          TABLE_SUBMISSIONS: !Ref SubmissionsTable
+          TABLE_PLACES: !Ref PlacesTable
+          GOOGLE_PLACES_API_KEY_PARAM: /plungepalz-places-dev/google/places_api_key
+          ANTHROPIC_API_KEY_PARAM: /plungepalz-places-dev/anthropic/api_key
+          ANTHROPIC_MODEL_ID: claude-3-5-haiku-latest
+      LoggingConfig:
+        LogGroup: !Ref PlacesSubmitLogGroup
+      Tags:
+        project: plungepalz-places
+        env: dev
+
+  PlacesAlgoliaSyncFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Places_AlgoliaSync
+      CodeUri: ../../lambda_functions/Places_AlgoliaSync/
+      Handler: index.handler
+      Description: Sync Places_Places DynamoDB stream to Algolia
+      Role: !GetAtt PlacesAlgoliaSyncRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          TABLE_PLACES: !Ref PlacesTable
+          ALGOLIA_APP_ID_PARAM: /plungepalz-places-dev/algolia/app_id
+          ALGOLIA_WRITE_KEY_PARAM: /plungepalz-places-dev/algolia/write_api_key
+      Events:
+        DynamoDBStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt PlacesTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            MaximumRetryAttempts: 2
+      LoggingConfig:
+        LogGroup: !Ref PlacesAlgoliaSyncLogGroup
+      Tags:
+        project: plungepalz-places
+        env: dev
+
+  PlacesAdminReviewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Places_AdminReview
+      CodeUri: ../../lambda_functions/Places_AdminReview/
+      Handler: index.handler
+      Description: Admin review - update internal_status
+      Role: !GetAtt PlacesAdminReviewRole.Arn
+      Environment:
+        Variables:
+          TABLE_PLACES: !Ref PlacesTable
+      LoggingConfig:
+        LogGroup: !Ref PlacesAdminReviewLogGroup
+      Tags:
+        project: plungepalz-places
+        env: dev
+
+  # ==============================================================
+  # CloudWatch Log Groups (14-day retention)
+  # ==============================================================
+
+  PlacesSearchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/Places_Search
+      RetentionInDays: 14
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesGetByIDLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/Places_GetByID
+      RetentionInDays: 14
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesSubmitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/Places_Submit
+      RetentionInDays: 14
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesAlgoliaSyncLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/Places_AlgoliaSync
+      RetentionInDays: 14
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesAdminReviewLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/Places_AdminReview
+      RetentionInDays: 14
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  # ==============================================================
+  # IAM Roles (one per function, least privilege)
+  # ==============================================================
+
+  PlacesSearchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: plungepalz-places-dev-search-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:GetItem
+                Resource:
+                  - !GetAtt PlacesTable.Arn
+                  - !Sub "${PlacesTable.Arn}/index/*"
+        - PolicyName: SSMReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/app_id"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/search_api_key"
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesGetByIDRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: plungepalz-places-dev-getbyid-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource:
+                  - !GetAtt PlacesTable.Arn
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesSubmitRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: plungepalz-places-dev-submit-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBWriteAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !GetAtt SubmissionsTable.Arn
+                  - !GetAtt PlacesTable.Arn
+        - PolicyName: SSMReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/google/*"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/anthropic/*"
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesAlgoliaSyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: plungepalz-places-dev-algolia-sync-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBStreamReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetRecords
+                  - dynamodb:GetShardIterator
+                  - dynamodb:DescribeStream
+                  - dynamodb:ListStreams
+                Resource:
+                  - !GetAtt PlacesTable.StreamArn
+        - PolicyName: SSMReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/app_id"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/write_api_key"
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesAdminReviewRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: plungepalz-places-dev-admin-review-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBWriteAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !GetAtt PlacesTable.Arn
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  # ==============================================================
+  # API Gateway REST API
+  # ==============================================================
+
+  PlacesApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: plungepalz-places-dev-api
+      StageName: dev
+      Cors:
+        AllowOrigin: !Sub
+          - "'${Origins}'"
+          - Origins: !Join ["','", !Ref AllowedOrigins]
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowMethods: "'GET,POST,OPTIONS'"
+        MaxAge: "'600'"
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub
+                - "'${Origin}'"
+                - Origin: !Select [0, !Ref AllowedOrigins]
+              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub
+                - "'${Origin}'"
+                - Origin: !Select [0, !Ref AllowedOrigins]
+              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      MethodSettings:
+        - ResourcePath: "/search"
+          HttpMethod: GET
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+        - ResourcePath: "/submit"
+          HttpMethod: POST
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+      Tags:
+        project: plungepalz-places
+        env: dev
+
+  # ==============================================================
+  # API Gateway Routes
+  # ==============================================================
+
+  # GET /search
+  PlacesSearchApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PlacesSearchFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesApi}/*"
+
+  PlacesSearchApiIntegration:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ResourceId: !GetAtt PlacesSearchResource.ResourceId
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PlacesSearchFunction.Arn}/invocations"
+
+  PlacesSearchResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ParentId: !GetAtt PlacesApi.RootResourceId
+      PathPart: search
+
+  # GET /place/{place_id}
+  PlacesGetByIDApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PlacesGetByIDFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesApi}/*"
+
+  PlacesGetByIDApiIntegration:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ResourceId: !GetAtt PlacePlaceIdResource.ResourceId
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PlacesGetByIDFunction.Arn}/invocations"
+
+  PlaceResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ParentId: !GetAtt PlacesApi.RootResourceId
+      PathPart: place
+
+  PlacePlaceIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ParentId: !GetAtt PlaceResource.ResourceId
+      PathPart: "{place_id}"
+
+  # POST /submit
+  PlacesSubmitApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PlacesSubmitFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesApi}/*"
+
+  PlacesSubmitApiIntegration:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ResourceId: !GetAtt SubmitResource.ResourceId
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PlacesSubmitFunction.Arn}/invocations"
+
+  SubmitResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ParentId: !GetAtt PlacesApi.RootResourceId
+      PathPart: submit
+
+  # POST /plungepalz_admin/review (AWS_IAM auth)
+  PlacesAdminReviewApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PlacesAdminReviewFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesApi}/*"
+
+  PlacesAdminReviewApiIntegration:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ResourceId: !GetAtt AdminReviewResource.ResourceId
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PlacesAdminReviewFunction.Arn}/invocations"
+
+  AdminResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ParentId: !GetAtt PlacesApi.RootResourceId
+      PathPart: plungepalz_admin
+
+  AdminReviewResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesApi
+      ParentId: !GetAtt AdminResource.ResourceId
+      PathPart: review
+
+  # ==============================================================
+  # AWS Budget
+  # ==============================================================
+
+  PlacesBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: plungepalz-places-dev-monthly-budget
+        BudgetLimit:
+          Amount: !Ref BudgetAmountUSD
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+        CostFilters:
+          TagKeyValue:
+            - "user:project$plungepalz-places"
+            - "user:env$dev"
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetNotificationEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetNotificationEmail
+
+# ==============================================================
+# Outputs
+# ==============================================================
+
+Outputs:
+  ApiBaseUrl:
+    Description: API Gateway base URL
+    Value: !Sub "https://${PlacesApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
+    Export:
+      Name: plungepalz-places-dev-api-url
+
+  PlacesTableName:
+    Description: DynamoDB Places table name
+    Value: !Ref PlacesTable
+    Export:
+      Name: plungepalz-places-dev-places-table
+
+  SubmissionsTableName:
+    Description: DynamoDB Submissions table name
+    Value: !Ref SubmissionsTable
+    Export:
+      Name: plungepalz-places-dev-submissions-table
+
+  PlacesSearchFunctionName:
+    Description: Places_Search Lambda function name
+    Value: !Ref PlacesSearchFunction
+
+  PlacesGetByIDFunctionName:
+    Description: Places_GetByID Lambda function name
+    Value: !Ref PlacesGetByIDFunction
+
+  PlacesSubmitFunctionName:
+    Description: Places_Submit Lambda function name
+    Value: !Ref PlacesSubmitFunction
+
+  PlacesAlgoliaSyncFunctionName:
+    Description: Places_AlgoliaSync Lambda function name
+    Value: !Ref PlacesAlgoliaSyncFunction
+
+  PlacesAdminReviewFunctionName:
+    Description: Places_AdminReview Lambda function name
+    Value: !Ref PlacesAdminReviewFunction
+
+  LayerArn:
+    Description: Generate Place with AI Lambda Layer ARN
+    Value: !Ref GeneratePlaceWithAILayer
+    Export:
+      Name: plungepalz-places-dev-layer-arn
+
+  StackRegion:
+    Description: Stack region
+    Value: !Ref AWS::Region
+
+  SSMParameterPrefix:
+    Description: SSM Parameter Store prefix for secrets
+    Value: /plungepalz-places-dev
