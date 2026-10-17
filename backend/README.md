@@ -75,11 +75,13 @@ For deployed Lambdas, configure via CloudFormation parameters or the AWS console
 
 ### 3. Upload the Lambda Layer
 
-Package and upload the `generate_place_with_ai` layer (includes `anthropic` SDK):
+Package and upload the `generate_place_with_ai` layer (includes `anthropic` SDK and `h3`):
 
 ```bash
 cd lambda_layers/generate_place_with_ai
-pip install -r requirements.txt -t python/
+pip install --platform manylinux2014_x86_64 --only-binary=:all: \
+  --implementation cp --python-version 3.14 \
+  -r requirements.txt -t python/
 zip -r generate_place_with_ai.zip python/
 aws lambda publish-layer-version \
   --layer-name generate_place_with_ai \

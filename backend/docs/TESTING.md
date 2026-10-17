@@ -22,7 +22,7 @@ python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live          
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live --agent-sdk   # Agent SDK (WebFetch/WebSearch)
 ```
 
-For `--agent-sdk`: install `pip install -r layers/generate_place_with_ai/requirements-agent-sdk.txt` first.
+For `--agent-sdk`: install `pip install -r lambda_layers/generate_place_with_ai/requirements-agent-sdk.txt` first.
 
 ## Workflow
 
