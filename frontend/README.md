@@ -4,7 +4,7 @@ Local Next.js app for browsing a global map of sauna and cold plunge locations. 
 
 ## Setup
 
-Requires **Node.js 22 or later** (`mapbox-gl` does not install cleanly on older Node).
+Requires **Node.js 22 or later** (`mapbox-gl` does not install cleanly on older Node). `frontend/.nvmrc` pins 22; `package.json` `engines.node` is `>=22`.
 
 ```bash
 cd frontend
@@ -81,7 +81,7 @@ With neither `bbox` nor `lat`/`lng`, `/search` returns the **global catalog**, p
 
 **POST /submit body:** `place_name`, `place_type`, `activity_types` (non-empty `cold_plunge`/`sauna`), `lat`, `lng` (required; not latitude/longitude), `address` (required unless nature), optional `description` and `email`. **201:** `{ submission_id, place_id, place_slug, is_approved: false }`. No verification step.
 
-**Errors:** `{ error: { code, message, details? } }`. `details` is the per-field map on 400s from `/submit`. The client also accepts a defensive `fields` alias.
+**Errors:** `{ error: { code, message, details? } }`. `details` is the per-field map on 400s from `/submit`.
 
 ## Layout
 
