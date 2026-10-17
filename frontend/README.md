@@ -69,11 +69,13 @@ This supersedes `backend/docs/API_REFERENCE.md` where they differ (lead-engineer
 
 **GET /search response:** `{ places, total, page, limit, has_more }`
 
-Each place: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types[]`, `description`, `cover_image` (url\|null), `lat`, `lng` (numbers), `is_approved` (bool), `created_ts`.
+Each place: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types[]`, `description`, `cover_image` (url\|null), `lat`, `lng` (numbers), `is_approved` (bool), `ts_created`.
+
+With neither `bbox` nor `lat`/`lng`, `/search` returns the **global catalog**, paginated, newest first by `ts_created`. Mocks sort the same way.
 
 **Approval:** show the Approved tag only when `is_approved === true`. Pending submissions come back with `is_approved: false`. Rejected/hidden places are excluded server-side. Public payloads do **not** expose `internal_status` or `internal_comments`.
 
-**GET /place/{place_id}:** full public record plus `is_approved`; 404 if missing.
+**GET /place/{place_id}:** flat public object — search summary fields plus optional `place_website_url`, `amenities[]`, `tags[]`, `place_type_metadata{}`, `external_ratings_ai_generated{}`, `hours_of_operation`, `ts_last_updated`. Missing optionals are omitted; the details drawer skips them. 404 if not found.
 
 **POST /submit body:** `place_name`, `place_type`, `activity_types`, `lat`, `lng` (required), `address` (required unless nature), optional `description` and `email`. **201:** `{ submission_id, place_id, place_slug, is_approved: false }`. No verification step.
 
@@ -88,3 +90,8 @@ Sweatpals-style map-first view:
 - Right / background: full-screen Mapbox map. Clusters = black teardrop with count. Single places = orange teardrop with cover image (icon fallback). Zoom +/− and locate-me at bottom right
 - Map move (debounced) re-queries `/search` with `bbox`; list shows what’s in view
 - Hover/select syncs card ↔ pin; click opens a details drawer via `GET /place/{place_id}`
+
+## Known MVP limits
+
+- **Map clustering is client-side only.** Supercluster runs on the current `/search` result set. Viewport queries request `limit=500` (API max) so clusters are meaningful, but any places beyond that page are not clustered until you Load more. There is no server cluster endpoint yet.
+- Mock mode is the default until `NEXT_PUBLIC_API_BASE_URL` is set (dev URL still TBD).

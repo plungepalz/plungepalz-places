@@ -16,7 +16,8 @@ const PlacesMap = dynamic(() => import('@/components/PlacesMap'), {
   loading: () => <div className="h-full w-full bg-[#e8e4dc]" />,
 });
 
-const PAGE_SIZE = 20;
+/** API max. Supercluster only sees this page of /search results (known MVP limit). */
+const SEARCH_LIMIT = 500;
 const DEFAULT_LOCATION = LOCATION_PRESETS[1]; // United States
 
 export default function HomePage() {
@@ -53,7 +54,7 @@ export default function HomePage() {
 
   const buildParams = useCallback(
     (pageNum: number, bounds: MapBounds | null): SearchParams => {
-      const params: SearchParams = { page: pageNum, limit: PAGE_SIZE };
+      const params: SearchParams = { page: pageNum, limit: SEARCH_LIMIT };
       if (searchQuery.trim()) params.q = searchQuery.trim();
       if (selectedActivities.length > 0) params.activity_types = selectedActivities.join(',');
       if (selectedPlaceTypes.length > 0) params.place_type = selectedPlaceTypes.join(',');

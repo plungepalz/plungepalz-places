@@ -5,12 +5,44 @@ import { isApproved } from '@/lib/approval';
 import { client } from '@/lib/client';
 import { isPlacesApiError } from '@/lib/errors';
 import { ACTIVITY_LABELS, formatLocation, formatPlaceType } from '@/lib/labels';
-import type { PlaceDetail } from '@/lib/types';
+import type { ExternalRatingsAiGenerated, PlaceDetail } from '@/lib/types';
 import CoverImage from './CoverImage';
 
 interface PlaceDetailsPanelProps {
   placeId: string;
   onClose: () => void;
+}
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function hasRatings(ratings?: ExternalRatingsAiGenerated): boolean {
+  return Boolean(ratings && (ratings.google || ratings.classpass));
+}
+
+function MetadataBlock({ metadata }: { metadata: Record<string, unknown> }) {
+  const entries = Object.entries(metadata).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (entries.length === 0) return null;
+  return (
+    <div>
+      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Details</h4>
+      <dl className="space-y-1 text-sm text-gray-800">
+        {entries.map(([key, value]) => (
+          <div key={key} className="flex justify-between gap-4">
+            <dt className="capitalize text-gray-500">{key.replace(/_/g, ' ')}</dt>
+            <dd className="text-right">
+              {typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+                ? String(value)
+                : JSON.stringify(value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
 }
 
 export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPanelProps) {
@@ -81,45 +113,94 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
             <div>
               <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Location</h4>
               <p className="text-gray-900">
-                {place.address && (
+                {place.address ? (
                   <>
                     {place.address}
                     <br />
                   </>
-                )}
+                ) : null}
                 {formatLocation(place.city, place.state_province)}
                 {place.country ? ` · ${place.country}` : ''}
               </p>
             </div>
-            <div>
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Activities</h4>
-              <div className="flex flex-wrap gap-2">
-                {place.activity_types.map((activity) => (
-                  <span
-                    key={activity}
-                    className="rounded-full bg-orange-50 px-3 py-1 text-sm font-medium text-orange-700"
-                  >
-                    {ACTIVITY_LABELS[activity]}
-                  </span>
-                ))}
+            {place.activity_types.length > 0 && (
+              <div>
+                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Activities</h4>
+                <div className="flex flex-wrap gap-2">
+                  {place.activity_types.map((activity) => (
+                    <span
+                      key={activity}
+                      className="rounded-full bg-orange-50 px-3 py-1 text-sm font-medium text-orange-700"
+                    >
+                      {ACTIVITY_LABELS[activity]}
+                    </span>
+                  ))}
+                </div>
               </div>
-            </div>
-            {place.description && (
+            )}
+            {place.hours_of_operation ? (
+              <div>
+                <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Hours</h4>
+                <p className="text-gray-800">{place.hours_of_operation}</p>
+              </div>
+            ) : null}
+            {place.description ? (
               <div>
                 <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Description</h4>
                 <p className="leading-relaxed text-gray-700">{place.description}</p>
               </div>
-            )}
-            {place.amenities && place.amenities.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {place.amenities.map((amenity) => (
-                  <span key={amenity} className="rounded-full bg-gray-100 px-3 py-1 text-sm capitalize text-gray-700">
-                    {amenity}
-                  </span>
-                ))}
+            ) : null}
+            {place.amenities && place.amenities.length > 0 ? (
+              <div>
+                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Amenities</h4>
+                <div className="flex flex-wrap gap-2">
+                  {place.amenities.map((amenity) => (
+                    <span key={amenity} className="rounded-full bg-gray-100 px-3 py-1 text-sm capitalize text-gray-700">
+                      {amenity}
+                    </span>
+                  ))}
+                </div>
               </div>
-            )}
-            {place.place_website_url && (
+            ) : null}
+            {place.tags && place.tags.length > 0 ? (
+              <div>
+                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Tags</h4>
+                <div className="flex flex-wrap gap-2">
+                  {place.tags.map((tag) => (
+                    <span key={tag} className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
+                      {tag.replace(/_/g, ' ')}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {place.place_type_metadata && Object.keys(place.place_type_metadata).length > 0 ? (
+              <MetadataBlock metadata={place.place_type_metadata} />
+            ) : null}
+            {hasRatings(place.external_ratings_ai_generated) ? (
+              <div>
+                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Ratings</h4>
+                <ul className="space-y-1 text-sm text-gray-800">
+                  {place.external_ratings_ai_generated?.google ? (
+                    <li>
+                      Google {place.external_ratings_ai_generated.google.rating_score}
+                      {place.external_ratings_ai_generated.google.count_string
+                        ? ` (${place.external_ratings_ai_generated.google.count_string})`
+                        : ''}
+                    </li>
+                  ) : null}
+                  {place.external_ratings_ai_generated?.classpass ? (
+                    <li>
+                      ClassPass {place.external_ratings_ai_generated.classpass.rating_score}
+                      {place.external_ratings_ai_generated.classpass.count_string
+                        ? ` (${place.external_ratings_ai_generated.classpass.count_string})`
+                        : ''}
+                    </li>
+                  ) : null}
+                </ul>
+              </div>
+            ) : null}
+            {place.place_website_url ? (
               <a
                 href={place.place_website_url}
                 target="_blank"
@@ -128,7 +209,14 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
               >
                 Visit website
               </a>
-            )}
+            ) : null}
+            {place.ts_last_updated || place.ts_created ? (
+              <p className="text-xs text-gray-400">
+                {place.ts_last_updated ? `Updated ${formatTimestamp(place.ts_last_updated)}` : null}
+                {place.ts_last_updated && place.ts_created ? ' · ' : null}
+                {place.ts_created ? `Added ${formatTimestamp(place.ts_created)}` : null}
+              </p>
+            ) : null}
           </div>
         ) : null}
       </div>

@@ -25,7 +25,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 40.7608,
     lng: -111.891,
     is_approved: true,
-    created_ts: '2025-02-20T12:00:00Z',
+    ts_created: '2025-02-20T12:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000002',
@@ -42,7 +42,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 40.5974,
     lng: -111.5853,
     is_approved: true,
-    created_ts: '2025-02-18T10:00:00Z',
+    ts_created: '2025-02-18T10:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000025',
@@ -59,7 +59,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 40.7624,
     lng: -111.8872,
     is_approved: true,
-    created_ts: '2025-03-08T12:00:00Z',
+    ts_created: '2025-03-08T12:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000026',
@@ -76,7 +76,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 40.7589,
     lng: -111.8955,
     is_approved: false,
-    created_ts: '2026-02-12T09:00:00Z',
+    ts_created: '2026-02-12T09:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000027',
@@ -93,7 +93,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 40.7468,
     lng: -111.8734,
     is_approved: false,
-    created_ts: '2026-01-30T16:00:00Z',
+    ts_created: '2026-01-30T16:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000003',
@@ -110,7 +110,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 33.9924,
     lng: -118.4704,
     is_approved: true,
-    created_ts: '2025-02-15T08:00:00Z',
+    ts_created: '2025-02-15T08:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000004',
@@ -127,7 +127,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 37.7596,
     lng: -122.4269,
     is_approved: false,
-    created_ts: '2026-01-10T14:00:00Z',
+    ts_created: '2026-01-10T14:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000005',
@@ -144,7 +144,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 40.7194,
     lng: -73.9573,
     is_approved: true,
-    created_ts: '2025-03-01T09:00:00Z',
+    ts_created: '2025-03-01T09:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000021',
@@ -161,7 +161,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 40.7538,
     lng: -74.0019,
     is_approved: false,
-    created_ts: '2026-01-18T12:00:00Z',
+    ts_created: '2026-01-18T12:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000028',
@@ -178,7 +178,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 40.7446,
     lng: -73.9903,
     is_approved: true,
-    created_ts: '2025-04-02T11:00:00Z',
+    ts_created: '2025-04-02T11:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000006',
@@ -195,7 +195,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 47.7623,
     lng: -122.2054,
     is_approved: true,
-    created_ts: '2025-02-25T11:00:00Z',
+    ts_created: '2025-02-25T11:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000007',
@@ -212,7 +212,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 39.7539,
     lng: -105.0006,
     is_approved: true,
-    created_ts: '2025-02-12T07:00:00Z',
+    ts_created: '2025-02-12T07:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000008',
@@ -229,7 +229,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 60.1514,
     lng: 24.9275,
     is_approved: true,
-    created_ts: '2025-01-05T13:00:00Z',
+    ts_created: '2025-01-05T13:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000009',
@@ -246,7 +246,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 60.1877,
     lng: 24.9607,
     is_approved: true,
-    created_ts: '2025-01-20T15:00:00Z',
+    ts_created: '2025-01-20T15:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000010',
@@ -263,7 +263,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 64.1452,
     lng: -22.0156,
     is_approved: true,
-    created_ts: '2025-01-15T16:00:00Z',
+    ts_created: '2025-01-15T16:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000011',
@@ -280,7 +280,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 63.5697,
     lng: -19.6008,
     is_approved: false,
-    created_ts: '2026-02-01T10:00:00Z',
+    ts_created: '2026-02-01T10:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000012',
@@ -297,7 +297,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 52.5238,
     lng: 13.369,
     is_approved: true,
-    created_ts: '2025-02-08T12:00:00Z',
+    ts_created: '2025-02-08T12:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000013',
@@ -314,7 +314,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 35.6938,
     lng: 139.7036,
     is_approved: true,
-    created_ts: '2025-02-22T06:00:00Z',
+    ts_created: '2025-02-22T06:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000014',
@@ -331,7 +331,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: -33.8933,
     lng: 151.2753,
     is_approved: true,
-    created_ts: '2025-01-28T09:00:00Z',
+    ts_created: '2025-01-28T09:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000015',
@@ -348,7 +348,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 50.1163,
     lng: -122.9574,
     is_approved: true,
-    created_ts: '2025-02-05T11:00:00Z',
+    ts_created: '2025-02-05T11:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000016',
@@ -365,7 +365,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 51.4254,
     lng: -116.1773,
     is_approved: false,
-    created_ts: '2026-01-22T14:00:00Z',
+    ts_created: '2026-01-22T14:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000017',
@@ -382,7 +382,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 51.529,
     lng: -0.0751,
     is_approved: true,
-    created_ts: '2025-02-17T10:00:00Z',
+    ts_created: '2025-02-17T10:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000018',
@@ -399,7 +399,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 52.3759,
     lng: 4.8866,
     is_approved: true,
-    created_ts: '2025-02-10T13:00:00Z',
+    ts_created: '2025-02-10T13:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000019',
@@ -416,7 +416,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 25.7275,
     lng: -80.242,
     is_approved: true,
-    created_ts: '2025-02-14T08:00:00Z',
+    ts_created: '2025-02-14T08:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000020',
@@ -433,7 +433,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 30.2638,
     lng: -97.7725,
     is_approved: true,
-    created_ts: '2025-02-11T09:00:00Z',
+    ts_created: '2025-02-11T09:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000022',
@@ -450,7 +450,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 45.5697,
     lng: -122.6727,
     is_approved: false,
-    created_ts: '2026-02-05T15:00:00Z',
+    ts_created: '2026-02-05T15:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000023',
@@ -467,7 +467,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 41.8956,
     lng: -87.6769,
     is_approved: true,
-    created_ts: '2025-03-03T10:00:00Z',
+    ts_created: '2025-03-03T10:00:00Z',
   },
   {
     place_id: '1a2b3c4d-e5f6-7890-abcd-000000000024',
@@ -484,28 +484,35 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     lat: 47.4344,
     lng: -121.7723,
     is_approved: true,
-    created_ts: '2025-02-19T11:00:00Z',
+    ts_created: '2025-02-19T11:00:00Z',
   },
 ];
 
 export const MOCK_PLACE_DETAILS: Record<string, PlaceDetail> = Object.fromEntries(
-  MOCK_PLACES.map((place) => [
-    place.place_id,
-    {
-      ...place,
-      amenities: place.place_type === 'nature' ? ['parking'] : ['showers', 'lockers', 'towels'],
-      place_website_url:
-        place.place_type === 'business' || place.place_type === 'gym_amenity'
-          ? `https://example.com/${place.place_slug}`
-          : null,
-      tags: place.activity_types,
-      has_plungepalz_discount: place.is_approved && place.place_type === 'business',
-      images: place.cover_image ? [{ url: place.cover_image }] : [],
-      header_image: place.cover_image,
-      place_type_metadata:
-        place.place_type === 'nature'
-          ? { access_type: 'free', nature_type: 'lake' }
-          : { access_type: 'pay', walk_ins_allowed: true },
-    },
-  ])
+  MOCK_PLACES.map((place, index) => {
+    const detail: PlaceDetail = { ...place };
+    if (place.place_type === 'nature') {
+      detail.amenities = ['parking'];
+      detail.place_type_metadata = { access_type: 'free', nature_type: 'lake' };
+    } else if (place.place_type === 'temporary_pop_up') {
+      detail.tags = place.activity_types;
+      detail.place_type_metadata = { access_type: 'pay', requires_booking: false };
+    } else {
+      detail.amenities = ['showers', 'lockers', 'towels'];
+      detail.place_website_url = `https://example.com/${place.place_slug}`;
+      detail.tags = place.activity_types;
+      detail.hours_of_operation = 'Mon–Sat 6am–9pm';
+      detail.place_type_metadata = { access_type: 'pay', walk_ins_allowed: true };
+      if (place.place_type !== 'gym_amenity' && place.is_approved) {
+        detail.external_ratings_ai_generated = {
+          google: { count_string: '94', rating_score: 4.7, google_business_url: '' },
+          classpass: { count_string: '100+', rating_score: 4.9, classpass_url: '' },
+        };
+      }
+    }
+    if (index % 5 !== 0) {
+      detail.ts_last_updated = place.ts_created;
+    }
+    return [place.place_id, detail];
+  })
 );

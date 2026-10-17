@@ -84,6 +84,8 @@ class MockApiClient implements PlacesClient {
       places = places.filter((p) => p.is_approved);
     }
 
+    places = [...places].sort((a, b) => (a.ts_created < b.ts_created ? 1 : a.ts_created > b.ts_created ? -1 : 0));
+
     const total = places.length;
     const limit = Math.min(Math.max(params.limit ?? 100, 1), 500);
     const page = Math.max(params.page ?? 0, 0);
@@ -104,7 +106,7 @@ class MockApiClient implements PlacesClient {
 
     const submitted = submittedPlaces.find((p) => p.place_id === placeId);
     if (submitted) {
-      return { ...submitted, amenities: [], tags: [], images: [] };
+      return { ...submitted };
     }
 
     const place = MOCK_PLACE_DETAILS[placeId];
@@ -155,7 +157,7 @@ class MockApiClient implements PlacesClient {
       lat: data.lat,
       lng: data.lng,
       is_approved: false,
-      created_ts: new Date().toISOString(),
+      ts_created: new Date().toISOString(),
     };
     submittedPlaces.push(newPlace);
 

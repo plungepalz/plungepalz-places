@@ -16,17 +16,31 @@ export interface PlaceSearchResult {
   lat: number;
   lng: number;
   is_approved: boolean;
-  created_ts: string;
+  ts_created: string;
 }
 
+export interface ExternalRatingsAiGenerated {
+  classpass?: {
+    count_string?: string;
+    rating_score?: number;
+    classpass_url?: string;
+  };
+  google?: {
+    count_string?: string;
+    rating_score?: number;
+    google_business_url?: string;
+  };
+}
+
+/** Flat public place record from GET /place/{place_id}. Optional fields may be omitted. */
 export interface PlaceDetail extends PlaceSearchResult {
+  place_website_url?: string | null;
   amenities?: string[];
   tags?: string[];
-  place_website_url?: string | null;
-  images?: Array<{ url: string; alt?: string }>;
-  header_image?: string | null;
-  has_plungepalz_discount?: boolean;
   place_type_metadata?: Record<string, unknown>;
+  external_ratings_ai_generated?: ExternalRatingsAiGenerated;
+  hours_of_operation?: string;
+  ts_last_updated?: string;
 }
 
 export interface SearchResponse {
