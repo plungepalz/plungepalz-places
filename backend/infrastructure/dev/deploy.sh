@@ -8,7 +8,6 @@
 # Options:
 #   --guided            Run SAM deploy in guided mode (interactive)
 #   --env-file PATH     Path to env file with Algolia/Google credentials
-#   --budget-email EMAIL Email for budget alerts
 #   --yes               Skip confirmation prompts (for non-interactive runs)
 #
 # Environment Variables:
@@ -22,7 +21,6 @@ set -euo pipefail
 # ==============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKEND_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 STACK_NAME="plungepalz-places-dev"
 ARTIFACTS_STACK_NAME="plungepalz-places-dev-artifacts"
@@ -36,7 +34,6 @@ export AWS_PROFILE
 # Parse command-line arguments
 GUIDED_MODE=0
 ENV_FILE=""
-BUDGET_EMAIL=""
 YES_MODE=0
 
 log() {
@@ -56,10 +53,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --env-file)
             ENV_FILE="$2"
-            shift 2
-            ;;
-        --budget-email)
-            BUDGET_EMAIL="$2"
             shift 2
             ;;
         --yes)
@@ -317,15 +310,8 @@ deploy_stack() {
     
     # Build parameter overrides
     local param_overrides=""
-    if [[ -n "$BUDGET_EMAIL" ]]; then
-        param_overrides="BudgetNotificationEmail=$BUDGET_EMAIL"
-    fi
     if [[ -n "${ANTHROPIC_MODEL_ID:-}" ]]; then
-        if [[ -n "$param_overrides" ]]; then
-            param_overrides="$param_overrides AnthropicModelId=$ANTHROPIC_MODEL_ID"
-        else
-            param_overrides="AnthropicModelId=$ANTHROPIC_MODEL_ID"
-        fi
+        param_overrides="AnthropicModelId=$ANTHROPIC_MODEL_ID"
     fi
     
     local param_flag=""

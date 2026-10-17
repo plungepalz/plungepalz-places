@@ -50,14 +50,6 @@ This directory contains **AWS SAM infrastructure-as-code** for a self-contained 
 ### CloudWatch Logs
 - 14-day retention for all Lambda log groups
 
-### AWS Budget
-- Monthly cost alert (default $20 USD)
-- Budget notifications sent to `support@plungepalz.com` (default, override with `--budget-email`)
-- Notifications at 80% actual, 100% forecasted
-- Cost filter: `project=plungepalz-places` tag only
-- **Note**: The `project` tag must be [activated as a cost-allocation tag](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/activating-tags.html) in AWS Billing Console for filtering to work
-- To skip budget creation, pass `BudgetNotificationEmail=` (empty) as a parameter override
-
 ### SQS Dead Letter Queue
 - **plungepalz-places-dev-algolia-sync-dlq**: Captures failed AlgoliaSync stream events (created only if AlgoliaSync is enabled)
 
@@ -84,7 +76,7 @@ Or pass it as a parameter override during deployment. When enabled, the function
 2. **AWS SAM CLI** installed ([docs](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html))
 3. **Python 3.13** (for building Lambda layer)
 4. **Region**: Profile must be configured for `us-east-1`
-5. **Credentials**: Valid AWS credentials with CloudFormation, Lambda, DynamoDB, IAM, API Gateway, SSM, S3, and Budgets permissions
+5. **Credentials**: Valid AWS credentials with CloudFormation, Lambda, DynamoDB, IAM, API Gateway, SSM, and S3 permissions
 
 ### Step 1: Set API Credentials
 
@@ -140,12 +132,6 @@ Then deploy without `--env-file`:
 # With env file
 ./deploy.sh --env-file /path/to/secrets.env
 
-# Override budget email
-./deploy.sh --budget-email yourteam@example.com
-
-# Skip budget creation
-./deploy.sh BudgetNotificationEmail=
-
 # Non-interactive mode (skip prompts, fail if not on TTY)
 ./deploy.sh --yes
 
@@ -167,16 +153,6 @@ The script will:
 
 **Environment Variables**:
 - `AWS_PROFILE`: Override default profile (default: `plungepalz-dev`)
-
-### Step 3: Activate Cost-Allocation Tag
-
-For budget filtering to work, activate the `project` tag in AWS Billing Console:
-1. Go to [AWS Billing Console → Cost Allocation Tags](https://console.aws.amazon.com/billing/home#/tags)
-2. Search for `project`
-3. Select it and click "Activate"
-4. Wait 24 hours for tag data to populate
-
-Without this, the budget will track all account costs, not just this stack.
 
 ---
 
@@ -208,10 +184,10 @@ shellcheck deploy.sh setup-ssm-params.sh
 ```bash
 # Build and inspect generated API
 sam build
-cat .aws-sam/build/template.yaml | grep -A 20 'Type: AWS::ApiGateway'
+sam validate --debug --region us-east-1 2>&1 | grep -E 'paths:|/search|/submit|/place|/plungepalz|options:'
 
 # Verify layer has anthropic package
-unzip -l .aws-sam/build/GeneratePlaceWithAILayer/python.zip | grep anthropic
+ls .aws-sam/build/GeneratePlaceWithAILayer/python | grep anthropic
 ```
 
 ---
@@ -301,8 +277,6 @@ aws s3 rb "s3://${ARTIFACTS_BUCKET}" --profile plungepalz-dev
 
 **Total**: ~$5-15/month for dev workloads
 
-Budget alert default: $20 USD, notifications to `support@plungepalz.com`.
-
 ---
 
 ## Architecture Notes
@@ -386,11 +360,6 @@ The artifacts stack is created automatically if the bucket doesn't exist.
 ### "Access Denied" when reading SSM parameters at runtime
 - Verify IAM role has `ssm:GetParameter` permission for the specific parameter ARN
 - Check the parameter exists: `aws ssm get-parameter --name /plungepalz-places-dev/algolia/app_id`
-
-### Budget notifications not received
-- Verify email address (default: `support@plungepalz.com`)
-- Check spam folder; confirm subscription email from AWS Budgets
-- Activate `project` cost-allocation tag in AWS Billing Console
 
 ### "Template format error" during validation
 - Run `sam validate --lint` for detailed errors

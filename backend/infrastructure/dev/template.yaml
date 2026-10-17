@@ -17,17 +17,6 @@ Parameters:
     Default: http://localhost:3000
     Description: CORS allowed origin (single origin)
   
-  BudgetAmountUSD:
-    Type: Number
-    Default: 20
-    Description: Monthly budget alert threshold in USD
-  
-  BudgetNotificationEmail:
-    Type: String
-    Default: support@plungepalz.com
-    Description: Email address for budget alerts (leave empty to skip budget creation)
-    AllowedPattern: ^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})?$
-  
   EnableAlgoliaSync:
     Type: String
     Default: 'false'
@@ -42,7 +31,6 @@ Parameters:
     Description: Anthropic model ID for AI generation
 
 Conditions:
-  CreateBudget: !Not [!Equals [!Ref BudgetNotificationEmail, '']]
   EnableAlgoliaSyncCondition: !Equals [!Ref EnableAlgoliaSync, 'true']
 
 Globals:
@@ -612,42 +600,6 @@ Resources:
           Value: plungepalz-places
         - Key: env
           Value: dev
-
-  # ==============================================================
-  # AWS Budget
-  # ==============================================================
-
-  PlacesBudget:
-    Type: AWS::Budgets::Budget
-    Condition: CreateBudget
-    Properties:
-      Budget:
-        BudgetName: plungepalz-places-dev-monthly-budget
-        BudgetLimit:
-          Amount: !Ref BudgetAmountUSD
-          Unit: USD
-        TimeUnit: MONTHLY
-        BudgetType: COST
-        CostFilters:
-          TagKeyValue:
-            - "user:project$plungepalz-places"
-      NotificationsWithSubscribers:
-        - Notification:
-            NotificationType: ACTUAL
-            ComparisonOperator: GREATER_THAN
-            Threshold: 80
-            ThresholdType: PERCENTAGE
-          Subscribers:
-            - SubscriptionType: EMAIL
-              Address: !Ref BudgetNotificationEmail
-        - Notification:
-            NotificationType: FORECASTED
-            ComparisonOperator: GREATER_THAN
-            Threshold: 100
-            ThresholdType: PERCENTAGE
-          Subscribers:
-            - SubscriptionType: EMAIL
-              Address: !Ref BudgetNotificationEmail
 
 # ==============================================================
 # Outputs
