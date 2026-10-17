@@ -294,7 +294,11 @@ def test_search_never_requests_past_pagination_cap(fake_algolia, monkeypatch):
     body = parse_body(mod.handler(api_event(query={"limit": "100", "page": "10"}), None))
     assert body["has_more"] is False
     assert body["places"] == []
-    assert fake_algolia.searches == []
+    assert body["total"] == 2500
+    assert len(fake_algolia.searches) == 1
+    opts = fake_algolia.searches[0][1]
+    assert opts["offset"] == 0
+    assert opts["length"] == 0
 
 
 def test_search_offset_length_near_cap_limit_300_page_3(fake_algolia, monkeypatch):
@@ -310,13 +314,20 @@ def test_search_offset_length_near_cap_limit_300_page_3(fake_algolia, monkeypatc
     assert "hitsPerPage" not in opts
 
 
-def test_search_offset_past_cap_is_empty_no_request(fake_algolia, monkeypatch):
+def test_search_offset_past_cap_returns_real_total(fake_algolia, monkeypatch):
     fake_algolia.search_result = {"hits": [_hit()], "nbHits": 2500}
     mod = _mod(fake_algolia, monkeypatch)
     body = parse_body(mod.handler(api_event(query={"limit": "300", "page": "4"}), None))
     assert body["places"] == []
     assert body["has_more"] is False
-    assert fake_algolia.searches == []
+    assert body["total"] == 2500
+    assert body["page"] == 4
+    assert body["limit"] == 300
+    assert len(fake_algolia.searches) == 1
+    opts = fake_algolia.searches[0][1]
+    assert opts["offset"] == 0
+    assert opts["length"] == 0
+    assert "hitsPerPage" not in opts
 
 
 def test_search_clamps_length_to_remaining_cap(fake_algolia, monkeypatch):

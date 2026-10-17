@@ -11,6 +11,7 @@ Usage (from backend/, with AWS credentials for us-east-1 / dev):
 
     python scripts/review_place.py --place-id UUID --decision active
     python scripts/review_place.py --place-id UUID --decision rejected --comments "duplicate"
+    python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision active
 
 Environment:
     TABLE_PLACES          default Places_Places
@@ -38,35 +39,55 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Approve or reject a PlungePalz place")
-    parser.add_argument("--place-id", required=True, help="Places_Places.place_id")
-    parser.add_argument(
-        "--decision",
-        required=True,
-        choices=["active", "rejected"],
-        help="internal_status to set",
-    )
-    parser.add_argument("--comments", default=None, help="optional internal_comments")
-    args = parser.parse_args()
+def place_ids_from_output(payload: object) -> list[str]:
+    """Extract place_ids from seed_places.py output or a bare list."""
+    ids: list[str] = []
 
-    table_name = os.environ.get("TABLE_PLACES", "Places_Places")
-    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+    def _add(value: object) -> None:
+        if isinstance(value, str) and value.strip():
+            ids.append(value.strip())
+        elif isinstance(value, dict) and value.get("place_id"):
+            ids.append(str(value["place_id"]).strip())
 
-    import boto3
+    if isinstance(payload, list):
+        for item in payload:
+            _add(item)
+    elif isinstance(payload, dict):
+        if isinstance(payload.get("place_ids"), list):
+            for item in payload["place_ids"]:
+                _add(item)
+        elif isinstance(payload.get("created"), list):
+            for item in payload["created"]:
+                _add(item)
+        elif payload.get("place_id"):
+            _add(payload)
+    # Preserve order, drop empties/dupes
+    seen: set[str] = set()
+    out: list[str] = []
+    for place_id in ids:
+        if place_id and place_id not in seen:
+            seen.add(place_id)
+            out.append(place_id)
+    return out
+
+
+def load_place_ids_from_file(path: Path) -> list[str]:
+    return place_ids_from_output(json.loads(path.read_text(encoding="utf-8")))
+
+
+def review_one(table, place_id: str, decision: str, comments: str | None) -> dict:
     from botocore.exceptions import ClientError
 
-    table = boto3.resource("dynamodb", region_name=region).Table(table_name)
     ts = utc_now()
     expr = "SET internal_status = :st, ts_last_updated = :ts"
-    values = {":st": args.decision, ":ts": ts}
-    if args.comments:
+    values = {":st": decision, ":ts": ts}
+    if comments:
         expr += ", internal_comments = :c"
-        values[":c"] = args.comments
+        values[":c"] = comments
 
     try:
         resp = table.update_item(
-            Key={"place_id": args.place_id},
+            Key={"place_id": place_id},
             UpdateExpression=expr,
             ConditionExpression="attribute_exists(place_id)",
             ExpressionAttributeValues=values,
@@ -75,23 +96,78 @@ def main() -> int:
     except ClientError as exc:
         code = (exc.response.get("Error") or {}).get("Code", "")
         if code == "ConditionalCheckFailedException":
-            print(json.dumps({"error": {"code": "NOT_FOUND", "message": "Place not found"}}))
-            return 1
-        print(json.dumps({"error": {"code": "INTERNAL_ERROR", "message": str(exc)}}))
-        return 1
+            return {"error": {"code": "NOT_FOUND", "message": "Place not found"}, "place_id": place_id}
+        return {"error": {"code": "INTERNAL_ERROR", "message": str(exc)}, "place_id": place_id}
 
     item = resp.get("Attributes") or {}
-    print(
-        json.dumps(
-            {
-                "place_id": args.place_id,
-                "internal_status": item.get("internal_status"),
-                "is_approved": item.get("internal_status") == "active",
-                "ts_last_updated": item.get("ts_last_updated"),
-            }
-        )
+    return {
+        "place_id": place_id,
+        "internal_status": item.get("internal_status"),
+        "is_approved": item.get("internal_status") == "active",
+        "ts_last_updated": item.get("ts_last_updated"),
+    }
+
+
+def validate_review_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.limit is not None and args.from_file is None:
+        parser.error("--limit requires --from-file")
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be >= 1")
+    if bool(args.place_id) == bool(args.from_file):
+        parser.error("provide exactly one of --place-id or --from-file")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Approve or reject a PlungePalz place")
+    parser.add_argument("--place-id", default=None, help="Places_Places.place_id")
+    parser.add_argument(
+        "--from-file",
+        default=None,
+        help="JSON from seed_places.py --output; approve the first N ids with --limit",
     )
-    return 0
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="When using --from-file, review at most N place_ids (first N in file order; must be >= 1)",
+    )
+    parser.add_argument(
+        "--decision",
+        required=True,
+        choices=["active", "rejected"],
+        help="internal_status to set",
+    )
+    parser.add_argument("--comments", default=None, help="optional internal_comments")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate_review_args(parser, args)
+
+    if args.from_file:
+        place_ids = load_place_ids_from_file(Path(args.from_file))
+        if args.limit is not None:
+            place_ids = place_ids[: args.limit]
+        if not place_ids:
+            print(json.dumps({"error": {"code": "VALIDATION_ERROR", "message": "No place_ids in file"}}))
+            return 1
+    else:
+        place_ids = [args.place_id]
+
+    table_name = os.environ.get("TABLE_PLACES", "Places_Places")
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+
+    import boto3
+
+    table = boto3.resource("dynamodb", region_name=region).Table(table_name)
+    results = [review_one(table, place_id, args.decision, args.comments) for place_id in place_ids]
+    if len(results) == 1:
+        print(json.dumps(results[0]))
+        return 1 if results[0].get("error") else 0
+    print(json.dumps({"reviewed": results, "count": len(results)}))
+    return 1 if any(item.get("error") for item in results) else 0
 
 
 if __name__ == "__main__":

@@ -85,7 +85,10 @@ def _stale_claim_cutoff() -> str:
 
 
 def _claim_autofill(table_places, place_id: str):
-    """Claim the job before any paid outbound call. failed and stale pending can retry."""
+    """Claim the job before any paid outbound call. failed and stale pending can retry.
+
+    Returns (claimed_ts, None) on success or (None, error_response) on failure.
+    """
     claimed_ts = utc_now()
     try:
         table_places.update_item(
@@ -109,7 +112,7 @@ def _claim_autofill(table_places, place_id: str):
                 ":stale_before": _stale_claim_cutoff(),
             },
         )
-        return None
+        return claimed_ts, None
     except ClientError as exc:
         code = (exc.response.get("Error") or {}).get("Code", "")
         if code == "ConditionalCheckFailedException":
@@ -118,21 +121,39 @@ def _claim_autofill(table_places, place_id: str):
             except Exception:
                 existing = True
             if not existing:
-                return error_response(404, "NOT_FOUND", "Place not found")
-            return error_response(409, "CONFLICT", "Place already AI-enriched (idempotency)")
+                return None, error_response(404, "NOT_FOUND", "Place not found")
+            return None, error_response(409, "CONFLICT", "Place already AI-enriched (idempotency)")
         logger.exception("Failed to claim AI autofill for place_id=%s", place_id)
-        return error_response(500, "INTERNAL_ERROR", "Failed to claim AI autofill")
+        return None, error_response(500, "INTERNAL_ERROR", "Failed to claim AI autofill")
     except Exception:
         logger.exception("Failed to claim AI autofill for place_id=%s", place_id)
-        return error_response(500, "INTERNAL_ERROR", "Failed to claim AI autofill")
+        return None, error_response(500, "INTERNAL_ERROR", "Failed to claim AI autofill")
 
 
-def _set_autofill_status(table_places, place_id: str, status: str) -> None:
+def _set_autofill_status(table_places, place_id: str, status: str, claimed_ts: str) -> None:
+    """Write failed/complete only while this invocation still holds the claim."""
     try:
         table_places.update_item(
             Key={"place_id": place_id},
             UpdateExpression="SET ai_autofill_status = :status, ts_last_updated = :ts",
-            ExpressionAttributeValues={":status": status, ":ts": utc_now()},
+            ConditionExpression="ai_autofill_claimed_ts = :claimed_ts",
+            ExpressionAttributeValues={
+                ":status": status,
+                ":ts": utc_now(),
+                ":claimed_ts": claimed_ts,
+            },
+        )
+    except ClientError as exc:
+        code = (exc.response.get("Error") or {}).get("Code", "")
+        if code == "ConditionalCheckFailedException":
+            logger.warning(
+                "Skipped ai_autofill_status=%s for place_id=%s; claim no longer held",
+                status,
+                place_id,
+            )
+            return
+        logger.exception(
+            "Failed to set ai_autofill_status=%s for place_id=%s", status, place_id
         )
     except Exception:
         logger.exception(
@@ -233,9 +254,9 @@ def handler(event, context):
             {"place_name": "place_name is required"},
         )
 
-    claimed = _claim_autofill(table_places, place_id)
-    if claimed is not None:
-        return claimed
+    claimed_ts, claimed_error = _claim_autofill(table_places, place_id)
+    if claimed_error is not None:
+        return claimed_error
 
     result = generate_place_record(
         place_name=place_name,
@@ -255,7 +276,7 @@ def handler(event, context):
             place_id,
             "; ".join(result.get("errors") or ["unknown error"]),
         )
-        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED)
+        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED, claimed_ts)
         return _generic_autofill_error()
 
     record = result.get("record") or {}
@@ -282,6 +303,7 @@ def handler(event, context):
         ":ts": ts,
         ":complete": AI_AUTOFILL_STATUS_COMPLETE,
         ":use_gp": bool(record.get("google_places_api_data")),
+        ":claimed_ts": claimed_ts,
     }
 
     existing_description = (place.get("description") or "").strip()
@@ -297,19 +319,26 @@ def handler(event, context):
         table_places.update_item(
             Key={"place_id": place_id},
             UpdateExpression="SET " + ", ".join(expr_parts),
-            ConditionExpression="attribute_not_exists(ai_autofill_ts)",
+            ConditionExpression=(
+                "attribute_not_exists(ai_autofill_ts) "
+                "AND ai_autofill_claimed_ts = :claimed_ts"
+            ),
             ExpressionAttributeValues=values,
         )
     except ClientError as exc:
         code = (exc.response.get("Error") or {}).get("Code", "")
         if code == "ConditionalCheckFailedException":
+            logger.warning(
+                "Skipped AI autofill persist for place_id=%s; claim no longer held",
+                place_id,
+            )
             return error_response(409, "CONFLICT", "Place already AI-enriched (idempotency)")
         logger.exception("Failed to persist AI autofill for place_id=%s", place_id)
-        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED)
+        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED, claimed_ts)
         return _generic_autofill_error()
     except Exception:
         logger.exception("Failed to persist AI autofill for place_id=%s", place_id)
-        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED)
+        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED, claimed_ts)
         return _generic_autofill_error()
 
     if result.get("errors"):

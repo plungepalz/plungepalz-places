@@ -43,7 +43,7 @@ If **neither `bbox` nor `lat`/`lng`** is provided, Search returns the **global c
 
 Always excludes `internal_status=rejected` and `visibility=hidden`. Never returns `internal_status`, `internal_comments`, or `ts_created_unix`.
 
-Algolia only paginates the first `paginationLimitedTo` hits (default **1000**, `ALGOLIA_PAGINATION_CAP`). Search uses `offset=page*limit` and `length=min(limit, cap-offset)` (not `page`/`hitsPerPage`). If `offset >= cap`, it returns empty results with `has_more=false` and does not call Algolia. `has_more` is `(page+1)*limit < min(nbHits, paginationLimitedTo or 1000)` using the same cap helper. `Load more` must stop when `has_more` is false even if `total` (raw `nbHits`) is larger.
+Algolia only paginates the first `paginationLimitedTo` hits (default **1000**, `ALGOLIA_PAGINATION_CAP`). Search uses `offset=page*limit` and `length=min(limit, cap-offset)` (not `page`/`hitsPerPage`). If `offset >= cap`, it still returns the real `total` (`nbHits`) via a lightweight count query (`length=0`), with empty `places` and `has_more=false`. `has_more` is `(page+1)*limit < min(nbHits, paginationLimitedTo or 1000)` using the same cap helper. `Load more` must stop when `has_more` is false even if `total` (raw `nbHits`) is larger.
 
 Each element of `places` is a **PlaceSummary** (`ts_created` is ISO 8601 UTC, same name as DynamoDB).
 
