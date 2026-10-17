@@ -487,7 +487,7 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     ts_created: '2025-02-19T11:00:00Z',
   },
   {
-    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000028',
+    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000029',
     place_slug: 'hidden-alpine-tarn',
     place_name: 'Hidden Alpine Tarn',
     place_type: 'nature',
