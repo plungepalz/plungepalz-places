@@ -128,10 +128,6 @@ def submit_payload(entry: dict[str, Any]) -> dict[str, Any]:
     description = entry.get("description")
     if isinstance(description, str) and description.strip():
         body["description"] = description.strip()
-    for field in ("city", "state_province", "postal_code"):
-        value = entry.get(field)
-        if isinstance(value, str) and value.strip():
-            body[field] = value.strip()
     return validate_submit_body(body)
 
 

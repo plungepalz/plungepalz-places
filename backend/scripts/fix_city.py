@@ -2,8 +2,8 @@
 """Rewrite city (and optional state_province / postal_code) on Places_Places.
 
 UNRUN: shipped for operators. Tests mock boto3. Do not run against deployed
-data from CI or this PR. Never changes internal_status, place_slug, or any
-attribute other than city / state_province / postal_code.
+data from CI or this PR. Never changes internal_status, place_slug, or
+ts_last_updated — only city / state_province / postal_code.
 
 Each JSON object: {place_id, old_city, new_city, new_state_province?, new_postal_code?}
 
@@ -29,6 +29,9 @@ from typing import Any
 
 DEFAULT_TABLE = "Places_Places"
 DEFAULT_REGION = "us-east-1"
+ALLOWED_FIX_FIELDS = frozenset(
+    {"place_id", "old_city", "new_city", "new_state_province", "new_postal_code"}
+)
 
 
 def parse_positive_limit(value: str) -> int:
@@ -53,6 +56,11 @@ def load_fixes(path: Path) -> list[dict[str, Any]]:
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             raise ValueError(f"fix entry {index} must be an object")
+        unknown = sorted(set(item) - ALLOWED_FIX_FIELDS)
+        if unknown:
+            raise ValueError(
+                f"fix entry {index} has unknown field(s): {', '.join(unknown)}"
+            )
         place_id = item.get("place_id")
         old_city = item.get("old_city")
         new_city = item.get("new_city")
@@ -141,7 +149,11 @@ def update_one(table, row: dict[str, Any]) -> dict[str, Any]:
 
 
 def run(args: argparse.Namespace, table=None) -> int:
-    rows = load_fixes(Path(args.from_file))
+    try:
+        rows = load_fixes(Path(args.from_file))
+    except ValueError as exc:
+        print(json.dumps({"error": {"code": "VALIDATION_ERROR", "message": str(exc)}}))
+        return 1
     if args.limit is not None:
         rows = rows[: args.limit]
 
@@ -185,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "UNRUN: rewrite Places_Places.city (optional state_province/postal_code). "
-            "Never updates internal_status or place_slug."
+            "Never updates internal_status, place_slug, or ts_last_updated."
         )
     )
     parser.add_argument(

@@ -236,11 +236,29 @@ def generate_place_slug(
 
 
 _COUNTRY_RE = re.compile(r"^[A-Za-z][A-Za-z\s.]{1,}$")
+_US_STATE_CODES = frozenset(
+    {
+        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+        "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+        "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+        "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+        "WI", "WY", "DC",
+    }
+)
+_CA_PROVINCE_CODES = frozenset(
+    {
+        "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT",
+    }
+)
+_REGION_CODES = _US_STATE_CODES | _CA_PROVINCE_CODES
 _CA_PROVINCE_POSTAL_RE = re.compile(
     r"^([A-Za-z]{2})\s+([A-Za-z]\d[A-Za-z]\s*\d[A-Za-z]\d)$"
 )
 _US_STATE_ZIP_RE = re.compile(r"^([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$")
 _US_STATE_ONLY_RE = re.compile(r"^([A-Za-z]{2})$")
+_US_CITY_STATE_ZIP_RE = re.compile(
+    r"^(.+?)\s+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$"
+)
 _AU_LOCALITY_RE = re.compile(
     r"^(.+?)\s+(NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+(\d{4})$",
     re.IGNORECASE,
@@ -280,6 +298,13 @@ def _parse_locality_part(region: str, previous: str | None) -> dict[str, str]:
         out["state_province"] = us_st.group(1).upper()
         if previous:
             out["city"] = previous
+        return out
+
+    us_city_zip = _US_CITY_STATE_ZIP_RE.fullmatch(region)
+    if us_city_zip and us_city_zip.group(2).upper() in _US_STATE_CODES:
+        out["city"] = us_city_zip.group(1).strip()
+        out["state_province"] = us_city_zip.group(2).upper()
+        out["postal_code"] = us_city_zip.group(3)
         return out
 
     au = _AU_LOCALITY_RE.fullmatch(region)
@@ -342,12 +367,16 @@ def parse_address_parts(address: str | None) -> dict[str, str]:
     if not parts:
         return {}
     out: dict[str, str] = {}
-    if len(parts) == 1:
-        return out
 
     last = parts[-1]
     # "USA" / "United States" / "Finland" — keep the token as written (no ISO remap).
-    if _COUNTRY_RE.fullmatch(last) and not re.search(r"\d", last):
+    # Bare 2-letter US/CA region codes are states, not countries ("Phoenix, AZ").
+    if (
+        len(parts) > 1
+        and _COUNTRY_RE.fullmatch(last)
+        and not re.search(r"\d", last)
+        and last.upper() not in _REGION_CODES
+    ):
         out["country"] = last
         rest = parts[:-1]
     else:

@@ -186,10 +186,11 @@ def test_submit_omits_postal_code_when_absent(dynamodb_tables):
     assert "city" not in place
 
 
-def test_submit_explicit_city_state_postal_win_over_parsed(dynamodb_tables):
+def test_submit_ignores_client_location_overrides(dynamodb_tables):
     mod = load_handler("Places_Submit")
     payload = {
         **VALID,
+        "address": "457 East 300 South, Salt Lake City, UT 84111, USA",
         "city": "Explicit City",
         "state_province": "CO",
         "postal_code": "80202",
@@ -198,10 +199,12 @@ def test_submit_explicit_city_state_postal_win_over_parsed(dynamodb_tables):
     place = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": body["place_id"]})[
         "Item"
     ]
-    assert place["city"] == "Explicit City"
-    assert place["state_province"] == "CO"
-    assert place["postal_code"] == "80202"
-    assert "explicit-city" in body["place_slug"]
+    assert place["city"] == "Salt Lake City"
+    assert place["state_province"] == "UT"
+    assert place["postal_code"] == "84111"
+    assert place["country"] == "USA"
+    assert "explicit-city" not in body["place_slug"]
+    assert "salt-lake-city" in body["place_slug"]
 
 
 def test_submit_invalid_json():

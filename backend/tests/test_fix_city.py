@@ -157,6 +157,32 @@ def test_limit_and_rejects_zero(tmp_path):
         parser.parse_args(["--from-file", str(path), "--limit", "0"])
 
 
+def test_load_fixes_rejects_unknown_fields(tmp_path, capsys):
+    mod = _load_fix_mod()
+    path = tmp_path / "fixes.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "place_id": "p1",
+                    "old_city": "Old",
+                    "new_city": "New",
+                    "new_postcode": "84111",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"fix entry 0 has unknown field\(s\): new_postcode"):
+        mod.load_fixes(path)
+    args = mod.build_parser().parse_args(["--from-file", str(path), "--dry-run"])
+    assert mod.run(args, table=object()) == 1
+    err = json.loads(capsys.readouterr().out)
+    assert err["error"]["code"] == "VALIDATION_ERROR"
+    assert "new_postcode" in err["error"]["message"]
+    assert "fix entry 0" in err["error"]["message"]
+
+
 def test_script_has_no_hardcoded_credentials():
     source = Path(BACKEND_ROOT / "scripts" / "fix_city.py").read_text(encoding="utf-8")
     assert "AKIA" not in source

@@ -48,7 +48,7 @@ The client sends core fields (no identity, no codes):
 
 1. Validates the body (400 + field `details` on failure).
 2. Generates `place_id` (UUID v4) and `submission_id` (`sub_` + UUID).
-3. Parses `city` / `state_province` / `country` / `postal_code` from `address` (optional explicit `city` / `state_province` / `postal_code` win over parsed). Generates `place_slug` from name + city + a short `place_id` suffix (avoids same-name/city collisions). `postal_code` is omitted when unknown.
+3. Parses `city` / `state_province` / `country` / `postal_code` from `address` only (clients cannot override them). Generates `place_slug` from name + parsed city + a short `place_id` suffix (avoids same-name/city collisions). `postal_code` is omitted when unknown.
 4. Computes `h3_r7` / `h3_r5` / `h3_r4` if `h3` is installed; **omits** those attributes otherwise. Never writes empty strings.
 5. In **one** `TransactWriteItems`:
    - `Places_Submissions`: `submitted_ts`, `submitted_via=web_app`, `verified=false`, `place_id_generated`, `original_submission_record_json`

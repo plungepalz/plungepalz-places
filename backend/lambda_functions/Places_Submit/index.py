@@ -45,17 +45,9 @@ def handler(event, context):
     submission_id = new_submission_id()
 
     address_parts = parse_address_parts(data.get("address"))
-
-    def _coalesce(field: str) -> str | None:
-        explicit = data.get(field)
-        if isinstance(explicit, str) and explicit.strip():
-            return explicit.strip()
-        parsed = address_parts.get(field)
-        return parsed if parsed else None
-
-    city = _coalesce("city")
-    state_province = _coalesce("state_province")
-    postal_code = _coalesce("postal_code")
+    city = address_parts.get("city")
+    state_province = address_parts.get("state_province")
+    postal_code = address_parts.get("postal_code")
     country = address_parts.get("country")
     place_slug = generate_place_slug(data["place_name"], city, place_id)
 

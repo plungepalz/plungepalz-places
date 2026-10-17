@@ -157,6 +157,21 @@ PARSER_CASES = [
             "postal_code": "M5V 3C1",
         },
     ),
+    (
+        "US city, ST no zip is not a country",
+        "123 Main St, Phoenix, AZ",
+        {"city": "Phoenix", "state_province": "AZ"},
+    ),
+    (
+        "US city ST ZIP no comma",
+        "Scottsdale AZ 85258",
+        {"city": "Scottsdale", "state_province": "AZ", "postal_code": "85258"},
+    ),
+    (
+        "US last part city ST ZIP no comma",
+        "7349 N Via Paseo Del Sur Suite 535, Scottsdale AZ 85258",
+        {"city": "Scottsdale", "state_province": "AZ", "postal_code": "85258"},
+    ),
 ]
 
 

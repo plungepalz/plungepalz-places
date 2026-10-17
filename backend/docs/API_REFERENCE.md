@@ -184,9 +184,6 @@ MVP: **no verification codes** and **no AI autofill** on this path. Creates an `
 | activity_types | yes | non-empty subset of `cold_plunge`, `sauna` |
 | lat, lng | yes | numbers in range |
 | address | yes unless `place_type` is `nature` | string, max 500 characters |
-| city | no | optional; when present, wins over the value parsed from `address` |
-| state_province | no | optional; when present, wins over the value parsed from `address` |
-| postal_code | no | optional; when present, wins over the value parsed from `address` |
 | description | no | string, max 2000 characters |
 | email | no | basic format check if present |
 
