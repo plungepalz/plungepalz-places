@@ -51,8 +51,8 @@ export default function FilterBar({
   const extraFilterCount = selectedPlaceTypes.length + (approvedOnly ? 1 : 0);
 
   return (
-    <div className="pointer-events-auto relative z-40">
-      <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur">
+    <div className="pointer-events-none relative z-40">
+      <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur">
         <div className="flex items-center gap-2 pr-2 mr-1 border-r border-gray-200">
           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-500 text-white font-bold">
             P
@@ -161,7 +161,7 @@ export default function FilterBar({
       </div>
 
       {showFilters && (
-        <div className="relative z-50 mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-lg ring-1 ring-black/5">
+        <div className="pointer-events-auto relative z-50 mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-lg ring-1 ring-black/5">
           <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Place type</span>
           {(Object.keys(PLACE_TYPE_LABELS) as PlaceType[]).map((type) => (
             <button

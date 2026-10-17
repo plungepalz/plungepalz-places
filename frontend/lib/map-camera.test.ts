@@ -95,7 +95,7 @@ test('Worldwide framing subtracts drawer right padding from the visible gap', ()
 
 /**
  * Stand-in for mapbox-gl 3.33: flyTo() calls stop() first, which fires moveend
- * synchronously if a flight is already running.
+ * synchronously and invokes every registered once-listener (not just the first).
  */
 class InterruptibleMap {
   padding = { ...ZERO_PADDING };
@@ -110,50 +110,56 @@ class InterruptibleMap {
     this.pending.push(handler);
   }
 
-  flyTo(options: { padding?: Partial<typeof ZERO_PADDING>; retainPadding?: boolean }) {
+  off(_event: string, handler: () => void) {
+    this.pending = this.pending.filter((item) => item !== handler);
+  }
+
+  private emitMoveend() {
+    const handlers = this.pending.splice(0);
+    for (const handler of handlers) handler();
+  }
+
+  flyTo(options: { padding?: Partial<typeof ZERO_PADDING> }) {
     if (this.flying) {
       this.flying = false;
-      this.pending.shift()?.();
+      this.emitMoveend();
     }
     this.flying = true;
-    if (options.padding && options.retainPadding !== false) {
+    if (options.padding) {
       this.padding = { ...ZERO_PADDING, ...options.padding };
     }
   }
 
   endFlight() {
     this.flying = false;
-    this.pending.shift()?.();
+    this.emitMoveend();
   }
+}
+
+/** Mirrors PlacesMap: off the previous handler, then flyToThenOnMoveend, then store the new one. */
+function startPlacesMapFlight(
+  map: InterruptibleMap,
+  handlerRef: { current: (() => void) | null }
+) {
+  if (handlerRef.current) {
+    map.off('moveend', handlerRef.current);
+    handlerRef.current = null;
+  }
+  const onFlyEnd = () => {
+    handlerRef.current = null;
+    map.padding = { ...ZERO_PADDING };
+  };
+  flyToThenOnMoveend(map, { padding: { ...ZERO_PADDING, left: 396 } }, onFlyEnd);
+  handlerRef.current = onFlyEnd;
 }
 
 test('preset change mid-flight leaves padding at 0', () => {
   const map = new InterruptibleMap();
-  const startPreset = () => {
-    flyToThenOnMoveend(
-      map,
-      { padding: { ...ZERO_PADDING, left: 396 }, retainPadding: false },
-      () => {
-        map.padding = { ...ZERO_PADDING };
-      }
-    );
-  };
-  startPreset();
-  startPreset();
-  map.endFlight();
-  assert.deepEqual(map.getPadding(), ZERO_PADDING);
-});
-
-test('moveend attached after flyTo still clears retained padding after an interrupt', () => {
-  const map = new InterruptibleMap();
-  const startRetained = () => {
-    flyToThenOnMoveend(map, { padding: { ...ZERO_PADDING, left: 396 }, retainPadding: true }, () => {
-      map.padding = { ...ZERO_PADDING };
-    });
-  };
-  startRetained();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  startPlacesMapFlight(map, handlerRef);
   assert.equal(map.getPadding().left, 396);
-  startRetained();
+  startPlacesMapFlight(map, handlerRef);
+  assert.equal(map.getPadding().left, 396);
   map.endFlight();
   assert.deepEqual(map.getPadding(), ZERO_PADDING);
 });

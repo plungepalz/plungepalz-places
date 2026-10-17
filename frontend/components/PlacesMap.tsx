@@ -93,6 +93,58 @@ function clearPaddingKeepView(map: MapboxMap): void {
   });
 }
 
+function MapZoomControls({
+  panelOpen,
+  onZoomIn,
+  onZoomOut,
+  onLocate,
+}: {
+  panelOpen: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onLocate: () => void;
+}) {
+  return (
+    <div
+      className={`pointer-events-auto absolute bottom-6 z-[25] flex flex-col gap-2 ${
+        panelOpen ? 'right-[min(calc(100%-3.5rem),calc(1.25rem+28rem))]' : 'right-4'
+      }`}
+    >
+      <button
+        type="button"
+        onClick={onZoomIn}
+        className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+        aria-label="Zoom in"
+      >
+        +
+      </button>
+      <button
+        type="button"
+        onClick={onZoomOut}
+        className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+        aria-label="Zoom out"
+      >
+        −
+      </button>
+      <button
+        type="button"
+        onClick={onLocate}
+        className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-white text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+        aria-label="Locate me"
+      >
+        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M12 8v4l2 2m6-2a8 8 0 11-16 0 8 8 0 0116 0z"
+          />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 const PIN_PATH =
   'M16 0C7.163 0 0 7.163 0 16C0 24.837 16 40 16 40C16 40 32 24.837 32 16C32 7.163 24.837 0 16 0Z';
 
@@ -378,7 +430,7 @@ export default function PlacesMap({
 
   if (!accessToken) {
     return (
-      <div data-places-map className="flex h-full w-full items-center justify-center bg-[#e8e4dc]">
+      <div data-places-map className="relative flex h-full w-full items-center justify-center bg-[#e8e4dc]">
         <div className="mx-6 max-w-md rounded-2xl bg-white p-8 text-center shadow-lg">
           <h3 className="text-lg font-semibold text-gray-900">Mapbox token required</h3>
           <p className="mt-2 text-sm leading-relaxed text-gray-600">
@@ -388,6 +440,12 @@ export default function PlacesMap({
             placeholder are treated as no token. The list and filters still work.
           </p>
         </div>
+        <MapZoomControls
+          panelOpen={panelOpen}
+          onZoomIn={() => zoomBy(1)}
+          onZoomOut={() => zoomBy(-1)}
+          onLocate={locateMe}
+        />
       </div>
     );
   }
@@ -489,41 +547,12 @@ export default function PlacesMap({
         </div>
       )}
 
-      <div
-        className={`absolute bottom-6 z-10 flex flex-col gap-2 ${panelOpen ? 'right-[min(calc(100%-3.5rem),calc(1.25rem+28rem))]' : 'right-4'}`}
-      >
-        <button
-          type="button"
-          onClick={() => zoomBy(1)}
-          className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
-          aria-label="Zoom in"
-        >
-          +
-        </button>
-        <button
-          type="button"
-          onClick={() => zoomBy(-1)}
-          className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
-          aria-label="Zoom out"
-        >
-          −
-        </button>
-        <button
-          type="button"
-          onClick={locateMe}
-          className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-white text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
-          aria-label="Locate me"
-        >
-          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 8v4l2 2m6-2a8 8 0 11-16 0 8 8 0 0116 0z"
-            />
-          </svg>
-        </button>
-      </div>
+      <MapZoomControls
+        panelOpen={panelOpen}
+        onZoomIn={() => zoomBy(1)}
+        onZoomOut={() => zoomBy(-1)}
+        onLocate={locateMe}
+      />
       {locateError && (
         <div
           role="status"
