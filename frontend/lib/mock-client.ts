@@ -12,6 +12,9 @@ import type {
   SubmitPlaceResponse,
 } from './types';
 
+/** Algolia pagination hard-stop. Hits past this offset are not retrievable. */
+const SEARCH_HIT_CAP = 1000;
+
 const submittedPlaces: PlaceSearchResult[] = [];
 
 function allPlaces(): PlaceSearchResult[] {
@@ -62,9 +65,12 @@ class MockApiClient implements PlacesClient {
         });
       }
       const [minLng, minLat, maxLng, maxLat] = parts;
-      places = places.filter(
-        (p) => p.lng >= minLng && p.lng <= maxLng && p.lat >= minLat && p.lat <= maxLat
-      );
+      places = places.filter((p) => {
+        const latInBox = p.lat >= minLat && p.lat <= maxLat;
+        const lngInBox =
+          minLng <= maxLng ? p.lng >= minLng && p.lng <= maxLng : p.lng >= minLng || p.lng <= maxLng;
+        return latInBox && lngInBox;
+      });
     } else if (params.lat !== undefined && params.lng !== undefined) {
       const radiusKm = params.radius_km ?? 10;
       places = places.filter((p) => haversineKm(params.lat!, params.lng!, p.lat, p.lng) <= radiusKm);
@@ -90,14 +96,16 @@ class MockApiClient implements PlacesClient {
     const limit = Math.min(Math.max(params.limit ?? 100, 1), 500);
     const page = Math.max(params.page ?? 0, 0);
     const start = page * limit;
-    const paginatedPlaces = places.slice(start, start + limit);
+    // Algolia cannot page past 1000 hits; has_more must go false at that cap.
+    const retrievable = Math.min(total, SEARCH_HIT_CAP);
+    const paginatedPlaces = places.slice(start, Math.min(start + limit, SEARCH_HIT_CAP));
 
     return {
       places: paginatedPlaces,
       total,
       page,
       limit,
-      has_more: start + limit < total,
+      has_more: start + paginatedPlaces.length < retrievable,
     };
   }
 

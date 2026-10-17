@@ -4,6 +4,8 @@ Local Next.js app for browsing a global map of sauna and cold plunge locations. 
 
 ## Setup
 
+Requires **Node.js 22 or later** (`mapbox-gl` does not install cleanly on older Node). `frontend/.nvmrc` pins 22; `package.json` `engines.node` is `>=22`.
+
 ```bash
 cd frontend
 npm install
@@ -67,7 +69,7 @@ This supersedes `backend/docs/API_REFERENCE.md` where they differ (lead-engineer
 - `approved_only` (default false)
 - `limit` (default 100, max 500) and `page` (0-based)
 
-**GET /search response:** `{ places, total, page, limit, has_more }`
+**GET /search response:** `{ places, total, page, limit, has_more }`. The search backend (Algolia) cannot page past **1000** hits; `has_more` is false once that cap is reached. The mock client matches this.
 
 Each place: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types[]`, `description`, `cover_image` (url\|null), `lat`, `lng` (numbers), `is_approved` (bool), `ts_created`.
 
@@ -79,7 +81,7 @@ With neither `bbox` nor `lat`/`lng`, `/search` returns the **global catalog**, p
 
 **POST /submit body:** `place_name`, `place_type`, `activity_types` (non-empty `cold_plunge`/`sauna`), `lat`, `lng` (required; not latitude/longitude), `address` (required unless nature), optional `description` and `email`. **201:** `{ submission_id, place_id, place_slug, is_approved: false }`. No verification step.
 
-**Errors:** `{ error: { code, message, details? } }`. `details` is the per-field map on 400s from `/submit`. The client also accepts a defensive `fields` alias.
+**Errors:** `{ error: { code, message, details? } }`. `details` is the per-field map on 400s from `/submit`.
 
 ## Layout
 
@@ -94,4 +96,5 @@ Sweatpals-style map-first view:
 ## Known MVP limits
 
 - **Map clustering is client-side Mapbox GeoJSON clustering** on the current `/search` result set. Viewport queries request `limit=500` (API max) so clusters are meaningful; places beyond that page are not clustered until Load more. There is no server cluster endpoint yet. Orange pins are a solid teardrop (cover images are on cards, not map symbols).
+- Search pagination stops at Algolia's **1000-hit** cap. The UI trusts `has_more` from `/search`; the mock client also sets `has_more: false` once 1000 results have been returned.
 - Mock mode is the default until `NEXT_PUBLIC_API_BASE_URL` is set (dev URL still TBD).

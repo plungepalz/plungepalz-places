@@ -133,6 +133,10 @@ export default function HomePage() {
     setFlyRequest(null);
   }, []);
 
+  const handleCloseDetails = useCallback(() => {
+    setDetailsPlaceId(null);
+  }, []);
+
   const handleToggleFavorite = (placeId: string) => {
     setFavorites((prev) => {
       const next = new Set(prev);
@@ -225,7 +229,7 @@ export default function HomePage() {
       </div>
 
       {detailsPlaceId && (
-        <PlaceDetailsPanel placeId={detailsPlaceId} onClose={() => setDetailsPlaceId(null)} />
+        <PlaceDetailsPanel placeId={detailsPlaceId} onClose={handleCloseDetails} />
       )}
     </div>
   );
