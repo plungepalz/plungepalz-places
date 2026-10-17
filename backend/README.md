@@ -6,9 +6,9 @@ Production AWS serverless backend that powers the discovery, submission, rating,
 
 The PlungePalz Places API provides:
 
-- **Submission Flow**: Users submit new places via a multi-stage verification process (email + SMS codes)
-- **AI Autofill**: Google Places New API + Claude (Anthropic API) enrich submissions with structured data
-- **Public Discovery**: Search and retrieve places by ID, with geo-aware H3-based search
+- **Submission Flow**: Users submit a place; an `in_review` record is created immediately (verification codes deferred)
+- **AI Autofill**: Optional later enrichment via Google Places New API + Claude (Anthropic API). **AWS_IAM / admin-triggered only** — not a public route.
+- **Public Discovery**: Algolia search and DynamoDB get-by-id
 - **Ratings & Comments**: User-generated ratings and feedback
 - **Claiming & Reporting**: Place claiming by business owners, abuse reporting
 - **Admin Review**: Internal workflow for place approval and moderation
@@ -22,10 +22,9 @@ API Gateway (REST) → Lambda Functions → DynamoDB
                Google Places New API v1
 ```
 
-- **Region**: `us-east-2` (Ohio)
-- **Stack Name**: `plungepalz-places-api-prod`
-- **API Stage**: `Places_PROD`
-- **Auth**: Public endpoints = `NONE` | Admin endpoints = `AWS_IAM`
+- **Region**: `us-east-1`
+- **API Stage**: `dev`
+- **Auth**: Public endpoints = `NONE` | Admin endpoints (review, edit, AI autofill) = `AWS_IAM`
 
 ## Directory Map
 
@@ -42,15 +41,7 @@ API Gateway (REST) → Lambda Functions → DynamoDB
 
 ### 1. Deploy the CloudFormation Stack
 
-The live stack `plungepalz-places-api-prod` is deployed in `us-east-2`. If deploying fresh:
-
-```bash
-aws cloudformation deploy \
-  --template-file infrastructure/cloudformation.yaml \
-  --stack-name plungepalz-places-api-prod \
-  --region us-east-2 \
-  --capabilities CAPABILITY_IAM
-```
+Deploy is owned by AWS Bot / a separate infra change. This package targets **us-east-1** / **dev**. Do not treat `infrastructure/cloudformation.yaml` (legacy us-east-2 / Places_PROD) as the MVP source of truth.
 
 ### 2. Set Environment Variables
 
@@ -67,11 +58,17 @@ For deployed Lambdas, configure via CloudFormation parameters or the AWS console
 |----------|-------------|
 | `GOOGLE_PLACES_API_KEY` | Google Places New API v1 key |
 | `ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY` | Anthropic API key for Claude |
-| `ANTHROPIC_MODEL_ID` | Claude model (default: `claude-3-5-haiku-latest`) |
+| `ANTHROPIC_MODEL` | Claude model (default: `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` also accepted) |
+| `ANTHROPIC_MAX_TOKENS` | Autofill token cap (default 1024) |
 | `TABLE_PLACES` | DynamoDB table for places (default: `Places_Places`) |
 | `TABLE_SUBMISSIONS` | DynamoDB table for submissions (default: `Places_Submissions`) |
 | `TABLE_RATINGS` | DynamoDB table for ratings (default: `Places_RatingsComments`) |
 | `TABLE_CLAIMED` | DynamoDB table for claimed audit (default: `Places_ClaimedAudit`) |
+| `ALGOLIA_APP_ID` | Algolia application id |
+| `ALGOLIA_SEARCH_API_KEY` | Search-only key (`Places_Search`) |
+| `ALGOLIA_WRITE_API_KEY` | Write key (`Places_AlgoliaSync` only) |
+| `ALGOLIA_INDEX_NAME` | Index name (dev: `places_dev`) |
+| `CORS_ALLOWED_ORIGIN` | CORS origin (default `*`) |
 
 ### 3. Upload the Lambda Layer
 
@@ -87,10 +84,10 @@ aws lambda publish-layer-version \
   --layer-name generate_place_with_ai \
   --zip-file fileb://generate_place_with_ai.zip \
   --compatible-runtimes python3.14 \
-  --region us-east-2
+  --region us-east-1
 ```
 
-Attach the layer to `Places_SubmitAIAutofill` (and any future functions that need it).
+Attach `generate_place_with_ai` to `Places_SubmitAIAutofill`. Attach `places_common` to every HTTP Lambda and `Places_AlgoliaSync`.
 
 ### 4. Local Testing (Before Deploy)
 
@@ -123,5 +120,4 @@ The Lambda execution role (`PlacesLambdaExecutionRole`) requires:
 ## Runtime
 
 - **Python**: 3.14
-- **Dependencies**: `boto3` (provided by Lambda runtime), standard library only
-- **Optional**: `h3` library for geo indexing (as a separate Lambda layer)
+- **Dependencies**: `boto3` (Lambda runtime), `places_common` layer; `algoliasearch` on Search + AlgoliaSync; `h3` + `anthropic` on the AI layer

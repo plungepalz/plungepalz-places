@@ -76,7 +76,11 @@ def main():
         inp.get("anthropic_api_key")
         or os.environ.get("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "")
     )
-    model_id = inp.get("model_id") or os.environ.get("ANTHROPIC_MODEL_ID", "claude-3-5-haiku-latest")
+    model_id = (
+        inp.get("model_id")
+        or os.environ.get("ANTHROPIC_MODEL")
+        or os.environ.get("ANTHROPIC_MODEL_ID", "claude-haiku-4-5-20251001")
+    )
 
     from generate_place_with_ai import generate_place_record
 

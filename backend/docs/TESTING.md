@@ -4,13 +4,15 @@ Testing conventions are defined in [`.cursorrules`](../.cursorrules). Summary:
 
 ## Automated Tests (pytest)
 
-Run the test suite:
+Run the test suite (from `backend/`):
 
 ```bash
 cd backend
 pip install -r requirements-dev.txt
 pytest tests
 ```
+
+Dev deps include `pytest`, `h3`, `moto[dynamodb]`, `boto3`, and `algoliasearch`. Tests mock DynamoDB (moto) and Algolia (in-memory fake index); they do not use the network. Nothing should be skipped once `requirements-dev.txt` is installed.
 
 ## Manual Test Structure
 

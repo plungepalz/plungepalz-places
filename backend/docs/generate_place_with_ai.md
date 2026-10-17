@@ -2,9 +2,11 @@
 
 # This document will outline the steps taken in "generate_place_with_ai" to generate the best response and data structure that mets are specifications
 
-**Note on Photo URLs:** The photo media URLs shown below do not include API keys in the query string. To fetch photos, use one of these methods:
-- Send your API key via the `X-Goog-Api-Key` HTTP header when requesting the photo media URL
-- Add `skipHttpRedirect=true` to get a `photoUri` field in the response, which contains a temporary signed URL
+**Note on Photo URLs:** The photo media URLs shown below do not include API keys in the query string.
+
+Fetching a photo **always** authenticates the Places Photo Media request with the `X-Goog-Api-Key` header — including when `skipHttpRedirect=true`. That query flag only changes the response shape:
+- Default (`skipHttpRedirect` omitted/false): Google 302-redirects to image bytes. Do not persist a key-bearing media URL.
+- `skipHttpRedirect=true`: the **request still sends `X-Goog-Api-Key`**. The JSON body includes `photoUri`, a temporary signed URL that is **key-free**. Only `photoUri` is key-free; the HTTP call that obtained it was not.
 
 # === Step 1: Perform the Google Place API Search. We will use the Python Script "GooglePlacesNewAPI.py"
 backend/tests/UnitTestingScripts/GooglePlacesNewAPI.py

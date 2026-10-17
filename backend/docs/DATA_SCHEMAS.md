@@ -19,7 +19,7 @@
 | place_name | String | Display name |
 | place_type | String | business \| nature \| temporary_pop_up \| gym_amenity |
 | visibility | String | public \| hidden (default: public) |
-| place_slug | String | `{name}-{city}` hyphenated lowercase |
+| place_slug | String | `{name}-{city}-{place_id_suffix}` hyphenated lowercase |
 | address | String | Full street address |
 | city | String | City name |
 | state_province | String | State or province |
@@ -47,7 +47,12 @@
 | tags | List[String] | Discovery tags |
 | ts_created | String | ISO timestamp UTC |
 | ts_last_updated | String | ISO timestamp UTC |
-| claimed_ts | String | Empty or ISO timestamp UTC |
+| claimed_ts | String | ISO timestamp UTC when claimed; omitted if unclaimed |
+| ai_autofill_ts | String | ISO timestamp UTC when AI autofill last completed; omitted until then |
+| ai_autofill_status | String | pending \| complete \| failed; omitted if never attempted |
+| ai_autofill_claimed_ts | String | ISO timestamp UTC when the current/last autofill claim was taken; a pending claim older than 5 minutes may be reclaimed |
+
+`hours_of_operation` is **not** a top-level Places_Places attribute. The public GET /place API lifts it from `place_type_metadata.hours_of_operation` (business / gym_amenity) when present, otherwise returns `null`.
 
 ### place_type_metadata Sub-Schemas
 
@@ -164,7 +169,7 @@
   "place_name": "Plunge Lab",
   "place_type": "business",
   "visibility": "public",
-  "place_slug": "plunge-lab-salt-lake-city",
+  "place_slug": "plunge-lab-salt-lake-city-34567890",
   "address": "457 E 300 S, Salt Lake City, UT 84111",
   "city": "Salt Lake City",
   "state_province": "UT",
@@ -208,28 +213,23 @@
   "cover_image": null,
   "header_image": null,
   "internal_status": "in_review",
-  "internal_comments": "",
   "internal_verified": false,
-  "internal_verified_ts": "",
   "external_reporting": [],
   "total_plunge_sessions_recorded": 0,
   "total_sauna_sessions_recorded": 0,
   "external_ratings_ai_generated": {
     "classpass": {
         "count_string": "100+",
-        "rating_score": 4.9,   // Will be on a scale of 1-5
-        "classpass_url": ""
+        "rating_score": 4.9
     },
     "google": {
         "count_string": "94",
-        "rating_score": 4.7,     // Will be on a scale of 1-5
-        "google_business_url": ""
-    },
+        "rating_score": 4.7
+    }
   },
   "tags": ["downtown", "studio", "membership"],
   "ts_created": "2025-02-20T12:00:00Z",
-  "ts_last_updated": "2025-02-20T12:00:00Z",
-  "claimed_ts": ""
+  "ts_last_updated": "2025-02-20T12:00:00Z"
 }
 ```
 
@@ -265,18 +265,7 @@ Contains: `place_name`, `place_type`, `activity_types`, `address`, `lat`, `lng`,
 
 ### ai_autofill_result
 
-Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`,   "external_ratings_ai_generated": {
-    "classpass": {
-        "count_string": "100+",
-        "rating_score": 4.9,   // Will be on a scale of 1-5
-        "classpass_url": ""
-    },
-    "google": {
-        "count_string": "94",
-        "rating_score": 4.7,     // Will be on a scale of 1-5
-        "google_business_url": ""
-    },
-  },
+Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`, `external_ratings_ai_generated` (Google / ClassPass scores when present), `google_places_api_data`, `ai_errors`, `generated_ts`.
 
 ### Sample Records
 
@@ -468,9 +457,7 @@ Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`,
   "claimer_phone": "+1234567890",
   "claimer_name": "Jane Doe",
   "status": "in_review",
-  "stripe_payment_intent_id": "pi_xxx",
-  "reviewed_ts": "",
-  "reviewed_by": ""
+  "stripe_payment_intent_id": "pi_xxx"
 }
 ```
 

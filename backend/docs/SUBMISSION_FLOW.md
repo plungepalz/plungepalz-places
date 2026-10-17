@@ -1,227 +1,118 @@
-# PlungePalz Places API — Submission Flow
+# PlungePalz Places API — Submission Flow (MVP)
 
-This document is the **single source of truth** for the end-to-end place submission workflow. Use it when building any part of the submission pipeline.
+This document is the **single source of truth** for the MVP place submission workflow.
+
+Verification codes and “create with AI on submit” are **deferred**. AI autofill is an optional later call.
 
 ---
 
 ## Flow Overview
 
 ```
-Place Name + Place Type + Address
+Place name + type + activity_types + lat/lng (+ address unless nature)
             ↓
-  "Create Place With AI" clicked
+        POST /submit
             ↓
-  Creates Places_Submissions record
-       (verified: false)
+  ONE TransactWriteItems:
+    Places_Submissions  +  Places_Places
+    (verified: false)      (internal_status: in_review, visibility: public)
             ↓
-  Collect Email/Username + Phone
+  201 { submission_id, place_id, place_slug, is_approved: false }
             ↓
-  Email Code Sent → User Enters Code
-       ↓ ✅ Email Verified
-  SMS Code Sent → User Enters Code
-       ↓ ✅ SMS Verified
+  (Optional, later) POST /submit/ai_autofill
             ↓
-  AI Autofill Runs (Places_SubmitAIAutofill)
+  PlungePalz internal review — POST /plungepalz_admin/review
+  or CLI: python scripts/review_place.py --place-id … --decision active
             ↓
-  Places_Places record created
-  (internal_status: "in_review")
-            ↓
-  Success Screen shown to user
-            ↓
-  PlungePalz Internal Review (Places_AdminReview)
-            ↓
-         active ✅
-            ↓
-  (Optional) Claim → $9.99 → Places_ClaimedAudit
-            ↓
-  Claimer manages listing via Places_Edit
+         active → is_approved=true → Algolia upsert via Places_AlgoliaSync
 ```
 
 ---
 
-## Stage 1 — Place Basics
+## Stage 1 — Place basics → POST /submit
 
-The user enters core place information first:
+The client sends core fields (no identity, no codes):
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| place_name | string | Yes | Display name |
-| place_type | string | Yes | business \| nature \| temporary_pop_up \| gym_amenity |
-| activity_types | array | Yes | ["cold_plunge"] and/or ["sauna"] |
-| address | string | Yes for non-nature | Full street address |
-| latitude | number | Yes for nature | For coordinates-based lookup |
-| longitude | number | Yes for nature | For coordinates-based lookup |
-
-**"Create Place With AI" clicked** → Client calls `POST /submit` with place basics. No identity required at this step.
-
----
-
-## Stage 2 — Places_Submit: Create Submission
+| Field | Required | Notes |
+|-------|----------|-------|
+| place_name | Yes | max 200 characters |
+| place_type | Yes | business \| nature \| temporary_pop_up \| gym_amenity |
+| activity_types | Yes | non-empty subset of cold_plunge, sauna |
+| lat, lng | Yes | numbers in range |
+| address | Yes unless nature | max 500 characters |
+| description | No | max 2000 characters; preserved; AI will not overwrite a non-empty description |
+| email | No | stored on the submission if valid |
 
 ### Places_Submit
 
-1. Creates a `Places_Submissions` record with:
-   - `submission_id` (UUID v4)
-   - `source`: `mobile_app` | `web_app` | `admin_seed`
-   - `verified`: false
-   - `original_submission_record_json`: Place basics from Stage 1
-   - `place_id_generated`: "" (empty)
-2. Returns `{ submission_id }` to client
+1. Validates the body (400 + field `details` on failure).
+2. Generates `place_id` (UUID v4) and `submission_id` (`sub_` + UUID).
+3. Generates `place_slug` from name + parsed city + a short `place_id` suffix (avoids same-name/city collisions).
+4. Computes `h3_r7` / `h3_r5` / `h3_r4` if `h3` is installed; **omits** those attributes otherwise. Never writes empty strings.
+5. In **one** `TransactWriteItems`:
+   - `Places_Submissions`: `submitted_ts`, `submitted_via=web_app`, `verified=false`, `place_id_generated`, `original_submission_record_json`
+   - `Places_Places`: `internal_status=in_review`, `visibility=public`, timestamps `ts_created` / `ts_last_updated`
+6. Returns 201 `{ submission_id, place_id, place_slug, is_approved: false }`
 
-**Note:** Email and SMS codes are not sent at this step. Identity is collected next.
-
----
-
-## Stage 3 — Collect Identity
-
-The user provides identity information:
-
-- **PlungePalz user:** `identity: { type: "username", value: "plungepalz_user_id" }`
-- **Non-user (email):** `identity: { type: "email", value: "email@example.com" }`
-
-Additionally required:
-- `email` — For verification code delivery
-- `phone_number` — For SMS verification code
-
-Client updates the submission with identity (or passes identity to the verification flow). This triggers code sending.
+The place is immediately GetByID-able and Search-able (unless `approved_only=true`). It is not `is_approved` until admin review.
 
 ---
 
-## Stage 4 — Verification
-
-### Email Verification
-
-1. **Email code sent** via SES (6-digit code)
-2. User enters code
-3. Client calls `POST /submit/verify` with `type: "email"` and the code
-4. ✅ **Email verified**
-
-### SMS Verification
-
-1. **SMS code sent** via SNS (6-digit code)
-2. User enters code
-3. Client calls `POST /submit/verify` with `type: "phone_number"` and the code
-4. ✅ **SMS verified**
-
-### Places_SubmitVerify Request
-
-```json
-{
-  "submission_id": "uuid",
-  "type": "email | username | phone_number",
-  "value": "6-digit code or credential"
-}
-```
-
-On success for **both** email and phone:
-- Set `verified: true`
-- Set `verified_ts` to current UTC ISO timestamp
-
-Client can then proceed to **Stage 5**.
-
----
-
-## Stage 5 — AI Autofill
+## Stage 2 — Optional AI autofill (off the submit path)
 
 ### Places_SubmitAIAutofill
 
-**Request:**
-```json
-{
-  "submission_id": "uuid"
-}
-```
+**Auth: AWS_IAM** — admin-triggered only; not a public route. **Not** invoked by Submit. No verification-code gate.
 
-**Flow:**
+1. Load submission and/or existing place (`place_id` or `submission.place_id_generated`).
+2. **Claim first** with a conditional `SET ai_autofill_status = pending, ai_autofill_claimed_ts = now` (`attribute_exists(place_id)`; allowed when status is missing, not `pending`/`complete`, or `pending` with `ai_autofill_claimed_ts` older than 5 minutes). **409** (or **404** if the place is gone) and **no** Google/Anthropic calls on ConditionalCheckFailed. `failed` and stale `pending` can retry.
+3. Call `generate_place_record()` from the `generate_place_with_ai` layer.
+4. On success, `UpdateItem` **only** AI fields plus `ai_autofill_status=complete` and `ai_autofill_ts`. Do not replace user-submitted name/type/coords/address.
+5. On failure, set `ai_autofill_status=failed`. Provider error strings are logged, never returned.
+6. `description` is set only if the existing description is empty.
 
-1. Load `Places_Submissions` by `submission_id`
-2. **Fail if** not found (404) or `verified` is false (400)
-3. **Fail if** `place_id_generated` already set (409 — idempotency guard)
-4. Extract from `original_submission_record_json`:
-   - `place_name`, `place_type`, `activity_types`
-   - `address` (for non-nature) or `lat`/`lng` (or `latitude`/`longitude`) for nature
-5. Build `place_location`:
-   - If `place_type == "nature"`: `{ type: "coordinates", value: "{lng}|{lat}" }`
-   - Otherwise: `{ type: "address", value: address }`
-6. Call `generate_place_record()` from `generate_place_with_ai` layer:
-
-   **Input to layer:**
-   - `place_name`
-   - `place_type`
-   - `place_location` (address or coordinates)
-   - `activity_types`
-   - `google_places_api_key` (from env)
-   - `anthropic_api_key` (from env)
-   - `model_id` (from env)
-   - `submission_id`
-
-   **Layer output:**
-   ```json
-   {
-     "success": true | false,
-     "record": { ... } | null,
-     "errors": ["string"],
-     "partial": true | false
-   }
-   ```
-
-7. If `success` is false → return 500 with `errors`
-8. If `partial` is true → proceed anyway (partial result acceptable)
-9. Write `result["record"]` to `Places_Places` via PutItem
-   - Set `internal_status: "in_review"`
-10. Update `Places_Submissions` with `ai_autofill_result` and `place_id_generated`
-11. Return 200: `{ place_id, place_slug, ai_autofill_result }`
-
-**Success screen** shown to user.
+Model: `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` is also accepted). Token cap: `ANTHROPIC_MAX_TOKENS` (default 1024).
 
 ---
 
-## Stage 6 — Internal Review
+## Stage 3 — Internal review
 
-### Places_AdminReview
+### Places_AdminReview (IAM) or `scripts/review_place.py` (boto3)
 
-PlungePalz staff review the newly created place:
-
-- **Request:** `{ place_id, decision: "active" | "rejected", internal_comments }`
-- **Auth:** AWS_IAM
-- **Action:** Update `Places_Places.internal_status` to `active` or `rejected`
-- **Result:** Place is visible (or not) in public search based on `internal_status` and `visibility`
+- Body: `{ place_id, decision: "active" | "rejected", internal_comments? }`
+- Sets `internal_status`, `ts_last_updated`, optional `internal_comments`
+- `decision=active` ⇒ `is_approved=true` on subsequent Search / GetByID
+- Stream → `Places_AlgoliaSync` upserts (active/in_review + public) or deletes (rejected/hidden)
 
 ---
 
-## Stage 7 — Claiming (Optional)
+## Stage 4 — Claiming (optional, unchanged / not MVP)
 
-### Places_Claim
-
-A business owner can claim a place after paying a $9.99 Stripe fee:
-
-1. Client creates Stripe PaymentIntent for $9.99
-2. Client calls `POST /claim` with `place_id`, claimer details, `stripe_payment_intent_id`
-3. `Places_Claim` creates `Places_ClaimedAudit` record:
-   - `place_id`, `ts_claimed`
-   - `claimer_email`, `claimer_phone`, `claimer_name`
-   - `status`: `in_review`
-   - `stripe_payment_intent_id`
-4. PlungePalz reviews claim → sets `status` to `approved` or `blocked`
-5. If approved → **claimer manages listing via Places_Edit**
+`POST /claim` after a $9.99 Stripe fee remains backlog.
 
 ---
 
-## Sequence Summary
+## Sequence summary (MVP)
 
 ```
-1. User enters Place Name + Place Type + Address
-2. "Create Place With AI" → POST /submit → Places_Submissions created (verified: false)
-3. User provides Email/Username + Phone
-4. Email code sent → POST /submit/verify (email) → ✅ Email verified
-5. SMS code sent → POST /submit/verify (phone) → ✅ SMS verified
-6. POST /submit/ai_autofill → Places_SubmitAIAutofill → Places_Places written → Success screen
-7. POST /plungepalz_admin/review → internal_status: active
-8. (Optional) POST /claim → Stripe $9.99 → Places_ClaimedAudit → Places_Edit for claimer
+1. User enters place basics
+2. POST /submit → Submissions + Places (in_review) in one transaction
+3. (Optional) POST /submit/ai_autofill → UpdateItem AI fields only
+4. POST /plungepalz_admin/review or review_place.py → active | rejected
+5. (Optional, later) POST /claim
 ```
 
 ---
 
 ## Idempotency
 
-- **Places_SubmitAIAutofill** is idempotent: if `place_id_generated` is already set, return 409 and do not re-run AI or overwrite data.
+- **Places_SubmitAIAutofill:** Conditional claim `SET ai_autofill_status = pending, ai_autofill_claimed_ts = now` before any paid outbound call (`attribute_exists(place_id)`). 409 if `complete` or a fresh `pending` (younger than 5 minutes). `failed` and stale `pending` may retry.
+- **Places_AlgoliaSync:** `save_objects` by `objectID=place_id`; deletes of missing IDs are ignored.
+
+---
+
+## Deferred (not MVP)
+
+- Email/SMS verification codes (`Places_SubmitVerify`)
+- AI on the submit path
+- Identity collection before the place exists
