@@ -1,0 +1,4 @@
+# Local seed CLI state and created-id dumps (never commit)
+.seed_places_state.json
+.seed_places_created.json
+.seed_*.json

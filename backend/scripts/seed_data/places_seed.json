@@ -1,0 +1,399 @@
+{
+  "places": [
+    {
+      "name": "Optimyze Scottsdale",
+      "place_type": "business",
+      "activity_types": ["cold_plunge", "sauna"],
+      "address": "7349 N Via Paseo Del Sur Suite 535, Scottsdale, AZ 85258, USA",
+      "lat": 33.5427445,
+      "lng": -111.9012662,
+      "website": "https://optimyze.me/scottsdale-cold-plunge/",
+      "source_url": "https://www.openstreetmap.org/way/5673115"
+    },
+    {
+      "name": "RESET Old Town Scottsdale",
+      "place_type": "business",
+      "activity_types": ["cold_plunge", "sauna"],
+      "address": "2515 N Scottsdale Rd Suite 108, Scottsdale, AZ 85257, USA",
+      "lat": 33.4752853,
+      "lng": -111.9253529,
+      "website": "https://resetmindbody.com/locations/old-town-scottsdale-az/",
+      "source_url": "https://www.openstreetmap.org/way/993089216"
+    },
+    {
+      "name": "ReConnect Mind Body Scottsdale",
+      "place_type": "business",
+      "activity_types": ["cold_plunge", "sauna"],
+      "address": "13802 N Scottsdale Rd Space 171, Scottsdale, AZ 85254, USA",
+      "lat": 33.613062,
+      "lng": -111.9271982,
+      "website": "https://thereconnectlife.com/scottsdale/",
+      "source_url": "https://www.openstreetmap.org/way/227545792"
+    },
+    {
+      "name": "FIX Medical Group Scottsdale",
+      "place_type": "gym_amenity",
+      "activity_types": ["cold_plunge", "sauna"],
+      "address": "11333 N Scottsdale Rd Suite 140, Scottsdale, AZ 85254, USA",
+      "lat": 33.5887091,
+      "lng": -111.9254988,
+      "website": "https://fixmedicalgroup.com/scottsdaleaz/memberships/",
+      "source_url": "https://www.openstreetmap.org/way/836973771"
+    },
+    {
+      "name": "Hanmer Springs Thermal Pools & Spa",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "42 Amuri Avenue, Hanmer Springs 7334, New Zealand",
+      "lat": -42.5228752,
+      "lng": 172.8281261,
+      "website": "https://hanmersprings.co.nz/",
+      "source_url": "https://www.openstreetmap.org/way/26828533"
+    },
+    {
+      "name": "Tekapo Springs",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "300 Lakeside Drive, Lake Tekapo 7945, New Zealand",
+      "lat": -43.9947298,
+      "lng": 170.461178,
+      "website": "https://tekaposprings.co.nz/",
+      "source_url": "https://www.openstreetmap.org/way/890896582"
+    },
+    {
+      "name": "InterContinental Fiji Golf Resort & Spa",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Maro Road, Natadola Bay, Viti Levu, Fiji",
+      "lat": -18.1069443,
+      "lng": 177.323037,
+      "website": "https://www.fiji.intercontinental.com/spa-intercontinental",
+      "source_url": "https://www.openstreetmap.org/way/350094964"
+    },
+    {
+      "name": "Kilolani Spa at Grand Wailea",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "3850 Wailea Alanui Drive, Wailea, HI 96753, USA",
+      "lat": 20.6830548,
+      "lng": -156.4413019,
+      "website": "https://spa.grandwailea.com/grand-wailea-offers/fitness-center-hydrotherapy-gardens-pass",
+      "source_url": "https://www.openstreetmap.org/way/449921403"
+    },
+    {
+      "name": "Hualalai Spa",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "72-100 Kaupulehu Drive, Kailua-Kona, HI 96740, USA",
+      "lat": 19.8278417,
+      "lng": -155.991648,
+      "website": "https://www.hualalairesort.com/spa/",
+      "source_url": "https://www.openstreetmap.org/node/5132030280"
+    },
+    {
+      "name": "To Sua Ocean Trench",
+      "place_type": "nature",
+      "activity_types": ["cold_plunge"],
+      "address": "Lotofaga, Aleipata, Upolu, Samoa",
+      "lat": -14.0438745,
+      "lng": -171.5623183,
+      "source_url": "https://www.openstreetmap.org/way/317700281"
+    },
+    {
+      "name": "Waimea Valley",
+      "place_type": "nature",
+      "activity_types": ["cold_plunge"],
+      "address": "59-864 Kamehameha Highway, Haleiwa, HI 96712, USA",
+      "lat": 21.636374,
+      "lng": -158.0548,
+      "website": "https://www.waimeavalley.net/",
+      "source_url": "https://www.openstreetmap.org/node/4472135689"
+    },
+    {
+      "name": "Löyly",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Hernesaarenranta 4, 00150 Helsinki, Finland",
+      "lat": 60.1521774,
+      "lng": 24.9304437,
+      "website": "https://www.loylyhelsinki.fi/en/info",
+      "source_url": "https://www.openstreetmap.org/way/625576876"
+    },
+    {
+      "name": "Allas Sea Pool",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Katajanokanlaituri 2 A, 00160 Helsinki, Finland",
+      "lat": 60.1671185,
+      "lng": 24.9580626,
+      "website": "https://www.allaspool.fi/en/info/",
+      "source_url": "https://www.openstreetmap.org/way/443717282"
+    },
+    {
+      "name": "Kotiharjun Sauna",
+      "place_type": "business",
+      "activity_types": ["sauna"],
+      "address": "Harjutorinkatu 1, 00500 Helsinki, Finland",
+      "lat": 60.1865108,
+      "lng": 24.9573407,
+      "website": "https://www.kotiharjunsauna.fi/",
+      "source_url": "https://www.openstreetmap.org/node/611033680"
+    },
+    {
+      "name": "Kulttuurisauna",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Hakaniemenranta 17, 00530 Helsinki, Finland",
+      "lat": 60.1780294,
+      "lng": 24.9632065,
+      "website": "https://www.myhelsinki.fi/places/kulttuurisauna/",
+      "source_url": "https://www.openstreetmap.org/way/209347034"
+    },
+    {
+      "name": "Rajaportin Sauna",
+      "place_type": "business",
+      "activity_types": ["sauna"],
+      "address": "Pispalan valtatie 9, 33250 Tampere, Finland",
+      "lat": 61.502109,
+      "lng": 23.7197484,
+      "website": "https://www.rajaportti.fi/peruslinkit/sijainti.en.html",
+      "source_url": "https://www.openstreetmap.org/node/570120833"
+    },
+    {
+      "name": "Sompasauna",
+      "place_type": "nature",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Kansanpuistonpolku 5, 00570 Helsinki, Finland",
+      "lat": 60.1807507,
+      "lng": 24.9988826,
+      "website": "https://sompasauna.fi/arrival.html",
+      "source_url": "https://www.openstreetmap.org/node/3612497706"
+    },
+    {
+      "name": "Sky Lagoon",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Vesturvör 44, 200 Kópavogur, Iceland",
+      "lat": 64.1164654,
+      "lng": -21.9464351,
+      "website": "https://www.skylagoon.com/",
+      "source_url": "https://www.openstreetmap.org/node/8685848380"
+    },
+    {
+      "name": "The Well",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Kongeveien 65, 1412 Sofiemyr, Norway",
+      "lat": 59.7920335,
+      "lng": 10.8199279,
+      "website": "https://thewell.no/en/contact/",
+      "source_url": "https://www.openstreetmap.org/way/872204100"
+    },
+    {
+      "name": "Yasuragi Hasseludden",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Hamndalsvägen 6, 132 81 Saltsjö-Boo, Sweden",
+      "lat": 59.3456078,
+      "lng": 18.2410655,
+      "website": "https://www.yasuragi.se/",
+      "source_url": "https://www.openstreetmap.org/way/31551749"
+    },
+    {
+      "name": "Community Sauna Baths Hackney Wick",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Eastway Baths, 80 Eastway, London E9 5JH, United Kingdom",
+      "lat": 51.5473109,
+      "lng": -0.029446,
+      "website": "https://www.community-sauna.co.uk/locations/hackneywick",
+      "source_url": "https://www.openstreetmap.org/node/9763845697"
+    },
+    {
+      "name": "Banya No.1 Chiswick",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "404-406 Chiswick High Road, London W4 5TF, United Kingdom",
+      "lat": 51.4925636,
+      "lng": -0.2651482,
+      "website": "https://gobanyachiswick.co.uk/contacts/",
+      "source_url": "https://www.openstreetmap.org/way/675640505"
+    },
+    {
+      "name": "Finnish Church in London",
+      "place_type": "business",
+      "activity_types": ["sauna"],
+      "address": "33 Albion Street, London SE16 7HZ, United Kingdom",
+      "lat": 51.5000067,
+      "lng": -0.0525062,
+      "website": "https://www.finnishchurch.org.uk/",
+      "source_url": "https://www.openstreetmap.org/way/107882988"
+    },
+    {
+      "name": "Cold Plunge Coffee",
+      "place_type": "business",
+      "activity_types": ["cold_plunge", "sauna"],
+      "address": "457 East 300 South, Salt Lake City, UT 84111, USA",
+      "lat": 40.7630802,
+      "lng": -111.8776502,
+      "website": "https://www.coldplungecoffee.com/",
+      "source_url": "https://www.openstreetmap.org/way/595951379"
+    },
+    {
+      "name": "Bathhouse Williamsburg",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "103 North 10th Street, Brooklyn, NY 11249, USA",
+      "lat": 40.7205182,
+      "lng": -73.9574036,
+      "website": "https://www.abathhouse.com/williamsburg",
+      "source_url": "https://www.openstreetmap.org/node/2842857583"
+    },
+    {
+      "name": "Othership Yorkville",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "110 Bloor Street West, Toronto, ON M5S 2W7, Canada",
+      "lat": 43.669405,
+      "lng": -79.3922395,
+      "website": "https://www.othership.us/yorkville",
+      "source_url": "https://www.openstreetmap.org/way/61010240"
+    },
+    {
+      "name": "Othership Adelaide",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "425 Adelaide Street West, Toronto, ON M5V 3C1, Canada",
+      "lat": 43.6461577,
+      "lng": -79.3977835,
+      "website": "https://www.othership.us/adelaide",
+      "source_url": "https://www.openstreetmap.org/node/11483850368"
+    },
+    {
+      "name": "Kabuki Springs & Spa",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "1750 Geary Boulevard, San Francisco, CA 94115, USA",
+      "lat": 37.7846994,
+      "lng": -122.4326243,
+      "website": "https://kabukisprings.com/location-hours/",
+      "source_url": "https://www.openstreetmap.org/node/6546393013"
+    },
+    {
+      "name": "Archimedes Banya",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "748 Innes Avenue, San Francisco, CA 94124, USA",
+      "lat": 37.7305543,
+      "lng": -122.3727303,
+      "website": "https://banyasf.com/",
+      "source_url": "https://www.openstreetmap.org/node/1575668183"
+    },
+    {
+      "name": "Scandinave Spa Whistler",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "8010 Mons Road, Whistler, BC V8E 1L1, Canada",
+      "lat": 50.1360399,
+      "lng": -122.947937,
+      "website": "https://www.scandinave.com/whistler/en/",
+      "source_url": "https://www.openstreetmap.org/node/5389975423"
+    },
+    {
+      "name": "Barton Springs Pool",
+      "place_type": "nature",
+      "activity_types": ["cold_plunge"],
+      "address": "2131 William Barton Drive, Austin, TX 78746, USA",
+      "lat": 30.2638447,
+      "lng": -97.7701429,
+      "website": "https://www.austintexas.gov/department/barton-springs-pool",
+      "source_url": "https://www.openstreetmap.org/way/27442711"
+    },
+    {
+      "name": "Lake Louise",
+      "place_type": "nature",
+      "activity_types": ["cold_plunge"],
+      "lat": 51.4114893,
+      "lng": -116.2289907,
+      "source_url": "https://www.openstreetmap.org/relation/18238904"
+    },
+    {
+      "name": "Silver Lake",
+      "place_type": "nature",
+      "activity_types": ["cold_plunge"],
+      "lat": 40.6038899,
+      "lng": -111.5889326,
+      "source_url": "https://www.openstreetmap.org/relation/8466370"
+    },
+    {
+      "name": "Thermae-Yu",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "1-1-2 Kabukicho, Shinjuku-ku, Tokyo 160-0021, Japan",
+      "lat": 35.6945138,
+      "lng": 139.7050162,
+      "website": "https://thermae-yu.jp/",
+      "source_url": "https://www.openstreetmap.org/way/155000204"
+    },
+    {
+      "name": "Spa LaQua",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "1-1-1 Kasuga, Bunkyo-ku, Tokyo 112-0003, Japan",
+      "lat": 35.7071329,
+      "lng": 139.7529383,
+      "website": "https://en.www.laqua.jp/access/",
+      "source_url": "https://www.openstreetmap.org/node/6709540946"
+    },
+    {
+      "name": "Peninsula Hot Springs",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "140 Springs Lane, Fingal VIC 3939, Australia",
+      "lat": -38.4075026,
+      "lng": 144.8408323,
+      "website": "https://www.peninsulahotsprings.com/contact-us",
+      "source_url": "https://www.openstreetmap.org/way/667042250"
+    },
+    {
+      "name": "Bondi Icebergs Club",
+      "place_type": "business",
+      "activity_types": ["cold_plunge", "sauna"],
+      "address": "1 Notts Avenue, Bondi Beach NSW 2026, Australia",
+      "lat": -33.8952732,
+      "lng": 151.2744078,
+      "website": "https://icebergs.com.au/contact/",
+      "source_url": "https://www.openstreetmap.org/way/173244796"
+    },
+    {
+      "name": "Dragon Hill Spa",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "40 Hangang-daero 21na-gil, Yongsan-gu, Seoul, South Korea",
+      "lat": 37.5277602,
+      "lng": 126.9639689,
+      "website": "https://english.visitseoul.net/attractions",
+      "source_url": "https://www.openstreetmap.org/way/469022818"
+    },
+    {
+      "name": "Spa Land Centum City",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "35 Centum nam-daero, Haeundae-gu, Busan 48058, South Korea",
+      "lat": 35.1687198,
+      "lng": 129.1293987,
+      "website": "https://www.shinsegae.com/english/visit/centumcity.do",
+      "source_url": "https://www.openstreetmap.org/node/4523076790"
+    },
+    {
+      "name": "vabali spa Berlin",
+      "place_type": "business",
+      "activity_types": ["sauna", "cold_plunge"],
+      "address": "Seydlitzstraße 6, 10557 Berlin, Germany",
+      "lat": 52.5284079,
+      "lng": 13.3588929,
+      "website": "https://www.vabali.de/berlin/",
+      "source_url": "https://www.openstreetmap.org/way/276827130"
+    }
+  ]
+}

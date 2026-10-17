@@ -304,6 +304,67 @@ def test_ai_autofill_stale_pending_can_reclaim(dynamodb_tables, monkeypatch):
     assert stored.get("ai_autofill_claimed_ts")
 
 
+def test_set_autofill_status_writes_when_claim_held(dynamodb_tables):
+    _seed(dynamodb_tables)
+    table = dynamodb_tables.Table("Places_Places")
+    table.update_item(
+        Key={"place_id": "place-ai-1"},
+        UpdateExpression="SET ai_autofill_status = :st, ai_autofill_claimed_ts = :ts",
+        ExpressionAttributeValues={":st": "pending", ":ts": "2026-03-01T12:00:00Z"},
+    )
+    mod = load_handler("Places_SubmitAIAutofill")
+    mod._set_autofill_status(table, "place-ai-1", "failed", "2026-03-01T12:00:00Z")
+    stored = table.get_item(Key={"place_id": "place-ai-1"})["Item"]
+    assert stored["ai_autofill_status"] == "failed"
+
+
+def test_set_autofill_status_skips_when_claim_lost(dynamodb_tables, caplog):
+    _seed(dynamodb_tables)
+    table = dynamodb_tables.Table("Places_Places")
+    table.update_item(
+        Key={"place_id": "place-ai-1"},
+        UpdateExpression="SET ai_autofill_status = :st, ai_autofill_claimed_ts = :ts",
+        ExpressionAttributeValues={":st": "pending", ":ts": "2026-03-01T13:00:00Z"},
+    )
+    mod = load_handler("Places_SubmitAIAutofill")
+    with caplog.at_level("WARNING"):
+        mod._set_autofill_status(table, "place-ai-1", "failed", "2026-03-01T12:00:00Z")
+        mod._set_autofill_status(table, "place-ai-1", "complete", "2026-03-01T12:00:00Z")
+    stored = table.get_item(Key={"place_id": "place-ai-1"})["Item"]
+    assert stored["ai_autofill_status"] == "pending"
+    assert stored["ai_autofill_claimed_ts"] == "2026-03-01T13:00:00Z"
+    assert "claim no longer held" in caplog.text
+
+
+def test_ai_autofill_persist_skips_when_claim_stolen(dynamodb_tables, monkeypatch):
+    _seed(dynamodb_tables, description="Keep me")
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "ak")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "ak")
+
+    def _gen(*_args, **_kwargs):
+        dynamodb_tables.Table("Places_Places").update_item(
+            Key={"place_id": "place-ai-1"},
+            UpdateExpression="SET ai_autofill_claimed_ts = :ts, ai_autofill_status = :st",
+            ExpressionAttributeValues={
+                ":ts": "2099-01-01T00:00:00Z",
+                ":st": "pending",
+            },
+        )
+        return _ai_record()
+
+    monkeypatch.setattr(mod, "generate_place_record", _gen)
+    resp = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
+    assert resp["statusCode"] == 409
+    stored = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": "place-ai-1"})["Item"]
+    assert stored["ai_autofill_status"] == "pending"
+    assert stored["ai_autofill_claimed_ts"] == "2099-01-01T00:00:00Z"
+    assert "ai_autofill_ts" not in stored
+    assert stored.get("amenities") in (None, [], SAMPLE_PLACE.get("amenities"))
+
+
 def test_ai_autofill_failed_can_retry(dynamodb_tables, monkeypatch):
     place = _seed(dynamodb_tables)
     place["ai_autofill_status"] = "failed"

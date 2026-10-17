@@ -86,19 +86,28 @@ def handler(event, context):
     page = params["page"]
     offset = page * limit
     cap = algolia_pagination_cap()
+    opts = _search_options(params)
     if offset >= cap:
+        # Lightweight count-only query so total still reflects real nbHits.
+        opts["offset"] = 0
+        opts["length"] = 0
+        try:
+            index = _get_index()
+            raw = index.search(params["q"], opts)
+        except Exception:
+            return error_response(500, "INTERNAL_ERROR", "Search failed")
+        total = int(raw.get("nbHits") if raw.get("nbHits") is not None else 0)
         return success_response(
             200,
             {
                 "places": [],
-                "total": 0,
+                "total": total,
                 "page": page,
                 "limit": limit,
                 "has_more": False,
             },
         )
 
-    opts = _search_options(params)
     # offset/length (not page/hitsPerPage) so shrinking the last window
     # still starts at page*limit. Same cap as has_more.
     opts["offset"] = offset
