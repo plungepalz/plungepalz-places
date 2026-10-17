@@ -35,6 +35,7 @@ interface PlacesMapProps {
 const PANEL_PADDING_RIGHT = 496;
 /** Left list panel: ~380px + left-4. */
 const LIST_PADDING_LEFT = 400;
+const ZERO_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
 
 function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
   if (flyRequest.zoom == null) return currentZoom;
@@ -182,7 +183,6 @@ export default function PlacesMap({
   const handleLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
-    map.setProjection('mercator');
     void Promise.all([
       ensurePinImage(map, 'pin-cluster', pinSvg('#111111', false)),
       ensurePinImage(map, 'pin-place', pinSvg('#f97316', true)),
@@ -191,10 +191,23 @@ export default function PlacesMap({
     reportViewport();
   }, [reportViewport]);
 
+  const detailsOpen = panelOpen && !locationPickMode;
+
+  useEffect(() => {
+    if (detailsOpen) return;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    map.setPadding(ZERO_PADDING);
+  }, [detailsOpen]);
+
   useEffect(() => {
     if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;
-    const center = mapRef.current.getMap().getCenter();
-    onMapCenter({ lat: center.lat, lng: center.lng });
+    const map = mapRef.current.getMap();
+    map.setPadding(ZERO_PADDING);
+    // Visual canvas center, not Mapbox's padded getCenter() leftover from flyTo.
+    const canvas = map.getCanvas();
+    const point = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+    onMapCenter({ lat: point.lat, lng: point.lng });
   }, [mapCenterRequest, onMapCenter]);
 
   useEffect(() => {
@@ -218,6 +231,9 @@ export default function PlacesMap({
   const zoomBy = (delta: number) => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    if (!detailsOpen) {
+      map.setPadding(ZERO_PADDING);
+    }
     map.zoomTo(map.getZoom() + delta, { duration: 200 });
   };
 
@@ -259,6 +275,10 @@ export default function PlacesMap({
       const clusterCenter: [number, number] = coords ?? [event.lngLat.lng, event.lngLat.lat];
       source.getClusterExpansionZoom(Number(props.cluster_id), (error, zoom) => {
         if (error || zoom == null) return;
+        const map = mapRef.current?.getMap();
+        if (map && !detailsOpen) {
+          map.setPadding(ZERO_PADDING);
+        }
         mapRef.current?.easeTo({ center: clusterCenter, zoom, duration: 500 });
       });
       return;

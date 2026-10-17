@@ -65,6 +65,7 @@ Restart `npm run dev` after changing env vars.
 npm run dev      # http://localhost:3000
 npm run build
 npm run lint
+npm test         # node:test files via tsx (list header + bbox)
 npm start        # production server after build
 ```
 
