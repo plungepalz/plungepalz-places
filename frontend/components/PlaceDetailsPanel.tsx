@@ -78,7 +78,9 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
 
   useDialogA11y({ onClose, initialFocusRef: closeButtonRef, containerRef: panelRef });
 
-  const locationLine = place ? formatLocation(place.city, place.state_province, place.country) : '';
+  const locationLine = place
+    ? formatLocation(place.city, place.state_province, place.country, place.postal_code)
+    : '';
 
   return (
     <aside

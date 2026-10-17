@@ -21,7 +21,7 @@ function matchesBbox(place: PlaceSearchResult, bounds: MapBounds | null): boolea
 }
 
 function searchableText(place: PlaceSearchResult): string {
-  return [place.place_name, place.city, place.state_province, place.country, place.description]
+  return [place.place_name, place.city, place.state_province, place.country, place.postal_code, place.description]
     .filter((value): value is string => typeof value === 'string' && value.length > 0)
     .join(' ')
     .toLowerCase();

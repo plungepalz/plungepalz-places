@@ -106,7 +106,7 @@ This supersedes `backend/docs/API_REFERENCE.md` where they differ (lead-engineer
 
 **GET /search response:** `{ places, total, page, limit, has_more }`. The search backend (Algolia) cannot page past **1000** hits; `has_more` is false once that cap is reached. The mock client matches this.
 
-Each place: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types[]`, `description`, `cover_image` (url\|null), `lat`, `lng` (numbers), `is_approved` (bool), `ts_created`. **Nature places may have `address`, `city`, `state_province`, and `country` as `null`.** Cards, the list header, and the details drawer skip those fields instead of showing “Unknown location”.
+Each place: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, optional `postal_code` (string or `null`, may be omitted), `activity_types[]`, `description`, `cover_image` (url\|null), `lat`, `lng` (numbers), `is_approved` (bool), `ts_created`. **Nature places may have `address`, `city`, `state_province`, `country`, and `postal_code` as `null`.** Cards, the list header, and the details drawer skip those fields instead of showing “Unknown location”. The details drawer Location line shows `postal_code` after city/state when present (e.g. `Scottsdale, AZ 85251`).
 
 With neither `bbox` nor `lat`/`lng`, `/search` returns the **global catalog**, paginated, newest first by `ts_created`. Mocks sort the same way.
 

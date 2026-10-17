@@ -11,6 +11,8 @@ export interface PlaceSearchResult {
   city: string | null;
   state_province: string | null;
   country: string | null;
+  /** Optional on search and detail payloads; may be omitted or null. */
+  postal_code?: string | null;
   activity_types: ActivityType[];
   description: string | null;
   cover_image: string | null;
