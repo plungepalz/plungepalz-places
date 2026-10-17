@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import AddPlacePanel from '@/components/AddPlacePanel';
 import FilterBar from '@/components/FilterBar';
 import PlaceDetailsPanel from '@/components/PlaceDetailsPanel';
@@ -55,6 +55,8 @@ export default function HomePage() {
   const [mapZoom, setMapZoom] = useState<number | null>(null);
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const requestIdRef = useRef(0);
+  const filterSlotRef = useRef<HTMLDivElement>(null);
+  const [chromeTop, setChromeTop] = useState(96);
 
   const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
@@ -145,6 +147,8 @@ export default function HomePage() {
   }, [successMessage]);
 
   const handleLocationChange = (next: LocationPreset) => {
+    setDetailsPlaceId(null);
+    setAddPlaceOpen(false);
     setLocation(next);
     setMapZoom(next.zoom);
     setFlyRequest({
@@ -232,6 +236,21 @@ export default function HomePage() {
 
   const panelOpen = Boolean(detailsPlaceId) || addPlaceOpen;
 
+  useLayoutEffect(() => {
+    const slot = filterSlotRef.current;
+    if (!slot) return;
+    const update = () => {
+      const chrome = slot.firstElementChild as HTMLElement | null;
+      const bottom = chrome?.getBoundingClientRect().bottom ?? 96;
+      setChromeTop(Math.ceil(bottom + 8));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(slot);
+    if (slot.firstElementChild) observer.observe(slot.firstElementChild);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className="relative h-screen overflow-hidden bg-[#e8e4dc] text-gray-900">
       <div className="absolute inset-0">
@@ -255,32 +274,10 @@ export default function HomePage() {
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-20">
-        <div className="pointer-events-auto px-4 pt-4">
-          <FilterBar
-            location={location}
-            onLocationChange={handleLocationChange}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            selectedActivities={selectedActivities}
-            onActivityToggle={(activity) =>
-              setSelectedActivities((prev) =>
-                prev.includes(activity) ? prev.filter((item) => item !== activity) : [...prev, activity]
-              )
-            }
-            selectedPlaceTypes={selectedPlaceTypes}
-            onPlaceTypeToggle={(placeType) =>
-              setSelectedPlaceTypes((prev) =>
-                prev.includes(placeType) ? prev.filter((item) => item !== placeType) : [...prev, placeType]
-              )
-            }
-            approvedOnly={approvedOnly}
-            onApprovedOnlyToggle={() => setApprovedOnly((prev) => !prev)}
-            mockMode={isMockMode}
-            onAddPlace={handleOpenAddPlace}
-          />
-        </div>
-
-        <div className="pointer-events-auto absolute bottom-4 left-4 top-24 w-[min(100%-2rem,380px)]">
+        <div
+          className="pointer-events-auto absolute bottom-4 left-4 w-[min(100%-2rem,380px)]"
+          style={{ top: chromeTop }}
+        >
           <PlacesList
             places={places}
             total={displayTotal}
@@ -298,6 +295,32 @@ export default function HomePage() {
         </div>
       </div>
 
+      {/* Above the list (z-20). Overlay is none; only the visible bar captures clicks. */}
+      <div ref={filterSlotRef} className="pointer-events-none absolute inset-0 z-40 px-4 pt-4">
+        <FilterBar
+          location={location}
+          onLocationChange={handleLocationChange}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          selectedActivities={selectedActivities}
+          onActivityToggle={(activity) =>
+            setSelectedActivities((prev) =>
+              prev.includes(activity) ? prev.filter((item) => item !== activity) : [...prev, activity]
+            )
+          }
+          selectedPlaceTypes={selectedPlaceTypes}
+          onPlaceTypeToggle={(placeType) =>
+            setSelectedPlaceTypes((prev) =>
+              prev.includes(placeType) ? prev.filter((item) => item !== placeType) : [...prev, placeType]
+            )
+          }
+          approvedOnly={approvedOnly}
+          onApprovedOnlyToggle={() => setApprovedOnly((prev) => !prev)}
+          mockMode={isMockMode}
+          onAddPlace={handleOpenAddPlace}
+        />
+      </div>
+
       {successMessage && (
         <div
           role="status"
@@ -310,6 +333,7 @@ export default function HomePage() {
 
       {addPlaceOpen && (
         <AddPlacePanel
+          offsetTop={chromeTop}
           onClose={handleCloseAddPlace}
           onSubmitted={handlePlaceSubmitted}
           mapboxToken={mapboxToken}
@@ -324,7 +348,11 @@ export default function HomePage() {
       )}
 
       {detailsPlaceId && !addPlaceOpen && (
-        <PlaceDetailsPanel placeId={detailsPlaceId} onClose={handleCloseDetails} />
+        <PlaceDetailsPanel
+          offsetTop={chromeTop}
+          placeId={detailsPlaceId}
+          onClose={handleCloseDetails}
+        />
       )}
     </div>
   );

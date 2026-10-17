@@ -23,6 +23,8 @@ export interface DraftLocation {
 }
 
 interface AddPlacePanelProps {
+  /** Pixels from the viewport top so the header sits below the filter bar. */
+  offsetTop?: number;
   onClose: () => void;
   onSubmitted: (place: PlaceSearchResult) => void;
   mapboxToken?: string;
@@ -50,6 +52,7 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 }
 
 export default function AddPlacePanel({
+  offsetTop = 96,
   onClose,
   onSubmitted,
   mapboxToken,
@@ -203,7 +206,8 @@ export default function AddPlacePanel({
       ref={panelRef}
       role="dialog"
       aria-labelledby="add-place-title"
-      className="absolute bottom-28 right-4 top-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
+      className="absolute bottom-28 right-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
+      style={{ top: offsetTop }}
     >
       <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
         <h2 id="add-place-title" className="text-lg font-semibold text-gray-900">

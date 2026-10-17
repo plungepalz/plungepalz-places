@@ -9,7 +9,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "tsx --test 'lib/**/*.test.ts'"
   },
   "dependencies": {
     "mapbox-gl": "^3.33.0",
@@ -27,6 +28,7 @@
     "eslint-config-next": "16.4.2",
     "postcss": "^8.5.30",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }

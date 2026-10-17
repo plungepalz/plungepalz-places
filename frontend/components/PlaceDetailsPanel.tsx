@@ -12,6 +12,8 @@ import CoverImage from './CoverImage';
 interface PlaceDetailsPanelProps {
   placeId: string;
   onClose: () => void;
+  /** Pixels from the viewport top so the header sits below the filter bar. */
+  offsetTop?: number;
 }
 
 function formatTimestamp(value: string): string {
@@ -46,7 +48,7 @@ function MetadataBlock({ metadata }: { metadata: Record<string, unknown> }) {
   );
 }
 
-export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPanelProps) {
+export default function PlaceDetailsPanel({ placeId, onClose, offsetTop = 96 }: PlaceDetailsPanelProps) {
   const [place, setPlace] = useState<PlaceDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +80,9 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
 
   useDialogA11y({ onClose, initialFocusRef: closeButtonRef, containerRef: panelRef });
 
-  const locationLine = place ? formatLocation(place.city, place.state_province, place.country) : '';
+  const locationLine = place
+    ? formatLocation(place.city, place.state_province, place.country, place.postal_code)
+    : '';
 
   return (
     <aside
@@ -86,7 +90,8 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
       role="dialog"
       aria-modal="true"
       aria-labelledby="place-details-title"
-      className="absolute bottom-28 right-4 top-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
+      className="absolute bottom-28 right-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
+      style={{ top: offsetTop }}
     >
       <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
         <h2 id="place-details-title" className="text-lg font-semibold text-gray-900">

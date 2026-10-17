@@ -65,6 +65,7 @@ Restart `npm run dev` after changing env vars.
 npm run dev      # http://localhost:3000
 npm run build
 npm run lint
+npm test         # tsx --test 'lib/**/*.test.ts'
 npm start        # production server after build
 ```
 
@@ -106,7 +107,7 @@ This supersedes `backend/docs/API_REFERENCE.md` where they differ (lead-engineer
 
 **GET /search response:** `{ places, total, page, limit, has_more }`. The search backend (Algolia) cannot page past **1000** hits; `has_more` is false once that cap is reached. The mock client matches this.
 
-Each place: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types[]`, `description`, `cover_image` (url\|null), `lat`, `lng` (numbers), `is_approved` (bool), `ts_created`. **Nature places may have `address`, `city`, `state_province`, and `country` as `null`.** Cards, the list header, and the details drawer skip those fields instead of showing “Unknown location”.
+Each place: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types[]`, `description`, `cover_image` (url\|null), `lat`, `lng` (numbers), `is_approved` (bool), `ts_created`. **Nature places may have `address`, `city`, `state_province`, and `country` as `null`.** Cards, the list header, and the details drawer skip those fields instead of showing “Unknown location”. The TypeScript types also allow optional `postal_code?: string | null`. **The live API does not return `postal_code` on `GET /search` or `GET /place/{id}` for the MVP** (it exists only on the Algolia object). The details drawer appends it after city/state when a payload includes it (mocks may), e.g. `Scottsdale, AZ 85251`.
 
 With neither `bbox` nor `lat`/`lng`, `/search` returns the **global catalog**, paginated, newest first by `ts_created`. Mocks sort the same way.
 
@@ -132,7 +133,7 @@ The top bar **Add a place** button opens a **non-modal** dialog (`role="dialog"`
 Sweatpals-style map-first view:
 
 - Top bar: location chip, filter icon, Sauna / Cold plunge chips, place-type filters, search, **Add a place**
-- Left: white rounded list floating over the map (`N places in {area}`), cards with thumbnail, Approved tag, title, place type, city (omitted when null), favorite star
+- Left: white rounded list floating over the map (`N places in {area}`, or `Showing X of Y` when `/search` `has_more` is true or the page is capped), cards with thumbnail, Approved tag, title, place type, city (omitted when null), favorite star
 - Right / background: full-screen Mapbox map. Clusters and pins are a GeoJSON source with symbol layers (black teardrop + count; orange pin). Zoom +/− and locate-me stay reachable when the details drawer or add-place form is open.
 - Map move (debounced) re-queries `/search` with `bbox`; list shows what’s in view
 - Hover/select syncs card ↔ pin; click opens a details drawer via `GET /place/{place_id}`

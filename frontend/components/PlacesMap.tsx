@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MapGL, { Layer, Marker, Source } from 'react-map-gl/mapbox';
 import type { MapMouseEvent, MapRef } from 'react-map-gl/mapbox';
 import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
+import { ZERO_PADDING, flyToThenOnMoveend, listPanelRightEdge, worldwideFraming } from '@/lib/map-camera';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -33,8 +34,6 @@ interface PlacesMapProps {
 
 /** Right-side details / add-place drawer: 28rem + right-4 + gap. */
 const PANEL_PADDING_RIGHT = 496;
-/** Left list panel: ~380px + left-4. */
-const LIST_PADDING_LEFT = 400;
 
 function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
   if (flyRequest.zoom == null) return currentZoom;
@@ -47,17 +46,23 @@ function flyPadding(
   exactZoom: boolean | undefined,
   size: { width: number; height: number }
 ) {
-  if (exactZoom) {
-    return { top: 0, bottom: 0, left: 0, right: 0 };
-  }
   const maxHorizontal = Math.max(0, size.width - 80);
   const maxVertical = Math.max(0, size.height - 80);
-  let left = Math.min(LIST_PADDING_LEFT, Math.floor(maxHorizontal * 0.45));
-  let right = Math.min(panelOpen ? PANEL_PADDING_RIGHT : 56, Math.floor(maxHorizontal * 0.45));
+  // Line the padded viewport up with the list’s right edge (x≈396).
+  let left = listPanelRightEdge(size.width);
+  let right = panelOpen
+    ? Math.min(PANEL_PADDING_RIGHT, Math.floor(maxHorizontal * 0.45))
+    : exactZoom
+      ? 0
+      : Math.min(56, Math.floor(maxHorizontal * 0.45));
   if (left + right > maxHorizontal && left + right > 0) {
     const scale = maxHorizontal / (left + right);
     left = Math.floor(left * scale);
     right = Math.floor(right * scale);
+  }
+  if (exactZoom) {
+    // Worldwide / location chips ignore the drawer so the list gap stays stable.
+    return { top: 0, bottom: 0, left, right: 0 };
   }
   return {
     top: Math.min(96, Math.floor(maxVertical * 0.25)),
@@ -65,6 +70,79 @@ function flyPadding(
     left,
     right,
   };
+}
+
+function paddingIsZero(map: MapboxMap): boolean {
+  const padding = map.getPadding();
+  return (
+    (padding.top ?? 0) === 0 &&
+    (padding.right ?? 0) === 0 &&
+    (padding.bottom ?? 0) === 0 &&
+    (padding.left ?? 0) === 0
+  );
+}
+
+/** Drop leftover flyTo padding without shifting what is on screen. */
+function clearPaddingKeepView(map: MapboxMap): void {
+  if (paddingIsZero(map)) return;
+  const canvas = map.getCanvas();
+  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+  map.jumpTo({
+    center: [visual.lng, visual.lat],
+    padding: ZERO_PADDING,
+  });
+}
+
+function MapZoomControls({
+  panelOpen,
+  onZoomIn,
+  onZoomOut,
+  onLocate,
+}: {
+  panelOpen: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onLocate: () => void;
+}) {
+  return (
+    <div
+      className={`pointer-events-auto absolute bottom-6 z-[25] flex flex-col gap-2 ${
+        panelOpen ? 'right-[min(calc(100%-3.5rem),calc(1.25rem+28rem))]' : 'right-4'
+      }`}
+    >
+      <button
+        type="button"
+        onClick={onZoomIn}
+        className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+        aria-label="Zoom in"
+      >
+        +
+      </button>
+      <button
+        type="button"
+        onClick={onZoomOut}
+        className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+        aria-label="Zoom out"
+      >
+        −
+      </button>
+      <button
+        type="button"
+        onClick={onLocate}
+        className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-white text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
+        aria-label="Locate me"
+      >
+        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M12 8v4l2 2m6-2a8 8 0 11-16 0 8 8 0 0116 0z"
+          />
+        </svg>
+      </button>
+    </div>
+  );
 }
 
 const PIN_PATH =
@@ -142,6 +220,7 @@ export default function PlacesMap({
   mapboxToken,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
+  const flyEndHandlerRef = useRef<(() => void) | null>(null);
   const [imagesReady, setImagesReady] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
@@ -182,7 +261,6 @@ export default function PlacesMap({
   const handleLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
-    map.setProjection('mercator');
     void Promise.all([
       ensurePinImage(map, 'pin-cluster', pinSvg('#111111', false)),
       ensurePinImage(map, 'pin-place', pinSvg('#f97316', true)),
@@ -191,33 +269,90 @@ export default function PlacesMap({
     reportViewport();
   }, [reportViewport]);
 
+  const detailsOpen = panelOpen && !locationPickMode;
+  const detailsOpenRef = useRef(detailsOpen);
+
+  useEffect(() => {
+    detailsOpenRef.current = detailsOpen;
+  }, [detailsOpen]);
+
+  useEffect(() => {
+    if (detailsOpen) return;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    clearPaddingKeepView(map);
+  }, [detailsOpen]);
+
   useEffect(() => {
     if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;
-    const center = mapRef.current.getMap().getCenter();
-    onMapCenter({ lat: center.lat, lng: center.lng });
+    const map = mapRef.current.getMap();
+    clearPaddingKeepView(map);
+    // Visual canvas center, not Mapbox's padded getCenter() leftover from flyTo.
+    const canvas = map.getCanvas();
+    const point = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+    onMapCenter({ lat: point.lat, lng: point.lng });
   }, [mapCenterRequest, onMapCenter]);
 
   useEffect(() => {
     if (!flyRequest || !mapRef.current) return;
     const map = mapRef.current.getMap();
-    const currentZoom = mapRef.current.getZoom();
-    const zoom = resolveFlyZoom(currentZoom, flyRequest);
+    const currentZoom = map.getZoom();
     const container = map.getContainer();
-    mapRef.current.flyTo({
-      center: [flyRequest.longitude, flyRequest.latitude],
-      zoom,
-      duration: 800,
-      padding: flyPadding(panelOpen, flyRequest.exactZoom, {
-        width: container.clientWidth,
-        height: container.clientHeight,
-      }),
-    });
+    const size = { width: container.clientWidth, height: container.clientHeight };
+    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size);
+    let zoom = resolveFlyZoom(currentZoom, flyRequest);
+    let longitude = flyRequest.longitude;
+    let latitude = flyRequest.latitude;
+    if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
+      const framing = worldwideFraming(size.width, size.height, {
+        left: padding.left,
+        right: padding.right,
+      });
+      zoom = framing.zoom;
+      longitude = framing.lng;
+      latitude = framing.lat;
+    }
+    if (flyEndHandlerRef.current) {
+      map.off('moveend', flyEndHandlerRef.current);
+      flyEndHandlerRef.current = null;
+    }
+    const onFlyEnd = () => {
+      flyEndHandlerRef.current = null;
+      if (detailsOpenRef.current) return;
+      const live = mapRef.current?.getMap();
+      if (!live) return;
+      const canvas = live.getCanvas();
+      const visual = live.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+      live.jumpTo({
+        center: [visual.lng, visual.lat],
+        padding: ZERO_PADDING,
+      });
+    };
+    // mapbox-gl 3.33 flyTo() stop()s any in-flight camera first and fires
+    // moveend synchronously. Attach the listener after flyTo so that interrupt
+    // does not consume this flight's cleanup. Preset flights also pass
+    // retainPadding: false (supported in 3.33) so global padding stays 0.
+    flyToThenOnMoveend(
+      map,
+      {
+        center: [longitude, latitude],
+        zoom,
+        duration: 800,
+        padding,
+        retainPadding: flyRequest.exactZoom ? false : undefined,
+      },
+      onFlyEnd
+    );
+    flyEndHandlerRef.current = onFlyEnd;
     onFlyComplete();
   }, [flyRequest, onFlyComplete, panelOpen]);
 
   const zoomBy = (delta: number) => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    if (!detailsOpen) {
+      clearPaddingKeepView(map);
+    }
     map.zoomTo(map.getZoom() + delta, { duration: 200 });
   };
 
@@ -259,6 +394,10 @@ export default function PlacesMap({
       const clusterCenter: [number, number] = coords ?? [event.lngLat.lng, event.lngLat.lat];
       source.getClusterExpansionZoom(Number(props.cluster_id), (error, zoom) => {
         if (error || zoom == null) return;
+        const map = mapRef.current?.getMap();
+        if (map && !detailsOpen) {
+          clearPaddingKeepView(map);
+        }
         mapRef.current?.easeTo({ center: clusterCenter, zoom, duration: 500 });
       });
       return;
@@ -291,7 +430,7 @@ export default function PlacesMap({
 
   if (!accessToken) {
     return (
-      <div data-places-map className="flex h-full w-full items-center justify-center bg-[#e8e4dc]">
+      <div data-places-map className="relative flex h-full w-full items-center justify-center bg-[#e8e4dc]">
         <div className="mx-6 max-w-md rounded-2xl bg-white p-8 text-center shadow-lg">
           <h3 className="text-lg font-semibold text-gray-900">Mapbox token required</h3>
           <p className="mt-2 text-sm leading-relaxed text-gray-600">
@@ -301,6 +440,12 @@ export default function PlacesMap({
             placeholder are treated as no token. The list and filters still work.
           </p>
         </div>
+        <MapZoomControls
+          panelOpen={panelOpen}
+          onZoomIn={() => zoomBy(1)}
+          onZoomOut={() => zoomBy(-1)}
+          onLocate={locateMe}
+        />
       </div>
     );
   }
@@ -402,41 +547,12 @@ export default function PlacesMap({
         </div>
       )}
 
-      <div
-        className={`absolute bottom-6 z-10 flex flex-col gap-2 ${panelOpen ? 'right-[min(calc(100%-3.5rem),calc(1.25rem+28rem))]' : 'right-4'}`}
-      >
-        <button
-          type="button"
-          onClick={() => zoomBy(1)}
-          className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
-          aria-label="Zoom in"
-        >
-          +
-        </button>
-        <button
-          type="button"
-          onClick={() => zoomBy(-1)}
-          className="h-10 w-10 rounded-full bg-white text-lg font-semibold text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
-          aria-label="Zoom out"
-        >
-          −
-        </button>
-        <button
-          type="button"
-          onClick={locateMe}
-          className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-white text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
-          aria-label="Locate me"
-        >
-          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 8v4l2 2m6-2a8 8 0 11-16 0 8 8 0 0116 0z"
-            />
-          </svg>
-        </button>
-      </div>
+      <MapZoomControls
+        panelOpen={panelOpen}
+        onZoomIn={() => zoomBy(1)}
+        onZoomOut={() => zoomBy(-1)}
+        onLocate={locateMe}
+      />
       {locateError && (
         <div
           role="status"

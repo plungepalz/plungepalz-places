@@ -64,6 +64,7 @@ class MockApiClient implements PlacesClient {
           includesQuery(p.city, query) ||
           includesQuery(p.state_province, query) ||
           includesQuery(p.country, query) ||
+          includesQuery(p.postal_code, query) ||
           includesQuery(p.description, query)
       );
     }

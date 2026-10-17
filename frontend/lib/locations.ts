@@ -8,7 +8,7 @@ export interface LocationPreset {
 }
 
 export const LOCATION_PRESETS: LocationPreset[] = [
-  { id: 'worldwide', label: 'Worldwide', lat: 20, lng: 0, zoom: 1, radiusKm: 20000 },
+  { id: 'worldwide', label: 'Worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
   { id: 'united-states', label: 'United States', lat: 39.8283, lng: -98.5795, zoom: 3.4, radiusKm: 4000 },
   { id: 'salt-lake-city', label: 'Salt Lake City', lat: 40.7608, lng: -111.891, zoom: 11, radiusKm: 40 },
   { id: 'new-york', label: 'New York', lat: 40.73, lng: -73.99, zoom: 11, radiusKm: 30 },
