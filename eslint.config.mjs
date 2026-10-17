@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Python API — keep it out of the Next.js lint graph
+    "backend/**",
   ]),
 ]);
 

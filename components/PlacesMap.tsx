@@ -435,7 +435,7 @@ export default function PlacesMap({
           <h3 className="text-lg font-semibold text-gray-900">Mapbox token required</h3>
           <p className="mt-2 text-sm leading-relaxed text-gray-600">
             Add a real <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">NEXT_PUBLIC_MAPBOX_TOKEN</code> to{' '}
-            <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">frontend/.env.local</code> to enable the
+            <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">.env.local</code> to enable the
             interactive map. Blank values and the <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">.env.example</code>{' '}
             placeholder are treated as no token. The list and filters still work.
           </p>

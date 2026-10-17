@@ -1,0 +1,15 @@
+# Separate Python/SAM app — do not upload with the Next.js project
+backend/
+
+# Python caches and virtualenvs
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# Docs are not needed at runtime
+docs/
+*.md
+!README.md
