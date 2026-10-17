@@ -14,8 +14,9 @@ import {
   isUserMapMove,
   mapControlsRightPx,
   pinHintCenterX,
-  worldwideFraming,
+  presetCamera,
 } from '@/lib/map-camera';
+import type { LocationPreset } from '@/lib/locations';
 import { clusterLeafHasPlace, placesMapLayerSpecs } from '@/lib/map-style';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
@@ -45,8 +46,9 @@ interface PlacesMapProps {
   /** Pixels from the top so the pin-drop hint sits below the filter chrome. */
   hintTop?: number;
   mapboxToken?: string;
-  /** Collapse list occupancy (drawer collision or Worldwide at 768). */
+  /** Collapse list occupancy (drawer collision or compact list at ≤768). */
   collapseList?: boolean;
+  location?: LocationPreset;
 }
 
 function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
@@ -206,6 +208,7 @@ export default function PlacesMap({
   hintTop = 96,
   mapboxToken,
   collapseList = false,
+  location,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -272,6 +275,7 @@ export default function PlacesMap({
   const handleLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    map.setMinZoom(0);
     void Promise.all([
       ensurePinImage(map, 'pin-place', pinSvg(BRAND.orange, true)),
       ensurePinImage(map, 'pin-place-active', pinSvg(BRAND.orangeSelected, true)),
@@ -393,14 +397,30 @@ export default function PlacesMap({
     if (!flyRequest.exactZoom) {
       onUserCameraMove?.();
     }
-    if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
-      const framing = worldwideFraming(size.width, size.height, {
+    if (flyRequest.exactZoom && location) {
+      const camera = presetCamera(location, size.width, size.height, {
         left: padding.left,
         right: padding.right,
       });
-      zoom = framing.zoom;
-      longitude = framing.lng;
-      latitude = framing.lat;
+      zoom = camera.zoom;
+      longitude = camera.lng;
+      latitude = camera.lat;
+    } else if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
+      const camera = presetCamera(
+        {
+          id: 'worldwide',
+          lat: flyRequest.latitude,
+          lng: flyRequest.longitude,
+          zoom: flyRequest.zoom ?? 1.15,
+          radiusKm: 20000,
+        },
+        size.width,
+        size.height,
+        { left: padding.left, right: padding.right }
+      );
+      zoom = camera.zoom;
+      longitude = camera.lng;
+      latitude = camera.lat;
     }
     if (flyEndHandlerRef.current) {
       map.off('moveend', flyEndHandlerRef.current);
@@ -438,7 +458,7 @@ export default function PlacesMap({
     );
     flyEndHandlerRef.current = onFlyEnd;
     onFlyComplete();
-  }, [collapseList, flyRequest, onFlyComplete, onUserCameraMove, panelOpen]);
+  }, [collapseList, flyRequest, location, onFlyComplete, onUserCameraMove, panelOpen]);
 
   const zoomBy = (delta: number) => {
     const map = mapRef.current?.getMap();

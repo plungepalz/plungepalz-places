@@ -18,7 +18,11 @@ import {
   type ListHeadingSnapshot,
 } from '@/lib/list-heading-state';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
-import { hideListForWorldwidePreset, shouldCollapseList } from '@/lib/map-camera';
+import {
+  defaultCompactList,
+  shouldCollapseList,
+  worldwideMapHeightCap,
+} from '@/lib/map-camera';
 import { mergeLocalPlaces } from '@/lib/merge-local-places';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
@@ -64,6 +68,7 @@ export default function HomePage() {
   const [mapZoom, setMapZoom] = useState<number | null>(null);
   const [leftPreset, setLeftPreset] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(1280);
+  const [viewportHeight, setViewportHeight] = useState(900);
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const lastPresetBoundsKeyRef = useRef('');
   const headingMachineRef = useRef(createListHeadingMachine());
@@ -77,6 +82,9 @@ export default function HomePage() {
   const filterSlotRef = useRef<HTMLDivElement>(null);
   const [chromeTop, setChromeTop] = useState(96);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [listExpanded, setListExpanded] = useState(false);
+  const listSlotRef = useRef<HTMLDivElement>(null);
+  const [compactBarHeight, setCompactBarHeight] = useState(56);
 
   const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
@@ -209,6 +217,7 @@ export default function HomePage() {
     setAddPlaceOpen(false);
     setSelectedPlaceId(null);
     setLeftPreset(false);
+    setListExpanded(false);
     setLocation(next);
     setMapZoom(next.zoom);
     setFlyRequest({
@@ -302,20 +311,36 @@ export default function HomePage() {
   const locationName = heading?.locationName ?? (location.id === 'worldwide' ? 'the world' : location.label);
 
   const panelOpen = Boolean(detailsPlaceId) || addPlaceOpen;
-  const hideWorldwideList = hideListForWorldwidePreset(
-    viewportWidth,
-    location.id === 'worldwide',
-    leftPreset
-  );
+  const narrowViewport = defaultCompactList(viewportWidth);
   const hideListForDrawer = shouldCollapseList(viewportWidth, panelOpen);
-  const collapseList = hideListForDrawer || hideWorldwideList;
+  const listCollapsed = narrowViewport && !listExpanded;
+  const collapseList = hideListForDrawer || listCollapsed;
+  const worldwideCompact = listCollapsed && location.id === 'worldwide' && !leftPreset;
+  const mapTop = listCollapsed && !hideListForDrawer ? chromeTop + compactBarHeight + 8 : 0;
+  const availableMapHeight = Math.max(viewportHeight - mapTop, 1);
+  const mapHeight = worldwideCompact
+    ? worldwideMapHeightCap(viewportWidth, availableMapHeight)
+    : undefined;
 
   useLayoutEffect(() => {
-    const onResize = () => setViewportWidth(window.innerWidth);
+    const onResize = () => {
+      setViewportWidth(window.innerWidth);
+      setViewportHeight(window.innerHeight);
+    };
     onResize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  useLayoutEffect(() => {
+    const el = listSlotRef.current;
+    if (!el || !listCollapsed) return;
+    const update = () => setCompactBarHeight(Math.ceil(el.getBoundingClientRect().height));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [listCollapsed, headingText, filtersOpen]);
 
   useLayoutEffect(() => {
     const slot = filterSlotRef.current;
@@ -337,7 +362,14 @@ export default function HomePage() {
 
   return (
     <div className="relative h-screen overflow-hidden bg-[#e8e4dc] text-gray-900">
-      <div className="absolute inset-0">
+      <div
+        className="absolute inset-x-0"
+        style={
+          mapHeight != null
+            ? { top: mapTop, height: mapHeight }
+            : { top: mapTop, bottom: 0 }
+        }
+      >
         <PlacesMap
           places={places}
           selectedPlaceId={selectedPlaceId}
@@ -354,18 +386,20 @@ export default function HomePage() {
           onHoverPlace={setHoveredPlaceId}
           onViewportChange={handleViewportChange}
           onUserCameraMove={handleUserCameraMove}
-          hintTop={chromeTop}
+          hintTop={listCollapsed ? 8 : chromeTop}
           mapboxToken={mapboxToken}
           collapseList={collapseList}
+          location={location}
         />
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-20">
         <div
+          ref={listSlotRef}
           data-places-list-slot
           className={`absolute left-4 w-[min(100%-2rem,380px)] ${
             hideListForDrawer ? 'hidden' : 'pointer-events-auto'
-          } ${hideWorldwideList ? '' : 'bottom-4'}`}
+          } ${listCollapsed ? '' : 'bottom-4'}`}
           style={{ top: chromeTop, transition: 'top 200ms ease' }}
           aria-hidden={hideListForDrawer}
         >
@@ -385,7 +419,9 @@ export default function HomePage() {
             isLoading={isLoading}
             locationName={locationName}
             heading={headingText}
-            compact={hideWorldwideList}
+            collapsible={narrowViewport}
+            expanded={!listCollapsed}
+            onToggleExpanded={() => setListExpanded((open) => !open)}
             error={error}
             filterHeaderInset={filtersOpen}
           />

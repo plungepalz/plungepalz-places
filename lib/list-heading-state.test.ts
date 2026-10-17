@@ -189,3 +189,63 @@ test('headingZoomForSearch uses the preset zoom until the camera leaves it', () 
   assert.equal(headingZoomForSearch(false, 12, unitedStates), unitedStates.zoom);
   assert.equal(headingZoomForSearch(true, 12, unitedStates), 12);
 });
+
+test('Map area after a Worldwide cluster expand is never "worldwide"', () => {
+  let state = createListHeadingMachine();
+  state = startListHeadingRequest(state);
+  state = settleListHeadingRequest(
+    state,
+    1,
+    { shown: 82, total: 82, hasMore: false, places: placesIn('Scottsdale', 10) },
+    { hasMap: true, zoom: worldwide.zoom, location: worldwide, leftPreset: false }
+  );
+  assert.equal(listHeadingText(state.heading), '82 places worldwide');
+
+  state = startListHeadingRequest(state);
+  state = settleListHeadingRequest(
+    state,
+    2,
+    { shown: 76, total: 76, hasMore: false, places: placesIn('Scottsdale', 10) },
+    { hasMap: true, zoom: 1, location: worldwide, leftPreset: true }
+  );
+  assert.equal(listHeadingText(state.heading), '76 places in this area');
+  assert.equal(state.heading?.chipLabel, 'Map area');
+  assert.equal(state.heading?.locationName.includes('world'), false);
+});
+
+test('Map area after a Worldwide mouse drag is never "worldwide"', () => {
+  let state = createListHeadingMachine();
+  state = startListHeadingRequest(state);
+  state = settleListHeadingRequest(
+    state,
+    1,
+    { shown: 82, total: 82, hasMore: false, places: placesIn('Scottsdale', 10) },
+    { hasMap: true, zoom: 0.585, location: worldwide, leftPreset: false }
+  );
+  state = startListHeadingRequest(state);
+  state = settleListHeadingRequest(
+    state,
+    2,
+    { shown: 77, total: 77, hasMore: false, places: placesIn('Scottsdale', 10) },
+    { hasMap: true, zoom: 0.814, location: worldwide, leftPreset: true }
+  );
+  assert.equal(listHeadingText(state.heading), '77 places in this area');
+  assert.equal(state.heading?.chipLabel, 'Map area');
+});
+
+test('every preset names itself, including a one-place New York with city Brooklyn', () => {
+  for (const preset of LOCATION_PRESETS) {
+    let state = createListHeadingMachine();
+    state = startListHeadingRequest(state);
+    state = settleListHeadingRequest(
+      state,
+      1,
+      { shown: 1, total: 1, hasMore: false, places: placesIn('Brooklyn', 1) },
+      { hasMap: true, zoom: preset.zoom, location: preset, leftPreset: false }
+    );
+    const expected =
+      preset.id === 'worldwide' ? '1 place worldwide' : `1 place in ${preset.label}`;
+    assert.equal(listHeadingText(state.heading), expected, preset.id);
+    assert.equal(state.heading?.chipLabel, preset.label, preset.id);
+  }
+});

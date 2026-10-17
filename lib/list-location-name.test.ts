@@ -7,7 +7,6 @@ import type { PlaceSearchResult } from './types';
 const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
 const unitedStates = LOCATION_PRESETS.find((item) => item.id === 'united-states')!;
 const saltLake = LOCATION_PRESETS.find((item) => item.id === 'salt-lake-city')!;
-const helsinki = LOCATION_PRESETS.find((item) => item.id === 'helsinki')!;
 
 function placesIn(city: string, count: number, extras: Array<{ city: string; count: number }> = []): Pick<PlaceSearchResult, 'city'>[] {
   const rows: Pick<PlaceSearchResult, 'city'>[] = [];
@@ -41,23 +40,34 @@ test('city-scale zoom names the city when results are concentrated there', () =>
   assert.equal(listLocationName({ hasMap: true, zoom: 11, places, location: saltLake }), 'Salt Lake City');
 });
 
-test('mixed city-scale results do not pick a weak plurality or a stale chip city', () => {
-  const places = placesIn('Scottsdale', 5, [{ city: 'Phoenix', count: 4 }]);
-  assert.equal(listLocationName({ hasMap: true, zoom: 11, places, location: helsinki }), 'this area');
-  assert.equal(listLocationName({ hasMap: true, zoom: 11, places, location: saltLake }), 'this area');
+test('on a preset the chip name wins over a mismatched or single API city', () => {
+  const brooklyn = placesIn('Brooklyn', 1);
+  const newYork = LOCATION_PRESETS.find((item) => item.id === 'new-york')!;
+  assert.equal(
+    listLocationName({ hasMap: true, zoom: 11, places: brooklyn, location: newYork }),
+    'New York'
+  );
+  assert.equal(
+    listLocationName({ hasMap: true, zoom: 11, places: brooklyn, location: newYork, leftPreset: true }),
+    'this area'
+  );
 });
 
-test('majority concentration can name a city below city-scale zoom', () => {
+test('majority results on a country preset still use the preset name', () => {
   const places = placesIn('Scottsdale', 9, [{ city: 'Phoenix', count: 1 }]);
-  assert.equal(listLocationName({ hasMap: true, zoom: 6, places, location: unitedStates }), 'Scottsdale');
+  assert.equal(listLocationName({ hasMap: true, zoom: 6, places, location: unitedStates }), 'United States');
 });
 
-test('worldwide chip at regional zoom falls back to this area', () => {
+test('worldwide stays worldwide until the camera leaves the preset', () => {
   const places = placesIn('Scottsdale', 5, [
     { city: 'Helsinki', count: 4 },
     { city: 'London', count: 3 },
   ]);
-  assert.equal(listLocationName({ hasMap: true, zoom: 4, places, location: worldwide }), 'this area');
+  assert.equal(listLocationName({ hasMap: true, zoom: 4, places, location: worldwide }), 'the world');
+  assert.equal(
+    listLocationName({ hasMap: true, zoom: 1, places, location: worldwide, leftPreset: true }),
+    'this area'
+  );
 });
 
 test('no map uses the selected chip', () => {

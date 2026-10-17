@@ -14,6 +14,8 @@ import {
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
+  MERCATOR_TILE_SIZE,
+  defaultCompactList,
   hideListForWorldwidePreset,
   isUserMapMove,
   layoutInsets,
@@ -22,8 +24,11 @@ import {
   mapControlsRightPx,
   mapboxHeightMinZoom,
   pinHintCenterX,
+  presetCamera,
   shouldCollapseList,
   worldwideFraming,
+  worldwideMapHeightCap,
+  zoomToFitRadiusKm,
 } from './map-camera';
 
 const PLACES = [
@@ -223,10 +228,39 @@ test('hideListForWorldwidePreset is only narrow Worldwide while still on the chi
   assert.equal(hideListForWorldwidePreset(768, false, false), false);
 });
 
+test('defaultCompactList is every preset at ≤768', () => {
+  assert.equal(defaultCompactList(768), true);
+  assert.equal(defaultCompactList(1280), false);
+  assert.equal(defaultCompactList(1440), false);
+});
+
+test('768x1024 Worldwide zoom fits 360° of longitude in the canvas width', () => {
+  const framing = worldwideFraming(768, 1024, { left: 0, right: 0 });
+  const widthFitZoom = Math.log2(768 / MERCATOR_TILE_SIZE);
+  assert.ok(framing.zoom <= widthFitZoom + 1e-9);
+  assert.ok(framing.worldPx <= 768 + 1);
+  assert.equal(framing.overflow, false);
+  assertPlacesInGap(768, 1024, { left: 0, right: 0 });
+  const cap = worldwideMapHeightCap(768, 1024 - 160);
+  assert.ok(cap <= 768);
+  assert.ok(mapboxHeightMinZoom(cap) <= widthFitZoom + 1e-9);
+});
+
 test('flyPadding with forced collapse at 768 Worldwide uses the full width', () => {
   const padding = flyPadding(false, true, { width: 768, height: 900 }, true);
   assert.equal(padding.left, 0);
   assert.equal(padding.right, 0);
+});
+
+test('presetCamera keeps desktop zoom and tightens ≤768 so the radius fits', () => {
+  const tokyo = { id: 'tokyo', lat: 35.6762, lng: 139.6503, zoom: 11, radiusKm: 30 };
+  const desktop = presetCamera(tokyo, 1440, 900);
+  assert.equal(desktop.zoom, 11);
+  assert.equal(desktop.lng, tokyo.lng);
+  const narrow = presetCamera(tokyo, 768, 900, { left: 0, right: 0 });
+  assert.ok(narrow.zoom < 11);
+  const fit = zoomToFitRadiusKm(tokyo.lat, tokyo.radiusKm, 768 * 0.86);
+  assert.ok(narrow.zoom <= fit + 1e-9);
 });
 
 test('768 with the list still uses the height-min floor (collapse is what lowers zoom)', () => {

@@ -67,6 +67,68 @@ export function hideListForWorldwidePreset(
   return isWorldwide && !leftPreset && canvasWidth <= NARROW_VIEWPORT;
 }
 
+export function isNarrowViewport(canvasWidth: number): boolean {
+  return canvasWidth <= NARROW_VIEWPORT;
+}
+
+/** At ≤768, default every preset to the compact bar so the map can show its places. */
+export function defaultCompactList(canvasWidth: number): boolean {
+  return isNarrowViewport(canvasWidth);
+}
+
+/**
+ * Cap the map canvas so Mapbox can actually reach a width-fit Worldwide zoom.
+ * A 900–1024px-tall canvas floors zoom at ~0.81–1.0 no matter what minZoom is.
+ */
+export function worldwideMapHeightCap(canvasWidth: number, availableHeight: number): number {
+  if (!isNarrowViewport(canvasWidth)) return availableHeight;
+  return Math.min(availableHeight, canvasWidth);
+}
+
+/** Mapbox meters/pixel at zoom 0 on the equator, scaled by latitude. */
+const MERCATOR_MPP_Z0 = 156543.03392804097;
+/** 1440px window minus the floating list — desktop Worldwide/US design gap. */
+const DESKTOP_PRESET_GAP = 1440 - LIST_PANEL_RIGHT;
+
+/** Zoom that fits a radius (km) inside `pixels` of screen. */
+export function zoomToFitRadiusKm(lat: number, radiusKm: number, pixels: number): number {
+  const mpp = MERCATOR_MPP_Z0 * Math.cos((lat * Math.PI) / 180);
+  const diameterM = Math.max(radiusKm, 1) * 2000;
+  return Math.log2((mpp * Math.max(pixels, 1)) / diameterM);
+}
+
+/**
+ * Camera for a location chip. Desktop (1280/1440) keeps the stored lat/lng/zoom
+ * (Worldwide still uses worldwideFraming). At ≤768, zoom out so the preset
+ * radius fits in the visible map — the compact list is not covering it.
+ */
+export function presetCamera(
+  location: { id: string; lat: number; lng: number; zoom: number; radiusKm: number },
+  canvasWidth: number,
+  canvasHeight: number,
+  insets?: { left?: number; right?: number }
+): { zoom: number; lng: number; lat: number } {
+  if (location.id === 'worldwide' || location.zoom <= WORLD_FIT_ZOOM_MAX) {
+    const framing = worldwideFraming(canvasWidth, canvasHeight, insets);
+    return { zoom: framing.zoom, lng: framing.lng, lat: framing.lat };
+  }
+  if (canvasWidth > NARROW_VIEWPORT) {
+    return { zoom: location.zoom, lng: location.lng, lat: location.lat };
+  }
+  const left = insets?.left ?? 0;
+  const right = insets?.right ?? 0;
+  const visW = Math.max(canvasWidth - left - right, 1);
+  const visH = Math.max(canvasHeight, 1);
+  const fitPx = Math.min(visW, visH) * 0.86;
+  const radiusZoom = zoomToFitRadiusKm(location.lat, location.radiusKm, fitPx);
+  const widthAdjusted = location.zoom + Math.log2(visW / DESKTOP_PRESET_GAP);
+  return {
+    zoom: Math.min(location.zoom, radiusZoom, widthAdjusted),
+    lng: location.lng,
+    lat: location.lat,
+  };
+}
+
 export interface LayoutInsets {
   left: number;
   right: number;
@@ -211,9 +273,9 @@ export function worldwideFraming(
   const heightMinZoom = mapboxHeightMinZoom(canvasHeight);
   const widthFitZoom = Math.log2(gap / MERCATOR_TILE_SIZE);
   const narrowFullWidth = panelRight <= 0 && canvasWidth <= NARROW_VIEWPORT;
-  const minZoomFloor = narrowFullWidth
-    ? Math.min(heightMinZoom, Math.max(widthFitZoom, 0))
-    : heightMinZoom;
+  // Narrow full-width: size zoom to the canvas width so 360° fits, even when
+  // the canvas is taller than one world (Mapbox height floor is ~0.814 at 900px).
+  const minZoomFloor = narrowFullWidth ? 0 : heightMinZoom;
   const zoom = Math.max(minZoomFloor, Math.min(WORLD_FIT_ZOOM_MAX, widthFitZoom));
   const worldPx = mercatorWorldPx(zoom);
   const overflow = worldPx > gap + 1;
