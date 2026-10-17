@@ -5,10 +5,17 @@ import { useEffect, useRef, type RefObject } from 'react';
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
+function isFocusInFormOrMap(container: HTMLElement | null, node: EventTarget | null): boolean {
+  if (!(node instanceof Node)) return false;
+  if (container?.contains(node)) return true;
+  return node instanceof Element && Boolean(node.closest('[data-places-map]'));
+}
+
 /**
  * Dialog a11y: focus the initial control on open, close on Escape, and restore
  * focus to the previously focused element. Modal dialogs also trap Tab.
- * Non-modal dialogs (add-a-place) skip the trap so the map behind stays usable.
+ * Non-modal dialogs (add-a-place) skip the trap so the map behind stays usable,
+ * and only close on Escape when focus is inside the form or on the map.
  */
 export function useDialogA11y({
   onClose,
@@ -35,6 +42,9 @@ export function useDialogA11y({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (!modal && !isFocusInFormOrMap(containerRef.current, document.activeElement)) {
+          return;
+        }
         event.preventDefault();
         onClose();
         return;

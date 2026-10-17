@@ -11,6 +11,7 @@ import { isPlacesApiError } from '@/lib/errors';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
 import { mergeLocalPlaces } from '@/lib/merge-local-places';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
+import { resolveMapboxToken } from '@/lib/mapbox-token';
 import { formatBbox, wrapLng } from '@/lib/types';
 
 const PlacesMap = dynamic(() => import('@/components/PlacesMap'), {
@@ -53,7 +54,7 @@ export default function HomePage() {
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const requestIdRef = useRef(0);
 
-  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
 
   const localFilters = useMemo(

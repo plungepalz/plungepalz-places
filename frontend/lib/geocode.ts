@@ -1,3 +1,5 @@
+import { resolveMapboxToken } from './mapbox-token';
+
 export interface GeocodeResult {
   lat: number;
   lng: number;
@@ -9,10 +11,11 @@ export interface GeocodeResult {
  */
 export async function geocodeAddress(address: string, token?: string): Promise<GeocodeResult | null> {
   const query = address.trim();
-  if (!token || !query) return null;
+  const accessToken = resolveMapboxToken(token);
+  if (!accessToken || !query) return null;
 
   try {
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?limit=1&access_token=${encodeURIComponent(token)}`;
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?limit=1&access_token=${encodeURIComponent(accessToken)}`;
     const response = await fetch(url);
     if (!response.ok) return null;
     const data = (await response.json()) as { features?: { center?: unknown }[] };
