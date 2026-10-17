@@ -25,6 +25,7 @@ Place name + type + activity_types + lat/lng (+ address unless nature)
   or CLI: python scripts/review_place.py --place-id … --decision active
             ↓
          active → is_approved=true → Algolia upsert via Places_AlgoliaSync
+         in_review → revert to a fresh POST /submit (pending, no Approved tag)
 ```
 
 ---
@@ -79,10 +80,18 @@ Model: `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_
 
 ### Places_AdminReview (IAM) or `scripts/review_place.py` (boto3)
 
-- Body: `{ place_id, decision: "active" | "rejected", internal_comments? }`
+- Body: `{ place_id, decision: "active" | "rejected" | "in_review", internal_comments? }`
 - Sets `internal_status`, `ts_last_updated`, optional `internal_comments`
 - `decision=active` ⇒ `is_approved=true` on subsequent Search / GetByID
+- `decision=in_review` reverts an approval to the exact approval state of a fresh `POST /submit`: `internal_status=in_review`, `is_approved` false (not stored; derived), `internal_verified=false`, and any stored `reviewed_ts` / `reviewed_by` / `ts_reviewed` / `reviewer` / `is_approved` attributes removed. Visibility stays public. The Places_Places stream then upserts Algolia as pending (`internal_status=in_review`, `is_approved=false`).
 - Stream → `Places_AlgoliaSync` upserts (active/in_review + public) or deletes (rejected/hidden)
+
+Revert a single place or the first N seed ids (from `backend/`):
+
+```bash
+python scripts/review_place.py --place-id UUID --decision in_review
+python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision in_review
+```
 
 ---
 
@@ -98,7 +107,7 @@ Model: `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_
 1. User enters place basics
 2. POST /submit → Submissions + Places (in_review) in one transaction
 3. (Optional) POST /submit/ai_autofill → UpdateItem AI fields only
-4. POST /plungepalz_admin/review or review_place.py → active | rejected
+4. POST /plungepalz_admin/review or review_place.py → active | rejected | in_review
 5. (Optional, later) POST /claim
 ```
 

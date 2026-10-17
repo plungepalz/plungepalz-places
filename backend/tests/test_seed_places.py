@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -402,3 +403,93 @@ def test_review_rejects_limit_without_from_file():
     )
     with pytest.raises(SystemExit):
         review.validate_review_args(parser, args)
+
+
+def test_review_cli_rejects_invalid_decision():
+    review = _load_review_mod()
+    with pytest.raises(SystemExit):
+        review.build_parser().parse_args(["--place-id", "x", "--decision", "approved"])
+    with pytest.raises(SystemExit):
+        review.build_parser().parse_args(["--place-id", "x", "--decision", "pending"])
+
+
+def test_review_cli_single_revert(dynamodb_tables):
+    from tests.conftest import SAMPLE_PLACE
+
+    review = _load_review_mod()
+    table = dynamodb_tables.Table("Places_Places")
+    item = dict(SAMPLE_PLACE)
+    item.update(
+        {
+            "internal_status": "active",
+            "is_approved": True,
+            "reviewed_ts": "2026-03-01T00:00:00Z",
+            "reviewed_by": "admin",
+            "ts_reviewed": "2026-03-01T00:00:00Z",
+            "reviewer": "admin",
+            "internal_verified": True,
+        }
+    )
+    table.put_item(Item=item)
+
+    result = review.review_one(table, item["place_id"], "in_review", None)
+    assert result["internal_status"] == "in_review"
+    assert result["is_approved"] is False
+
+    stored = table.get_item(Key={"place_id": item["place_id"]})["Item"]
+    assert stored["internal_status"] == "in_review"
+    assert stored["internal_verified"] is False
+    assert "is_approved" not in stored
+    assert "reviewed_ts" not in stored
+    assert "reviewed_by" not in stored
+    assert "ts_reviewed" not in stored
+    assert "reviewer" not in stored
+
+
+def test_review_cli_bulk_revert(dynamodb_tables, tmp_path, monkeypatch, capsys):
+    from tests.conftest import SAMPLE_PLACE
+
+    review = _load_review_mod()
+    table = dynamodb_tables.Table("Places_Places")
+    ids = ["bulk-1", "bulk-2", "bulk-3"]
+    for pid in ids:
+        item = dict(SAMPLE_PLACE)
+        item["place_id"] = pid
+        item["internal_status"] = "active"
+        item["is_approved"] = True
+        item["reviewed_ts"] = "2026-03-01T00:00:00Z"
+        item["reviewer"] = "admin"
+        table.put_item(Item=item)
+
+    out = tmp_path / "created.json"
+    out.write_text(json.dumps({"place_ids": ids}), encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review_place.py",
+            "--from-file",
+            str(out),
+            "--limit",
+            "2",
+            "--decision",
+            "in_review",
+        ],
+    )
+    assert review.main() == 0
+    captured = json.loads(capsys.readouterr().out)
+    assert captured["count"] == 2
+    assert [row["place_id"] for row in captured["reviewed"]] == ["bulk-1", "bulk-2"]
+    assert all(row["internal_status"] == "in_review" for row in captured["reviewed"])
+    assert all(row["is_approved"] is False for row in captured["reviewed"])
+
+    for pid in ("bulk-1", "bulk-2"):
+        stored = table.get_item(Key={"place_id": pid})["Item"]
+        assert stored["internal_status"] == "in_review"
+        assert "is_approved" not in stored
+        assert "reviewed_ts" not in stored
+        assert "reviewer" not in stored
+
+    leftover = table.get_item(Key={"place_id": "bulk-3"})["Item"]
+    assert leftover["internal_status"] == "active"
+    assert leftover["reviewed_ts"] == "2026-03-01T00:00:00Z"

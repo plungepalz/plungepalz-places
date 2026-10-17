@@ -11,7 +11,7 @@ The PlungePalz Places API provides:
 - **Public Discovery**: Algolia search and DynamoDB get-by-id
 - **Ratings & Comments**: User-generated ratings and feedback
 - **Claiming & Reporting**: Place claiming by business owners, abuse reporting
-- **Admin Review**: Internal workflow for place approval and moderation
+- **Admin Review**: Internal workflow for place approval, rejection, and revert to `in_review`
 
 ## Architecture
 
@@ -99,6 +99,19 @@ python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live   # Real 
 ```
 
 See [docs/TESTING.md](docs/TESTING.md) and [.cursorrules](.cursorrules) for the testing workflow.
+
+### 5. Admin review CLI (DynamoDB, not SigV4)
+
+Approve, reject, or revert a place the same way `Places_AdminReview` does. `--decision in_review` restores the exact approval state of a fresh `POST /submit` (`internal_status=in_review`, `is_approved` false, `reviewed_ts` / `reviewer` and aliases cleared). Algolia updates via the Places_Places stream.
+
+```bash
+cd backend
+python scripts/review_place.py --place-id UUID --decision active
+python scripts/review_place.py --place-id UUID --decision in_review
+python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision in_review
+```
+
+See [scripts/README.md](scripts/README.md) and [docs/SUBMISSION_FLOW.md](docs/SUBMISSION_FLOW.md).
 
 ## Documentation
 

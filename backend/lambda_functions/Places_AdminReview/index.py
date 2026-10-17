@@ -2,7 +2,8 @@
 PlungePalz Places API — Places_AdminReview
 
 POST /plungepalz_admin/review — IAM-auth (enforced by API Gateway).
-Sets internal_status to active|rejected and optional internal_comments.
+Sets internal_status to active|rejected|in_review and optional internal_comments.
+decision=in_review reverts approval metadata to a fresh Places_Submit record.
 """
 
 import os
@@ -14,6 +15,7 @@ from places_common import (
     ValidationError,
     error_response,
     parse_json_body,
+    review_item_update_kwargs,
     success_response,
     utc_now,
 )
@@ -33,20 +35,14 @@ def handler(event, context):
     except ValidationError as exc:
         return error_response(400, exc.code, exc.message, exc.details)
 
-    ts = utc_now()
-    expr = "SET internal_status = :st, ts_last_updated = :ts"
-    values = {":st": data["decision"], ":ts": ts}
-    if data.get("internal_comments") is not None:
-        expr += ", internal_comments = :c"
-        values[":c"] = data["internal_comments"]
-
     try:
         resp = _table().update_item(
-            Key={"place_id": data["place_id"]},
-            UpdateExpression=expr,
-            ConditionExpression="attribute_exists(place_id)",
-            ExpressionAttributeValues=values,
-            ReturnValues="ALL_NEW",
+            **review_item_update_kwargs(
+                data["place_id"],
+                data["decision"],
+                comments=data.get("internal_comments"),
+                ts=utc_now(),
+            )
         )
     except ClientError as exc:
         code = (exc.response.get("Error") or {}).get("Code", "")
@@ -57,12 +53,13 @@ def handler(event, context):
         return error_response(500, "INTERNAL_ERROR", "Failed to update place")
 
     item = resp.get("Attributes") or {}
+    status = item.get("internal_status") or data["decision"]
     return success_response(
         200,
         {
             "place_id": data["place_id"],
-            "internal_status": item.get("internal_status") or data["decision"],
-            "is_approved": (item.get("internal_status") or data["decision"]) == "active",
+            "internal_status": status,
+            "is_approved": status == "active",
             "message": "Review complete",
         },
     )

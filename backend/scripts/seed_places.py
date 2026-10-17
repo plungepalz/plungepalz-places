@@ -9,9 +9,10 @@ Usage (from backend/):
     python scripts/seed_places.py --base-url https://{api-id}.execute-api.us-east-1.amazonaws.com/dev --dry-run
     python scripts/seed_places.py --limit 10 --output scripts/seed_data/.seed_places_created.json
 
-Then approve some of the created ids (plumbing only; do not run from here):
+Then approve or revert some of the created ids (plumbing only; do not run from here):
 
     python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision active
+    python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision in_review
 """
 
 from __future__ import annotations

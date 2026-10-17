@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Approve or reject a place by writing directly to DynamoDB with boto3.
+"""Approve, reject, or revert a place by writing directly to DynamoDB with boto3.
 
 This CLI does **not** call API Gateway / SigV4. It updates Places_Places the
-same way Places_AdminReview does, so the DynamoDB stream can sync Algolia and
-`is_approved` flips to true when decision=active.
+same way Places_AdminReview does, so the DynamoDB stream can sync Algolia.
+
+``--decision active`` flips ``is_approved`` to true (derived).
+``--decision in_review`` restores the approval slice of a fresh POST /submit
+(internal_status=in_review, is_approved false, reviewed_* / reviewer cleared).
 
 IAM needed on the caller: dynamodb:GetItem, dynamodb:UpdateItem on TABLE_PLACES.
 
@@ -11,7 +14,9 @@ Usage (from backend/, with AWS credentials for us-east-1 / dev):
 
     python scripts/review_place.py --place-id UUID --decision active
     python scripts/review_place.py --place-id UUID --decision rejected --comments "duplicate"
+    python scripts/review_place.py --place-id UUID --decision in_review
     python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision active
+    python scripts/review_place.py --from-file scripts/seed_data/.seed_places_created.json --limit 5 --decision in_review
 
 Environment:
     TABLE_PLACES          default Places_Places
@@ -25,7 +30,6 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Allow running without installing the layer
@@ -36,7 +40,9 @@ sys.path.insert(
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    from places_common.records import utc_now as _utc_now
+
+    return _utc_now()
 
 
 def place_ids_from_output(payload: object) -> list[str]:
@@ -77,21 +83,11 @@ def load_place_ids_from_file(path: Path) -> list[str]:
 
 def review_one(table, place_id: str, decision: str, comments: str | None) -> dict:
     from botocore.exceptions import ClientError
-
-    ts = utc_now()
-    expr = "SET internal_status = :st, ts_last_updated = :ts"
-    values = {":st": decision, ":ts": ts}
-    if comments:
-        expr += ", internal_comments = :c"
-        values[":c"] = comments
+    from places_common.records import review_item_update_kwargs
 
     try:
         resp = table.update_item(
-            Key={"place_id": place_id},
-            UpdateExpression=expr,
-            ConditionExpression="attribute_exists(place_id)",
-            ExpressionAttributeValues=values,
-            ReturnValues="ALL_NEW",
+            **review_item_update_kwargs(place_id, decision, comments=comments, ts=utc_now())
         )
     except ClientError as exc:
         code = (exc.response.get("Error") or {}).get("Code", "")
@@ -100,10 +96,11 @@ def review_one(table, place_id: str, decision: str, comments: str | None) -> dic
         return {"error": {"code": "INTERNAL_ERROR", "message": str(exc)}, "place_id": place_id}
 
     item = resp.get("Attributes") or {}
+    status = item.get("internal_status")
     return {
         "place_id": place_id,
-        "internal_status": item.get("internal_status"),
-        "is_approved": item.get("internal_status") == "active",
+        "internal_status": status,
+        "is_approved": status == "active",
         "ts_last_updated": item.get("ts_last_updated"),
     }
 
@@ -118,12 +115,14 @@ def validate_review_args(parser: argparse.ArgumentParser, args: argparse.Namespa
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Approve or reject a PlungePalz place")
+    parser = argparse.ArgumentParser(
+        description="Approve, reject, or revert a PlungePalz place to in_review"
+    )
     parser.add_argument("--place-id", default=None, help="Places_Places.place_id")
     parser.add_argument(
         "--from-file",
         default=None,
-        help="JSON from seed_places.py --output; approve the first N ids with --limit",
+        help="JSON from seed_places.py --output; review the first N ids with --limit",
     )
     parser.add_argument(
         "--limit",
@@ -134,8 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--decision",
         required=True,
-        choices=["active", "rejected"],
-        help="internal_status to set",
+        choices=["active", "rejected", "in_review"],
+        help="internal_status to set; in_review reverts to a fresh submission",
     )
     parser.add_argument("--comments", default=None, help="optional internal_comments")
     return parser
