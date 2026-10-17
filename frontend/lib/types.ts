@@ -39,8 +39,8 @@ export interface PlaceDetail extends PlaceSearchResult {
   tags?: string[];
   place_type_metadata?: Record<string, unknown>;
   external_ratings_ai_generated?: ExternalRatingsAiGenerated;
-  hours_of_operation?: string;
-  ts_last_updated?: string;
+  hours_of_operation?: string | null;
+  ts_last_updated?: string | null;
 }
 
 export interface SearchResponse {
@@ -93,6 +93,10 @@ export interface ApiErrorBody {
   error: {
     code: string;
     message: string;
+    /** Field-level validation on 400s, e.g. `{ "address": "required unless nature" }` */
+    details?: Record<string, string>;
+    /** Defensive alias; real API uses `details` */
+    fields?: Record<string, string>;
   };
 }
 
@@ -107,6 +111,13 @@ export interface MapBounds {
   minLat: number;
   maxLng: number;
   maxLat: number;
+}
+
+export interface FlyRequest {
+  nonce: number;
+  longitude: number;
+  latitude: number;
+  zoom?: number;
 }
 
 export function formatBbox(bounds: MapBounds): string {

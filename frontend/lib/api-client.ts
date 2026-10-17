@@ -13,6 +13,15 @@ function getApiBaseUrl(): string {
   return (process.env.NEXT_PUBLIC_API_BASE_URL ?? '').replace(/\/$/, '');
 }
 
+function parseErrorFields(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const fields: Record<string, string> = {};
+  for (const [key, fieldValue] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof fieldValue === 'string') fields[key] = fieldValue;
+  }
+  return Object.keys(fields).length > 0 ? fields : undefined;
+}
+
 function parseErrorBody(data: unknown): ApiErrorBody | null {
   if (
     data &&
@@ -23,11 +32,13 @@ function parseErrorBody(data: unknown): ApiErrorBody | null {
     'code' in data.error &&
     'message' in data.error
   ) {
-    const error = data.error as { code: unknown; message: unknown };
+    const error = data.error as { code: unknown; message: unknown; details?: unknown; fields?: unknown };
+    const details = parseErrorFields(error.details) ?? parseErrorFields(error.fields);
     return {
       error: {
         code: String(error.code),
         message: String(error.message),
+        ...(details ? { details } : {}),
       },
     };
   }

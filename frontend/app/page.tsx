@@ -8,7 +8,7 @@ import PlacesList from '@/components/PlacesList';
 import { client, isMockMode } from '@/lib/client';
 import { isPlacesApiError } from '@/lib/errors';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
-import type { ActivityType, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
+import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { formatBbox } from '@/lib/types';
 
 const PlacesMap = dynamic(() => import('@/components/PlacesMap'), {
@@ -16,7 +16,7 @@ const PlacesMap = dynamic(() => import('@/components/PlacesMap'), {
   loading: () => <div className="h-full w-full bg-[#e8e4dc]" />,
 });
 
-/** API max. Supercluster only sees this page of /search results (known MVP limit). */
+/** API max. Mapbox clustering only sees this page of /search results (known MVP limit). */
 const SEARCH_LIMIT = 500;
 const DEFAULT_LOCATION = LOCATION_PRESETS[1]; // United States
 
@@ -37,12 +37,7 @@ export default function HomePage() {
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [hoveredPlaceId, setHoveredPlaceId] = useState<string | null>(null);
   const [detailsPlaceId, setDetailsPlaceId] = useState<string | null>(null);
-  const [flyToPlaceId, setFlyToPlaceId] = useState<string | null>(null);
-  const [cameraTarget, setCameraTarget] = useState<{
-    longitude: number;
-    latitude: number;
-    zoom: number;
-  } | null>(null);
+  const [flyRequest, setFlyRequest] = useState<FlyRequest | null>(null);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
@@ -113,7 +108,7 @@ export default function HomePage() {
 
   const handleLocationChange = (next: LocationPreset) => {
     setLocation(next);
-    setCameraTarget({ longitude: next.lng, latitude: next.lat, zoom: next.zoom });
+    setFlyRequest({ nonce: Date.now(), longitude: next.lng, latitude: next.lat, zoom: next.zoom });
     if (!hasMap) {
       mapBoundsRef.current = null;
       setMapBounds(null);
@@ -121,16 +116,22 @@ export default function HomePage() {
   };
 
   const handleSelectFromList = (placeId: string) => {
+    const place = places.find((item) => item.place_id === placeId);
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
-    setFlyToPlaceId(placeId);
+    if (place) {
+      setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
+    }
   };
 
   const handleSelectFromMap = (placeId: string) => {
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
-    setFlyToPlaceId(null);
   };
+
+  const handleFlyComplete = useCallback(() => {
+    setFlyRequest(null);
+  }, []);
 
   const handleToggleFavorite = (placeId: string) => {
     setFavorites((prev) => {
@@ -170,8 +171,9 @@ export default function HomePage() {
           places={places}
           selectedPlaceId={selectedPlaceId}
           hoveredPlaceId={hoveredPlaceId}
-          flyToPlaceId={flyToPlaceId}
-          cameraTarget={cameraTarget}
+          flyRequest={flyRequest}
+          onFlyComplete={handleFlyComplete}
+          detailsOpen={Boolean(detailsPlaceId)}
           onSelectPlace={handleSelectFromMap}
           onHoverPlace={setHoveredPlaceId}
           onViewportChange={handleViewportChange}

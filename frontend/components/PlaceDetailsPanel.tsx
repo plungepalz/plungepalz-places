@@ -73,10 +73,25 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
     };
   }, [placeId]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   return (
-    <aside className="absolute inset-y-4 right-4 z-30 flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10">
+    <aside
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="place-details-title"
+      className="absolute bottom-28 right-4 top-4 z-30 flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
+    >
       <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-        <h2 className="text-lg font-semibold text-gray-900">Place details</h2>
+        <h2 id="place-details-title" className="text-lg font-semibold text-gray-900">
+          Place details
+        </h2>
         <button
           type="button"
           onClick={onClose}

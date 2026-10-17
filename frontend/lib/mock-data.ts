@@ -493,9 +493,11 @@ export const MOCK_PLACE_DETAILS: Record<string, PlaceDetail> = Object.fromEntrie
     const detail: PlaceDetail = { ...place };
     if (place.place_type === 'nature') {
       detail.amenities = ['parking'];
+      detail.hours_of_operation = null;
       detail.place_type_metadata = { access_type: 'free', nature_type: 'lake' };
     } else if (place.place_type === 'temporary_pop_up') {
       detail.tags = place.activity_types;
+      detail.hours_of_operation = null;
       detail.place_type_metadata = { access_type: 'pay', requires_booking: false };
     } else {
       detail.amenities = ['showers', 'lockers', 'towels'];

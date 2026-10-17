@@ -123,7 +123,20 @@ class MockApiClient implements PlacesClient {
 
     if (!data.place_name?.trim()) {
       throw new PlacesApiError('place_name is required', 'INVALID_BODY', 400, {
-        error: { code: 'INVALID_BODY', message: 'place_name is required' },
+        error: {
+          code: 'INVALID_BODY',
+          message: 'place_name is required',
+          details: { place_name: 'required' },
+        },
+      });
+    }
+    if (!Array.isArray(data.activity_types) || data.activity_types.length === 0) {
+      throw new PlacesApiError('activity_types must be a non-empty list', 'INVALID_BODY', 400, {
+        error: {
+          code: 'INVALID_BODY',
+          message: 'activity_types must be a non-empty list',
+          details: { activity_types: 'must be a non-empty subset of cold_plunge, sauna' },
+        },
       });
     }
     if (data.place_type !== 'nature' && !data.address?.trim()) {
@@ -131,12 +144,17 @@ class MockApiClient implements PlacesClient {
         error: {
           code: 'INVALID_BODY',
           message: 'address is required unless place_type is nature',
+          details: { address: 'required unless place_type is nature' },
         },
       });
     }
     if (typeof data.lat !== 'number' || typeof data.lng !== 'number') {
       throw new PlacesApiError('lat and lng are required', 'INVALID_BODY', 400, {
-        error: { code: 'INVALID_BODY', message: 'lat and lng are required' },
+        error: {
+          code: 'INVALID_BODY',
+          message: 'lat and lng are required',
+          details: { lat: 'required', lng: 'required' },
+        },
       });
     }
 

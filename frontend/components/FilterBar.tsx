@@ -101,6 +101,8 @@ export default function FilterBar({
             showFilters || extraFilterCount > 0 ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
           }`}
           aria-label="Filters"
+          aria-expanded={showFilters}
+          aria-pressed={showFilters || extraFilterCount > 0}
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h18M6 12h12M10 20h4" />
@@ -122,13 +124,18 @@ export default function FilterBar({
                 ? 'bg-orange-500 text-white'
                 : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
             }`}
+            aria-pressed={selectedActivities.includes(activity)}
           >
             {ACTIVITY_LABELS[activity]}
           </button>
         ))}
 
         <div className="min-w-[180px] flex-1">
+          <label htmlFor="places-search" className="sr-only">
+            Search places
+          </label>
           <input
+            id="places-search"
             type="search"
             placeholder="Search places, cities..."
             value={searchQuery}
@@ -155,6 +162,7 @@ export default function FilterBar({
                   ? 'bg-gray-900 text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
+              aria-pressed={selectedPlaceTypes.includes(type)}
             >
               {PLACE_TYPE_LABELS[type]}
             </button>
@@ -165,6 +173,7 @@ export default function FilterBar({
             className={`rounded-full px-3 py-1.5 text-xs font-medium ${
               approvedOnly ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
+            aria-pressed={approvedOnly}
           >
             Approved only
           </button>
