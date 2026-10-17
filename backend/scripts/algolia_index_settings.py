@@ -45,6 +45,7 @@ SETTINGS = {
         "city",
         "state_province",
         "country",
+        "postal_code",
         "activity_types",
         "description",
         "cover_image",
