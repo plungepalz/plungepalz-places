@@ -5,7 +5,7 @@
 ## ✅ Completed
 
 - **CloudFormation stack:** `plungepalz-places-api-prod` deployed to `us-east-2`
-- **Lambda Layer:** `generate_place_with_ai` — Google Places New API v1 + Claude Haiku via Bedrock, pure logic, no DynamoDB writes
+- **Lambda Layer:** `generate_place_with_ai` — Google Places New API v1 + Claude (Anthropic API), pure logic, no DynamoDB writes
 - **Places_SubmitAIAutofill:** Full implementation using `generate_place_with_ai` layer
 
 ---

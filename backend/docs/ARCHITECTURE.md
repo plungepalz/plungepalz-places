@@ -17,13 +17,13 @@ Client (Web/Mobile)
    Lambda Functions (12 total)
        │
        ├── DynamoDB (4 tables)
-       ├── Bedrock (Claude Haiku)
+       ├── Anthropic API (Claude)
        └── Google Places New API v1
 ```
 
 **External Dependencies:**
 
-- **AWS Bedrock** — Claude Haiku for AI-generated descriptions, metadata, and ratings
+- **Anthropic API** — Claude for AI-generated descriptions, metadata, and ratings (enables internet access for web scraping)
 - **Google Places New API v1** — Place lookup, address, hours, rating, phone, website
 
 All DynamoDB writes occur **only** inside Lambda functions; Lambda Layers contain pure logic and never perform DB operations.
@@ -82,14 +82,14 @@ All DynamoDB writes occur **only** inside Lambda functions; Lambda Layers contai
 
 ### generate_place_with_ai
 
-**Purpose:** Calls Google Places New API v1 and Claude Haiku via Bedrock to produce a fully populated `Places_Places` record. **No DynamoDB writes** — pure input/output.
+**Purpose:** Calls Google Places New API v1 and Claude (Anthropic API) to produce a fully populated `Places_Places` record. **No DynamoDB writes** — pure input/output.
 
 | Attribute | Value |
 |-----------|-------|
 | Entry Point | `generate_place_record(...)` |
-| Parameters | `place_name`, `place_type`, `place_location`, `activity_types`, `google_places_api_key`, `bedrock_region`, `bedrock_model_id`, `submission_id` |
+| Parameters | `place_name`, `place_type`, `place_location`, `activity_types`, `google_places_api_key`, `anthropic_api_key`, `model_id`, `submission_id` |
 | Returns | `{ success, record, errors, partial }` |
-| External Calls | Google Places (searchText → place details), Bedrock (Claude Haiku) |
+| External Calls | Google Places (searchText → place details), Anthropic API (Claude) |
 | Rule | **Never** writes to DynamoDB — caller (Lambda) is responsible for all DB operations |
 
 ---
@@ -107,10 +107,10 @@ All DynamoDB writes occur **only** inside Lambda functions; Lambda Layers contai
 
 ## 6. AI Stack
 
-### Bedrock
+### Anthropic API (Claude)
 
-- **Model:** `anthropic.claude-haiku-4-5-20251001-v1:0`
-- **Invocation Pattern:** `tool_use` with `tool_choice: { "type": "any" }`
+- **Model:** `claude-3-5-haiku-latest` (configurable via `ANTHROPIC_MODEL_ID`)
+- **Invocation Pattern:** `tool_use` with `tool_choice: { "type": "tool", "name": "populate_place_listing" }`
 - **Tool Name:** `populate_place_listing`
 - **Fields Generated:** `description`, `place_type_metadata`, `amenities`, `tags`, `external_ratings_ai_generated`
 
@@ -147,7 +147,7 @@ All DynamoDB writes occur **only** inside Lambda functions; Lambda Layers contai
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ Places_SubmitAIAutofill → Calls generate_place_with_ai layer                  │
 │                          → Google Places lookup                              │
-│                          → Claude Haiku generates fields                     │
+│                          → Claude (Anthropic API) generates fields           │
 │                          → place_id (UUID v4) generated                      │
 │                          → Places_Places written (internal_status: in_review) │
 │                          → Places_Submissions updated with ai_autofill_result │
@@ -172,7 +172,6 @@ All DynamoDB writes occur **only** inside Lambda functions; Lambda Layers contai
 
 The Lambda execution role grants:
 
-- **Bedrock:** `bedrock:InvokeModel` on the specified model
 - **DynamoDB:** Full CRUD on `Places_Places`, `Places_Submissions`, `Places_RatingsComments`, `Places_ClaimedAudit`
 - **SES:** `ses:SendEmail` for verification emails
 - **SNS:** `sns:Publish` for SMS verification codes

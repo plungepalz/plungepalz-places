@@ -1,0 +1,861 @@
+# PlungePalz Places API — CloudFormation
+#
+# The live stack is deployed as:
+#   Stack Name: plungepalz-places-api-prod
+#   Region:     us-east-2
+#
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  PlungePalz - Places REST API (PRODUCTION)
+  Region: us-east-2
+  Creates all API Gateway resources, methods, and Lambda functions
+  for the Places API in one deployment.
+
+# ==============================================================
+# RESOURCES
+# ==============================================================
+Resources:
+
+  # ------------------------------------------------------------
+  # IAM ROLE — Shared Lambda Execution Role
+  # ------------------------------------------------------------
+  PlacesLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "PlacesLambdaExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: PlacesDynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Places_Places"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Places_Places/index/*"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Places_RatingsComments"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Places_RatingsComments/index/*"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Places_ClaimedAudit"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Places_ClaimedAudit/index/*"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Places_Submissions"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Places_Submissions/index/*"
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                  - sns:Publish
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  # ------------------------------------------------------------
+  # LAMBDA FUNCTIONS
+  # ------------------------------------------------------------
+
+  # 1. Places_Search
+  LambdaPlacesSearch:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_Search"
+      Description: "Search places by H3 hex, lat/lng, place_type, activity_types, and filters"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_PLACES: "Places_Places"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_Search placeholder — not yet implemented"})
+              }
+
+  # 2. Places_GetByID
+  LambdaPlacesGetByID:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_GetByID"
+      Description: "Fetch a single Place record by place_id with claimed status and rating aggregation"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_PLACES: "Places_Places"
+          TABLE_RATINGS: "Places_RatingsComments"
+          TABLE_CLAIMED: "Places_ClaimedAudit"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_GetByID placeholder — not yet implemented"})
+              }
+
+  # 3. Places_Submit
+  LambdaPlacesSubmit:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_Submit"
+      Description: "Step 1 of submission — creates Places_Submissions record, sends email + SMS codes"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_SUBMISSIONS: "Places_Submissions"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_Submit placeholder — not yet implemented"})
+              }
+
+  # 4. Places_SubmitVerify
+  LambdaPlacesSubmitVerify:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_SubmitVerify"
+      Description: "Step 2 of submission — validates email+SMS codes, creates Places_Places record with internal_status: in_review"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_PLACES: "Places_Places"
+          TABLE_SUBMISSIONS: "Places_Submissions"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_SubmitVerify placeholder — not yet implemented"})
+              }
+
+  # 5. Places_SubmitAIAutofill
+  LambdaPlacesSubmitAIAutofill:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_SubmitAIAutofill"
+      Description: "AI autofill — uses Anthropic Claude API + Google Places API to pre-populate place metadata, tags, ratings"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_SUBMISSIONS: "Places_Submissions"
+          TABLE_PLACES: "Places_Places"
+          ANTHROPIC_MODEL_ID: "claude-3-5-haiku-latest"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_SubmitAIAutofill placeholder — not yet implemented"})
+              }
+
+  # 6. Places_RatingsGet
+  LambdaPlacesRatingsGet:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_RatingsGet"
+      Description: "Returns all ratings/comments for a place_id, sorted by ts_created descending"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_RATINGS: "Places_RatingsComments"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_RatingsGet placeholder — not yet implemented"})
+              }
+
+  # 7. Places_RatingsPost
+  LambdaPlacesRatingsPost:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_RatingsPost"
+      Description: "Writes a new rating/comment record to Places_RatingsComments — requires valid accountId"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_RATINGS: "Places_RatingsComments"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_RatingsPost placeholder — not yet implemented"})
+              }
+
+  # 8. Places_Claim
+  LambdaPlacesClaim:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_Claim"
+      Description: "Initiates a claim — writes to Places_ClaimedAudit with status: in_review and stamps claimed_ts on Places_Places"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_PLACES: "Places_Places"
+          TABLE_CLAIMED: "Places_ClaimedAudit"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_Claim placeholder — not yet implemented"})
+              }
+
+  # 9. Places_Report
+  LambdaPlacesReport:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_Report"
+      Description: "Appends an external_reporting entry to Places_Places — max 5 enforced in function"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_PLACES: "Places_Places"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_Report placeholder — not yet implemented"})
+              }
+
+  # 10. Places_Edit
+  LambdaPlacesEdit:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_Edit"
+      Description: "Allows the verified claimer to edit their Place record fields in Places_Places"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_PLACES: "Places_Places"
+          TABLE_CLAIMED: "Places_ClaimedAudit"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_Edit placeholder — not yet implemented"})
+              }
+
+  # 11. Places_AdminReview
+  LambdaPlacesAdminReview:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_AdminReview"
+      Description: "Internal — updates internal_status, internal_comments, internal_verified, and ClaimedAudit status"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_PLACES: "Places_Places"
+          TABLE_CLAIMED: "Places_ClaimedAudit"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_AdminReview placeholder — not yet implemented"})
+              }
+
+  # 12. Places_AdminEditPlace
+  LambdaPlacesAdminEditPlace:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "Places_AdminEditPlace"
+      Description: "Internal — admin-level edit of any field on any Places_Places record"
+      Runtime: python3.14
+      Handler: index.handler
+      Role: !GetAtt PlacesLambdaExecutionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENVIRONMENT: "prod"
+          TABLE_PLACES: "Places_Places"
+      Code:
+        ZipFile: |
+          import json
+
+          def handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+                  "body": json.dumps({"message": "Places_AdminEditPlace placeholder — not yet implemented"})
+              }
+
+  # ------------------------------------------------------------
+  # API GATEWAY — REST API
+  # ------------------------------------------------------------
+  PlacesRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: "Places"
+      Description: PlungePalz Places REST API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # ------------------------------------------------------------
+  # RESOURCES — /search
+  # ------------------------------------------------------------
+  ResourceSearch:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !GetAtt PlacesRestApi.RootResourceId
+      PathPart: search
+
+  MethodSearchGET:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceSearch
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesSearch.Arn
+
+  # ------------------------------------------------------------
+  # RESOURCES — /place/{place_id}
+  # ------------------------------------------------------------
+  ResourcePlace:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !GetAtt PlacesRestApi.RootResourceId
+      PathPart: place
+
+  ResourcePlacePlaceId:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !Ref ResourcePlace
+      PathPart: "{place_id}"
+
+  MethodPlaceGET:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourcePlacePlaceId
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesGetByID.Arn
+
+  # ------------------------------------------------------------
+  # RESOURCES — /submit
+  # ------------------------------------------------------------
+  ResourceSubmit:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !GetAtt PlacesRestApi.RootResourceId
+      PathPart: submit
+
+  MethodSubmitPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceSubmit
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesSubmit.Arn
+
+  # /submit/verify
+  ResourceSubmitVerify:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !Ref ResourceSubmit
+      PathPart: verify
+
+  MethodSubmitVerifyPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceSubmitVerify
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesSubmitVerify.Arn
+
+  # /submit/ai_autofill
+  ResourceSubmitAIAutofill:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !Ref ResourceSubmit
+      PathPart: ai_autofill
+
+  MethodSubmitAIAutofillPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceSubmitAIAutofill
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesSubmitAIAutofill.Arn
+
+  # ------------------------------------------------------------
+  # RESOURCES — /ratings/{place_id}
+  # ------------------------------------------------------------
+  ResourceRatings:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !GetAtt PlacesRestApi.RootResourceId
+      PathPart: ratings
+
+  ResourceRatingsPlaceId:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !Ref ResourceRatings
+      PathPart: "{place_id}"
+
+  MethodRatingsGET:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceRatingsPlaceId
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesRatingsGet.Arn
+
+  MethodRatingsPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceRatingsPlaceId
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesRatingsPost.Arn
+
+  # ------------------------------------------------------------
+  # RESOURCES — /claim
+  # ------------------------------------------------------------
+  ResourceClaim:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !GetAtt PlacesRestApi.RootResourceId
+      PathPart: claim
+
+  MethodClaimPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceClaim
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesClaim.Arn
+
+  # ------------------------------------------------------------
+  # RESOURCES — /report/{place_id}
+  # ------------------------------------------------------------
+  ResourceReport:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !GetAtt PlacesRestApi.RootResourceId
+      PathPart: report
+
+  ResourceReportPlaceId:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !Ref ResourceReport
+      PathPart: "{place_id}"
+
+  MethodReportPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceReportPlaceId
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesReport.Arn
+
+  # ------------------------------------------------------------
+  # RESOURCES — /edit_place
+  # ------------------------------------------------------------
+  ResourceEditPlace:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !GetAtt PlacesRestApi.RootResourceId
+      PathPart: edit_place
+
+  MethodEditPlacePOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceEditPlace
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesEdit.Arn
+
+  # ------------------------------------------------------------
+  # RESOURCES — /plungepalz_admin
+  # ------------------------------------------------------------
+  ResourceAdmin:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !GetAtt PlacesRestApi.RootResourceId
+      PathPart: plungepalz_admin
+
+  # /plungepalz_admin/review
+  ResourceAdminReview:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !Ref ResourceAdmin
+      PathPart: review
+
+  MethodAdminReviewPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceAdminReview
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesAdminReview.Arn
+
+  # /plungepalz_admin/edit
+  ResourceAdminEdit:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ParentId: !Ref ResourceAdmin
+      PathPart: edit
+
+  MethodAdminEditPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      ResourceId: !Ref ResourceAdminEdit
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt LambdaPlacesAdminEditPlace.Arn
+
+  # ------------------------------------------------------------
+  # LAMBDA PERMISSIONS — Allow API Gateway to invoke each Lambda
+  # ------------------------------------------------------------
+
+  PermissionSearchGET:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesSearch.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionPlaceGET:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesGetByID.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionSubmitPOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesSubmit.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionSubmitVerifyPOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesSubmitVerify.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionSubmitAIAutofillPOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesSubmitAIAutofill.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionRatingsGET:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesRatingsGet.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionRatingsPOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesRatingsPost.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionClaimPOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesClaim.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionReportPOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesReport.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionEditPlacePOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesEdit.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionAdminReviewPOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesAdminReview.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  PermissionAdminEditPOST:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaPlacesAdminEditPlace.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PlacesRestApi}/*"
+
+  # ------------------------------------------------------------
+  # API GATEWAY DEPLOYMENT & STAGE
+  # ------------------------------------------------------------
+  PlacesApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - MethodSearchGET
+      - MethodPlaceGET
+      - MethodSubmitPOST
+      - MethodSubmitVerifyPOST
+      - MethodSubmitAIAutofillPOST
+      - MethodRatingsGET
+      - MethodRatingsPOST
+      - MethodClaimPOST
+      - MethodReportPOST
+      - MethodEditPlacePOST
+      - MethodAdminReviewPOST
+      - MethodAdminEditPOST
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      Description: "Deployed by CloudFormation — prod"
+
+  PlacesApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref PlacesRestApi
+      DeploymentId: !Ref PlacesApiDeployment
+      StageName: "Places_PROD"
+      Description: "Places API Stage — prod"
+
+# ==============================================================
+# OUTPUTS
+# ==============================================================
+Outputs:
+
+  PlacesApiId:
+    Description: "API Gateway REST API ID"
+    Value: !Ref PlacesRestApi
+    Export:
+      Name: "PlacesApiId"
+
+  PlacesApiBaseUrl:
+    Description: "Base URL for the Places API"
+    Value: !Sub "https://${PlacesRestApi}.execute-api.${AWS::Region}.amazonaws.com/Places_PROD"
+    Export:
+      Name: "PlacesApiBaseUrl"
+
+  LambdaRoleArn:
+    Description: "Shared Lambda execution role ARN"
+    Value: !GetAtt PlacesLambdaExecutionRole.Arn
+    Export:
+      Name: "PlacesLambdaExecutionRoleArn"

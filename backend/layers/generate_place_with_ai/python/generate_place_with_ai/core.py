@@ -1,19 +1,25 @@
 """
 PlungePalz Places API — generate_place_with_ai core implementation.
 
-Uses Google Places New API v1 and Claude Haiku via Bedrock to generate
-structured place records. Never writes to DynamoDB.
+Uses Google Places New API v1 and Claude to generate structured place records.
+Supports two backends:
+  - Anthropic API (default): tool_use for structured output; used in Lambda.
+  - Claude Agent SDK (USE_CLAUDE_AGENT_SDK=1): query() with WebFetch/WebSearch
+    for web-derived data; used for local testing.
+Never writes to DynamoDB.
 """
 
 import json
 import logging
+import os
 import re
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-import boto3
+
+import anthropic
 
 logger = logging.getLogger(__name__)
 
@@ -282,17 +288,21 @@ def _fetch_google_places(
     return google_data
 
 
-def _call_bedrock_populate(
+def _call_claude_api_populate(
     place_name: str,
     place_type: str,
     activity_types: list,
     google_data: dict,
-    bedrock_region: str,
-    bedrock_model_id: str,
+    anthropic_api_key: str,
+    model_id: str,
     errors: list,
 ) -> dict | None:
-    """Invoke Claude Haiku via Bedrock with tool_use, tool_choice: any. Returns parsed tool output."""
-    client = boto3.client("bedrock-runtime", region_name=bedrock_region)
+    """Invoke Claude via Anthropic API with tool_use. Returns parsed tool output."""
+    if not anthropic_api_key or not anthropic_api_key.strip():
+        errors.append("ANTHROPIC_API_KEY not configured")
+        return None
+
+    client = anthropic.Anthropic(api_key=anthropic_api_key.strip())
 
     prompt = (
         f"Generate a structured place listing for a cold plunge/sauna venue.\n\n"
@@ -305,50 +315,112 @@ def _call_bedrock_populate(
         f"external_ratings_ai_generated (object with keys like 'google', 'overall', 1.0-5.0)."
     )
 
-    tool_spec = {
-        "toolSpec": {
+    tools = [
+        {
             "name": "populate_place_listing",
             "description": "Output structured place listing data for PlungePalz.",
-            "inputSchema": {
-                "json": {
-                    "type": "object",
-                    "properties": {
-                        "description": {"type": "string"},
-                        "place_type_metadata": {"type": "object"},
-                        "amenities": {"type": "array", "items": {"type": "string"}},
-                        "tags": {"type": "array", "items": {"type": "string"}},
-                        "external_ratings_ai_generated": {"type": "object"},
-                    },
-                    "required": ["description", "place_type_metadata", "amenities", "tags", "external_ratings_ai_generated"],
-                }
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "place_type_metadata": {"type": "object"},
+                    "amenities": {"type": "array", "items": {"type": "string"}},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "external_ratings_ai_generated": {"type": "object"},
+                },
+                "required": ["description", "place_type_metadata", "amenities", "tags", "external_ratings_ai_generated"],
             },
         }
-    }
+    ]
 
     try:
-        response = client.converse(
-            modelId=bedrock_model_id,
-            messages=[{"role": "user", "content": [{"text": prompt}]}],
-            toolConfig={
-                "tools": [tool_spec],
-                "toolChoice": {"any": {}},
-            },
+        response = client.messages.create(
+            model=model_id,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+            tools=tools,
+            tool_choice={"type": "tool", "name": "populate_place_listing"},
         )
     except Exception as e:
-        errors.append(f"Bedrock invoke error: {e}")
+        errors.append(f"Anthropic API error: {e}")
         return None
 
-    stop_reason = response.get("stopReason", "")
-    msg = response.get("output", {}).get("message", {})
-    content = msg.get("content") or []
-
+    content = response.content or []
     for block in content:
-        if "toolUse" in block:
-            tu = block["toolUse"]
-            if tu.get("name") == "populate_place_listing":
-                inp = tu.get("input") or {}
-                return inp
+        if getattr(block, "type", "") == "tool_use" and getattr(block, "name", "") == "populate_place_listing":
+            return block.input if hasattr(block, "input") and block.input else {}
     return None
+
+
+def _call_claude_agent_sdk_populate(
+    place_name: str,
+    place_type: str,
+    activity_types: list,
+    google_data: dict,
+    anthropic_api_key: str,
+    errors: list,
+) -> dict | None:
+    """
+    Invoke Claude via Agent SDK query() with WebFetch/WebSearch for web-derived data.
+    Uses structured output. Requires claude-agent-sdk and ANTHROPIC_API_KEY.
+    Best for local testing with web tools.
+    """
+    try:
+        from claude_agent_sdk import query, ClaudeAgentOptions
+    except ImportError:
+        errors.append("claude-agent-sdk not installed. Run: pip install claude-agent-sdk")
+        return None
+
+    if not anthropic_api_key or not anthropic_api_key.strip():
+        errors.append("ANTHROPIC_API_KEY not configured")
+        return None
+
+    import asyncio
+
+    place_schema = {
+        "type": "object",
+        "properties": {
+            "description": {"type": "string"},
+            "place_type_metadata": {"type": "object"},
+            "amenities": {"type": "array", "items": {"type": "string"}},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "external_ratings_ai_generated": {"type": "object"},
+        },
+        "required": ["description", "place_type_metadata", "amenities", "tags", "external_ratings_ai_generated"],
+    }
+
+    prompt = (
+        f"Research this cold plunge/sauna venue and produce a structured listing.\n\n"
+        f"Place name: {place_name}\n"
+        f"Place type: {place_type}\n"
+        f"Activity types: {activity_types}\n\n"
+        f"Google Places data (use where available): {json.dumps(google_data, default=str)}\n\n"
+        f"Use WebFetch and/or WebSearch to find additional info from the web (website, reviews, amenities). "
+        f"Then return JSON with: description (2-4 sentences), place_type_metadata (per place_type schema), "
+        f"amenities (list), tags (list), external_ratings_ai_generated (object with 'google', 'overall', etc., 1.0-5.0)."
+    )
+
+    api_key = anthropic_api_key.strip()
+
+    async def _run_query():
+        options = ClaudeAgentOptions(
+            allowed_tools=["WebFetch", "WebSearch"],
+            output_format={"type": "json_schema", "schema": place_schema},
+            env={"ANTHROPIC_API_KEY": api_key},
+        )
+        structured = None
+        async for message in query(prompt=prompt, options=options):
+            if getattr(message, "subtype", None) in ("success", "error") and hasattr(message, "structured_output"):
+                structured = message.structured_output
+                break
+        return structured
+
+    try:
+        result = asyncio.run(_run_query())
+        return result if isinstance(result, dict) else None
+    except Exception as e:
+        errors.append(f"Claude Agent SDK error: {e}")
+        return None
 
 
 def _compute_h3(lat: float, lng: float) -> tuple[str, str, str]:
@@ -399,21 +471,21 @@ def generate_place_record(
     place_location: dict,
     activity_types: list,
     google_places_api_key: str,
-    bedrock_region: str,
-    bedrock_model_id: str,
+    anthropic_api_key: str,
+    model_id: str,
     submission_id: str,
 ) -> dict:
     """
-    Generate a fully populated Places_Places record using Google Places + Claude Haiku.
+    Generate a fully populated Places_Places record using Google Places + Claude (Anthropic API).
 
     Args:
         place_name: Display name
         place_type: business | nature | temporary_pop_up | gym_amenity
         place_location: { type: "address"|"coordinates", value: "..." }
         activity_types: ["cold_plunge"] and/or ["sauna"]
-        google_places_api_key: API key
-        bedrock_region: AWS region for Bedrock
-        bedrock_model_id: Model ID (e.g. anthropic.claude-haiku-4-5-20251001-v1:0)
+        google_places_api_key: API key for Google Places
+        anthropic_api_key: Anthropic API key for Claude
+        model_id: Claude model (e.g. claude-3-5-haiku-latest)
         submission_id: For traceability
 
     Returns:
@@ -453,12 +525,19 @@ def generate_place_record(
     state = _extract_state(address or google_data.get("formattedAddress", ""))
     country = _extract_country(address or google_data.get("formattedAddress", ""))
 
-    ai_result = _call_bedrock_populate(
-        place_name, place_type, act, google_data, bedrock_region, bedrock_model_id, errors
-    )
+    use_agent_sdk = os.environ.get("USE_CLAUDE_AGENT_SDK", "").strip().lower() in ("1", "true", "yes")
+    if use_agent_sdk:
+        ai_result = _call_claude_agent_sdk_populate(
+            place_name, place_type, act, google_data, anthropic_api_key, errors
+        )
+    else:
+        ai_result = _call_claude_api_populate(
+            place_name, place_type, act, google_data, anthropic_api_key, model_id, errors
+        )
+
     if not ai_result:
         if not partial:
-            errors.append("Bedrock returned no tool output")
+            errors.append("Claude API returned no tool output")
         return {"success": False, "record": None, "errors": errors, "partial": partial}
 
     place_id = str(uuid.uuid4())

@@ -17,8 +17,8 @@ from generate_place_with_ai import generate_place_record
 TABLE_SUBMISSIONS = os.environ.get("TABLE_SUBMISSIONS", "Places_Submissions")
 TABLE_PLACES = os.environ.get("TABLE_PLACES", "Places_Places")
 GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY", "")
-BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
-BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-haiku-4-5-20251001-v1:0")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "")
+ANTHROPIC_MODEL_ID = os.environ.get("ANTHROPIC_MODEL_ID", "claude-3-5-haiku-latest")
 
 dynamodb = boto3.resource("dynamodb")
 headers = {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
@@ -92,8 +92,8 @@ def handler(event, context):
     place_type = original.get("place_type") or "business"
     activity_types = original.get("activity_types") or ["cold_plunge"]
     address = original.get("address") or ""
-    lat = original.get("latitude")
-    lng = original.get("longitude")
+    lat = original.get("lat") or original.get("latitude")
+    lng = original.get("lng") or original.get("longitude")
 
     if place_type == "nature" and lat is not None and lng is not None:
         place_location = {"type": "coordinates", "value": f"{lng}|{lat}"}
@@ -120,14 +120,21 @@ def handler(event, context):
             "body": json.dumps({"error": "GOOGLE_PLACES_API_KEY not configured"}),
         }
 
+    if not ANTHROPIC_API_KEY:
+        return {
+            "statusCode": 500,
+            "headers": headers,
+            "body": json.dumps({"error": "ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY not configured"}),
+        }
+
     result = generate_place_record(
         place_name=place_name,
         place_type=place_type,
         place_location=place_location,
         activity_types=activity_types,
         google_places_api_key=GOOGLE_PLACES_API_KEY,
-        bedrock_region=BEDROCK_REGION,
-        bedrock_model_id=BEDROCK_MODEL_ID,
+        anthropic_api_key=ANTHROPIC_API_KEY,
+        model_id=ANTHROPIC_MODEL_ID,
         submission_id=submission_id,
     )
 

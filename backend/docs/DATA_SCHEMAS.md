@@ -43,7 +43,7 @@
 | external_reporting | List[Map] | Abuse/duplicate reports |
 | total_plunge_sessions_recorded | Number | Counter |
 | total_sauna_sessions_recorded | Number | Counter |
-| external_ratings_ai_generated | Map | AI-generated ratings summary |
+| external_ratings_ai_generated | Map | AI-generated ratings data for ONLY Google and ClassPass (if NOT a "nature" "place_type") |
 | tags | List[String] | Discovery tags |
 | ts_created | String | ISO timestamp UTC |
 | ts_last_updated | String | ISO timestamp UTC |
@@ -178,8 +178,25 @@
     "entry_fee_usd": 25,
     "membership_available": true,
     "walk_ins_allowed": true,
-    "cold_plunge_details": [{"temp_range_f": [38, 45], "capacity": 2, "indoor_outdoor": "indoor"}],
-    "sauna_details": [{"type": "infrared", "temp_range_f": [140, 160], "capacity": 4}]
+    "cold_plunge_details": [
+      {
+        "id": 1,
+        "temp_range_f": [38, 45], 
+        "capacity": 2, 
+        "indoor_outdoor": "indoor",
+        "brand_id": "b_000001",
+        "additional_details": "This cold plunge is perfect for couples!"
+      }
+    ],
+    "sauna_details": [
+      {
+        "id": 1, 
+        "type": "infrared", 
+        "temp_range_f": [140, 160], 
+        "brand_id": "b_000311", 
+        "capacity": 4
+      }
+    ]
   },
   "amenities": ["wifi", "lockers", "towels"],
   "has_plungepalz_discount": true,
@@ -197,7 +214,18 @@
   "external_reporting": [],
   "total_plunge_sessions_recorded": 0,
   "total_sauna_sessions_recorded": 0,
-  "external_ratings_ai_generated": {"google": 4.5, "overall": 4.3},
+  "external_ratings_ai_generated": {
+    "classpass": {
+        "count_string": "100+",
+        "rating_score": 4.9,   // Will be on a scale of 1-5
+        "classpass_url": ""
+    },
+    "google": {
+        "count_string": "94",
+        "rating_score": 4.7,     // Will be on a scale of 1-5
+        "google_business_url": ""
+    },
+  },
   "tags": ["downtown", "studio", "membership"],
   "ts_created": "2025-02-20T12:00:00Z",
   "ts_last_updated": "2025-02-20T12:00:00Z",
@@ -209,91 +237,162 @@
 
 ## Places_Submissions
 
-**PK:** `submission_id` (String, UUID v4)  
+**PK:** `submission_id` (String)  
 **Purpose:** Draft submissions and verification state before places are created.
 
 ### Attributes
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| submission_id | String | UUID v4, primary key |
-| source | String | mobile_app \| web_app \| admin_seed |
+| submission_id | String | Primary key (e.g. `sub_` + UUID) |
+| submitted_ts | String | ISO timestamp UTC when submission was created |
+| submission_display_name | String | User's display name (e.g. "Jake Morrison") |
+| email_six_digit_code | String \| null | Email verification code (6 alphanumeric) |
+| sms_six_digit_code | String \| null | SMS verification code (6 alphanumeric) |
+| submitted_via | String | mobile_app \| web_app \| admin_seed |
+| email_type | String \| null | "email" or "username" — how submitter is identified |
+| email_type_value | String \| null | Email address or PlungePalz username |
+| phone_number | String \| null | Submitter's phone (E.164 format) |
 | verified | Boolean | Email + SMS verified |
-| verified_ts | String | ISO timestamp UTC |
-| place_id_generated | String | Set after AI autofill success |
-| original_submission_record_json | Map | User-submitted data |
+| verified_ts | String \| null | ISO timestamp UTC when verified |
+| place_id_generated | String \| null | Set after AI autofill success; null if not yet generated |
 | ai_autofill_result | Map | Output from generate_place_with_ai |
-| ts_created | String | ISO timestamp UTC |
-| ts_last_updated | String | ISO timestamp UTC |
+| original_submission_record_json | Map | User-submitted place data |
 
 ### original_submission_record_json
 
-Contains: `place_name`, `place_type`, `activity_types`, `address`, `latitude`, `longitude`, `identity`, `email`, `phone_number`.
+Contains: `place_name`, `place_type`, `activity_types`, `address`, `lat`, `lng`, `country`, `state_province`, `city`, `description`, `place_website_url`, `place_type_metadata`. For nature places, `address` may be null when `lat`/`lng` are provided.
 
 ### ai_autofill_result
 
-Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`, `external_ratings_ai_generated`, `google_places_api_data`, `ai_errors`, `generated_ts`.
+Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`,   "external_ratings_ai_generated": {
+    "classpass": {
+        "count_string": "100+",
+        "rating_score": 4.9,   // Will be on a scale of 1-5
+        "classpass_url": ""
+    },
+    "google": {
+        "count_string": "94",
+        "rating_score": 4.7,     // Will be on a scale of 1-5
+        "google_business_url": ""
+    },
+  },
 
 ### Sample Records
 
-**Mobile App User:**
+**Mobile App User (verified, place generated):**
 ```json
 {
-  "submission_id": "sub-mobile-001",
-  "source": "mobile_app",
+  "submission_id": "sub_9f3a2b1c-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+  "submitted_ts": "2026-02-23T14:32:10Z",
+  "submission_display_name": "Jake Morrison",
+  "email_six_digit_code": "49F9S4",
+  "sms_six_digit_code": "F239S4",
+  "submitted_via": "mobile_app",
+  "email_type": "email",
+  "email_type_value": "jake.morrison@gmail.com",
+  "phone_number": "+18015550192",
   "verified": true,
-  "verified_ts": "2025-02-20T11:30:00Z",
-  "place_id_generated": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "verified_ts": "2026-02-23T14:34:55Z",
+  "place_id_generated": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "ai_autofill_result": {},
   "original_submission_record_json": {
-    "place_name": "Plunge Lab",
+    "place_name": "Cold Plunge Coffee",
     "place_type": "business",
+    "lat": 40.7607,
+    "lng": -111.8743,
+    "country": "US",
+    "state_province": "UT",
+    "city": "Salt Lake City",
+    "address": "457 E 300 S, Suite D, Salt Lake City, UT 84111",
+    "description": "The world's first triple contrast café combining commercial-grade Blue Cube cold plunges (38–56°F), a traditional cedar Finnish sauna with aromatherapy, and specialty espresso from Seattle-based Hyacinth Coffee. No time limits on your stay.",
     "activity_types": ["cold_plunge", "sauna"],
-    "address": "457 E 300 S, Salt Lake City, UT 84111",
-    "identity": {"type": "username", "value": "user_123"},
-    "email": "user@example.com",
-    "phone_number": "+1234567890"
-  },
-  "ai_autofill_result": { "place_id": "a1b2c3d4-...", "description": "...", "place_type_metadata": {}, "generated_ts": "2025-02-20T12:00:00Z" },
-  "ts_created": "2025-02-20T11:00:00Z",
-  "ts_last_updated": "2025-02-20T12:00:00Z"
+    "place_website_url": "https://www.coldplungecoffee.com",
+    "place_type_metadata": {
+      "hours_of_operation": {
+        "mon": "07:00-19:00",
+        "tue": "07:00-19:00",
+        "wed": "07:00-19:00",
+        "thu": "07:00-19:00",
+        "fri": "07:00-19:00",
+        "sat": "07:00-15:00",
+        "sun": "09:00-15:00"
+      },
+      "access_type": "pay",
+      "entry_fee_usd": 25.00,
+      "walk_ins_allowed": true,
+      "place_phone": "+12069206147"
+    }
+  }
 }
 ```
 
-**Web App User:**
+**Web App User (unverified, abandoned):**
 ```json
 {
-  "submission_id": "sub-web-002",
-  "source": "web_app",
+  "submission_id": "sub_1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+  "submitted_ts": "2026-02-20T09:15:42Z",
+  "submission_display_name": "Sarah K.",
+  "email_six_digit_code": "7XQ2P1",
+  "sms_six_digit_code": null,
+  "submitted_via": "web_app",
+  "email_type": "username",
+  "email_type_value": "sarah_plunges",
+  "phone_number": null,
   "verified": false,
-  "verified_ts": "",
-  "place_id_generated": "",
+  "verified_ts": null,
+  "place_id_generated": null,
+  "ai_autofill_result": {},
   "original_submission_record_json": {
-    "place_name": "Mountain Creek",
+    "place_name": "Silver Lake - Brighton Resort",
     "place_type": "nature",
+    "lat": 40.5974,
+    "lng": -111.5853,
+    "country": "US",
+    "state_province": "UT",
+    "city": "Brighton",
+    "address": null,
+    "description": "Beautiful alpine lake at 8,740 ft elevation. Snow-fed and ice cold year round. Stunning mountain views.",
     "activity_types": ["cold_plunge"],
-    "latitude": 40.5,
-    "longitude": -111.8,
-    "identity": {"type": "email", "value": "visitor@example.com"},
-    "email": "visitor@example.com",
-    "phone_number": "+1987654321"
-  },
-  "ts_created": "2025-02-20T10:00:00Z",
-  "ts_last_updated": "2025-02-20T10:00:00Z"
+    "place_website_url": null,
+    "place_type_metadata": {
+      "time_of_season": [6, 7, 8, 9],
+      "access_type": "parking_fee",
+      "nature_type": "lake",
+      "entry_fee_usd": 10.00,
+      "hike_info": {
+        "required": true,
+        "submitter_generated": {
+          "length_out_and_back_mi": 4.6,
+          "elevation_gain_ft": 1423,
+          "estimated_round_trip_time_hrs": 3.5,
+          "difficulty": "moderate"
+        },
+        "AllTrailsLink": "https://www.alltrails.com/trail/us/utah/silver-lake-trail?u=i&sh=ns4ldx"
+      },
+      "additional_comments": "Park at the Brighton Resort lot. Trail starts at the south end near the ski lodge."
+    }
+  }
 }
 ```
 
 **Admin Seed:**
 ```json
 {
-  "submission_id": "sub-admin-003",
-  "source": "admin_seed",
+  "submission_id": "sub_admin_seed_001",
+  "submitted_ts": "2026-02-23T00:00:00Z",
+  "submission_display_name": "PlungePalz Admin",
+  "email_six_digit_code": null,
+  "sms_six_digit_code": null,
+  "submitted_via": "admin_seed",
+  "email_type": null,
+  "email_type_value": "admin@plungepalz.com",
+  "phone_number": null,
   "verified": true,
-  "verified_ts": "2025-02-19T00:00:00Z",
-  "place_id_generated": "admin-place-001",
-  "original_submission_record_json": { "place_name": "Seed Location", "place_type": "business", "address": "..." },
+  "verified_ts": "2026-02-23T00:00:00Z",
+  "place_id_generated": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "ai_autofill_result": {},
-  "ts_created": "2025-02-19T00:00:00Z",
-  "ts_last_updated": "2025-02-19T00:00:00Z"
+  "original_submission_record_json": {}
 }
 ```
 
@@ -346,7 +445,7 @@ Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`,
 | claimer_email | String | |
 | claimer_phone | String | |
 | claimer_name | String | |
-| status | String | in_review \| approved \| blocked |
+| status | String | in_review \| approved \| revoked \| verified \| rejected |
 | stripe_payment_intent_id | String | For $9.99 fee |
 | reviewed_ts | String | Admin review ISO timestamp UTC |
 | reviewed_by | String | Admin identifier |
@@ -355,7 +454,9 @@ Contains: `place_id`, `description`, `place_type_metadata`, `amenities`, `tags`,
 
 - **in_review:** Awaiting PlungePalz approval  
 - **approved:** Claimer can use Places_Edit  
-- **blocked:** Claim rejected or revoked  
+- **rejected:** Claim rejected  
+- **revoked:** Claim revoked  
+- **verified:** Place has been verified
 
 ### Sample Records
 

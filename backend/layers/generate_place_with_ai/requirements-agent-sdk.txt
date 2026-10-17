@@ -1,0 +1,5 @@
+# Optional: For local testing with Claude Agent SDK (WebFetch, WebSearch).
+# Install with: pip install -r requirements-agent-sdk.txt
+# Set USE_CLAUDE_AGENT_SDK=1 and ANTHROPIC_API_KEY (or ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY) when running.
+anthropic>=0.39.0
+claude-agent-sdk>=0.1.0

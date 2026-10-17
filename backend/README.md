@@ -7,7 +7,7 @@ Production AWS serverless backend that powers the discovery, submission, rating,
 The PlungePalz Places API provides:
 
 - **Submission Flow**: Users submit new places via a multi-stage verification process (email + SMS codes)
-- **AI Autofill**: Google Places New API + Claude Haiku (Bedrock) enrich submissions with structured data
+- **AI Autofill**: Google Places New API + Claude (Anthropic API) enrich submissions with structured data
 - **Public Discovery**: Search and retrieve places by ID, with geo-aware H3-based search
 - **Ratings & Comments**: User-generated ratings and feedback
 - **Claiming & Reporting**: Place claiming by business owners, abuse reporting
@@ -18,7 +18,7 @@ The PlungePalz Places API provides:
 ```
 API Gateway (REST) → Lambda Functions → DynamoDB
                       ↓
-               Bedrock (Claude Haiku)
+               Anthropic API (Claude)
                Google Places New API v1
 ```
 
@@ -35,7 +35,8 @@ API Gateway (REST) → Lambda Functions → DynamoDB
 | `infrastructure/` | CloudFormation templates and IaC placeholders |
 | `functions/` | Lambda function handlers (one folder per function) |
 | `layers/` | Lambda layers (e.g. `generate_place_with_ai` for AI autofill logic) |
-| `tests/` | Unit and integration-style tests |
+| `tests/` | Test folders (`{LambdaName}/Test_XXX/`) with instructions, fixtures, and CloudWatch logs |
+| `scripts/` | Local invoke script for testing Lambdas without deploying |
 
 ## Quickstart
 
@@ -53,13 +54,20 @@ aws cloudformation deploy \
 
 ### 2. Set Environment Variables
 
-Configure these for each Lambda function (via CloudFormation parameters or console):
+For local development and `scripts/local_invoke.py --live`, copy `.env.example` to `.env` and fill in your values:
+
+```bash
+cp .env.example .env
+# Edit .env with your GOOGLE_PLACES_API_KEY, etc.
+```
+
+For deployed Lambdas, configure via CloudFormation parameters or the AWS console:
 
 | Variable | Description |
 |----------|-------------|
 | `GOOGLE_PLACES_API_KEY` | Google Places New API v1 key |
-| `BEDROCK_REGION` | AWS region for Bedrock (e.g. `us-east-1`) |
-| `BEDROCK_MODEL_ID` | Model ID (default: `anthropic.claude-haiku-4-5-20251001-v1:0`) |
+| `ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY` | Anthropic API key for Claude |
+| `ANTHROPIC_MODEL_ID` | Claude model (default: `claude-3-5-haiku-latest`) |
 | `TABLE_PLACES` | DynamoDB table for places (default: `Places_Places`) |
 | `TABLE_SUBMISSIONS` | DynamoDB table for submissions (default: `Places_Submissions`) |
 | `TABLE_RATINGS` | DynamoDB table for ratings (default: `Places_RatingsComments`) |
@@ -67,10 +75,11 @@ Configure these for each Lambda function (via CloudFormation parameters or conso
 
 ### 3. Upload the Lambda Layer
 
-Package and upload the `generate_place_with_ai` layer:
+Package and upload the `generate_place_with_ai` layer (includes `anthropic` SDK):
 
 ```bash
 cd layers/generate_place_with_ai
+pip install -r requirements.txt -t python/
 zip -r generate_place_with_ai.zip python/
 aws lambda publish-layer-version \
   --layer-name generate_place_with_ai \
@@ -80,6 +89,17 @@ aws lambda publish-layer-version \
 ```
 
 Attach the layer to `Places_SubmitAIAutofill` (and any future functions that need it).
+
+### 4. Local Testing (Before Deploy)
+
+Validate Lambdas locally without deploying:
+
+```bash
+python scripts/local_invoke.py Places_SubmitAIAutofill Test_001
+python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live   # Real Google + Anthropic API
+```
+
+See [docs/TESTING.md](docs/TESTING.md) and [.cursorrules](.cursorrules) for the testing workflow.
 
 ## Documentation
 
@@ -93,7 +113,6 @@ Attach the layer to `Places_SubmitAIAutofill` (and any future functions that nee
 
 The Lambda execution role (`PlacesLambdaExecutionRole`) requires:
 
-- **Bedrock**: `bedrock:InvokeModel` for Claude Haiku
 - **DynamoDB**: Full CRUD on `Places_Places`, `Places_Submissions`, `Places_RatingsComments`, `Places_ClaimedAudit`
 - **SES**: Email sending for verification codes
 - **SNS**: SMS sending for verification codes

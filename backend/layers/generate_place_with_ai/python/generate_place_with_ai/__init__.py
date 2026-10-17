@@ -1,7 +1,7 @@
 """
 PlungePalz Places API — generate_place_with_ai Lambda Layer
 
-Calls Google Places New API v1 + Claude Haiku via Bedrock to produce a fully
+Calls Google Places New API v1 + Claude (Anthropic API) to produce a fully
 populated Places_Places record. NO DynamoDB writes — pure input/output.
 """
 
