@@ -27,8 +27,44 @@ interface PlacesMapProps {
   onMapCenter?: (location: DraftLocation) => void;
   onSelectPlace: (placeId: string) => void;
   onHoverPlace: (placeId: string | null) => void;
-  onViewportChange: (bounds: MapBounds) => void;
+  onViewportChange: (bounds: MapBounds, zoom: number) => void;
   mapboxToken?: string;
+}
+
+/** Right-side details / add-place drawer: 28rem + right-4 + gap. */
+const PANEL_PADDING_RIGHT = 496;
+/** Left list panel: ~380px + left-4. */
+const LIST_PADDING_LEFT = 400;
+
+function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
+  if (flyRequest.zoom == null) return currentZoom;
+  if (flyRequest.exactZoom) return flyRequest.zoom;
+  return Math.max(currentZoom, flyRequest.zoom);
+}
+
+function flyPadding(
+  panelOpen: boolean,
+  exactZoom: boolean | undefined,
+  size: { width: number; height: number }
+) {
+  if (exactZoom) {
+    return { top: 0, bottom: 0, left: 0, right: 0 };
+  }
+  const maxHorizontal = Math.max(0, size.width - 80);
+  const maxVertical = Math.max(0, size.height - 80);
+  let left = Math.min(LIST_PADDING_LEFT, Math.floor(maxHorizontal * 0.45));
+  let right = Math.min(panelOpen ? PANEL_PADDING_RIGHT : 56, Math.floor(maxHorizontal * 0.45));
+  if (left + right > maxHorizontal && left + right > 0) {
+    const scale = maxHorizontal / (left + right);
+    left = Math.floor(left * scale);
+    right = Math.floor(right * scale);
+  }
+  return {
+    top: Math.min(96, Math.floor(maxVertical * 0.25)),
+    bottom: Math.min(48, Math.floor(maxVertical * 0.15)),
+    left,
+    right,
+  };
 }
 
 const PIN_PATH =
@@ -132,17 +168,21 @@ export default function PlacesMap({
     if (!map) return;
     const bounds = map.getBounds();
     if (!bounds) return;
-    onViewportChange({
-      minLng: bounds.getWest(),
-      minLat: bounds.getSouth(),
-      maxLng: bounds.getEast(),
-      maxLat: bounds.getNorth(),
-    });
+    onViewportChange(
+      {
+        minLng: bounds.getWest(),
+        minLat: bounds.getSouth(),
+        maxLng: bounds.getEast(),
+        maxLat: bounds.getNorth(),
+      },
+      map.getZoom()
+    );
   }, [onViewportChange]);
 
   const handleLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    map.setProjection('mercator');
     void Promise.all([
       ensurePinImage(map, 'pin-cluster', pinSvg('#111111', false)),
       ensurePinImage(map, 'pin-place', pinSvg('#f97316', true)),
@@ -159,15 +199,21 @@ export default function PlacesMap({
 
   useEffect(() => {
     if (!flyRequest || !mapRef.current) return;
+    const map = mapRef.current.getMap();
     const currentZoom = mapRef.current.getZoom();
-    const zoom = flyRequest.zoom != null ? Math.max(currentZoom, flyRequest.zoom) : currentZoom;
+    const zoom = resolveFlyZoom(currentZoom, flyRequest);
+    const container = map.getContainer();
     mapRef.current.flyTo({
       center: [flyRequest.longitude, flyRequest.latitude],
       zoom,
       duration: 800,
+      padding: flyPadding(panelOpen, flyRequest.exactZoom, {
+        width: container.clientWidth,
+        height: container.clientHeight,
+      }),
     });
     onFlyComplete();
-  }, [flyRequest, onFlyComplete]);
+  }, [flyRequest, onFlyComplete, panelOpen]);
 
   const zoomBy = (delta: number) => {
     const map = mapRef.current?.getMap();
@@ -207,7 +253,7 @@ export default function PlacesMap({
         }
       | undefined;
     const props = feature?.properties;
-    if (props?.cluster && props.cluster_id != null && mapRef.current) {
+    if (props?.cluster_id != null && mapRef.current) {
       const source = mapRef.current.getMap().getSource('places') as GeoJSONSource;
       const coords = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : undefined;
       const clusterCenter: [number, number] = coords ?? [event.lngLat.lng, event.lngLat.lat];
@@ -266,11 +312,12 @@ export default function PlacesMap({
       <MapGL
         ref={mapRef}
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
+        projection="mercator"
         mapStyle="mapbox://styles/mapbox/light-v11"
         mapboxAccessToken={accessToken}
         attributionControl
         style={{ width: '100%', height: '100%' }}
-        interactiveLayerIds={imagesReady ? ['clusters', 'unclustered-point'] : []}
+        interactiveLayerIds={imagesReady ? ['clusters', 'cluster-count', 'unclustered-point'] : []}
         cursor="auto"
         onLoad={handleLoad}
         onMoveEnd={reportViewport}
@@ -284,25 +331,6 @@ export default function PlacesMap({
       >
         {imagesReady && (
           <Source id="places" type="geojson" data={geojson} cluster clusterMaxZoom={14} clusterRadius={60}>
-            <Layer
-              id="clusters"
-              type="symbol"
-              filter={['has', 'point_count']}
-              layout={{
-                'icon-image': 'pin-cluster',
-                'icon-anchor': 'bottom',
-                'icon-allow-overlap': true,
-                'icon-ignore-placement': true,
-                'text-field': ['get', 'point_count_abbreviated'],
-                'text-size': 12,
-                'text-offset': [0, -1.35],
-                'text-allow-overlap': true,
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-              }}
-              paint={{
-                'text-color': '#ffffff',
-              }}
-            />
             <Layer
               id="unclustered-point"
               type="symbol"
@@ -325,6 +353,35 @@ export default function PlacesMap({
                   1.15,
                   1,
                 ],
+              }}
+            />
+            <Layer
+              id="clusters"
+              type="symbol"
+              filter={['has', 'point_count']}
+              layout={{
+                'icon-image': 'pin-cluster',
+                'icon-anchor': 'bottom',
+                'icon-allow-overlap': true,
+                'icon-ignore-placement': true,
+              }}
+            />
+            <Layer
+              id="cluster-count"
+              type="symbol"
+              filter={['has', 'point_count']}
+              layout={{
+                'text-field': ['get', 'point_count_abbreviated'],
+                'text-size': 12,
+                'text-offset': [0, -1.35],
+                'text-allow-overlap': true,
+                'text-ignore-placement': true,
+                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+              }}
+              paint={{
+                'text-color': '#ffffff',
+                'text-halo-color': '#111111',
+                'text-halo-width': 1.25,
               }}
             />
           </Source>

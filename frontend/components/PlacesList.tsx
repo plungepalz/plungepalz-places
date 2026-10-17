@@ -3,6 +3,14 @@
 import type { PlaceSearchResult } from '@/lib/types';
 import PlaceCard from './PlaceCard';
 
+function placesListHeading(total: number, locationName: string): string {
+  const noun = total === 1 ? 'place' : 'places';
+  if (locationName === 'the world' || locationName === 'worldwide') {
+    return `${total} ${noun} worldwide`;
+  }
+  return `${total} ${noun} in ${locationName}`;
+}
+
 interface PlacesListProps {
   places: PlaceSearchResult[];
   total: number;
@@ -35,9 +43,7 @@ export default function PlacesList({
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5">
       <div className="border-b border-gray-100 px-4 py-3">
-        <h2 className="text-base font-semibold text-gray-900">
-          {total} {total === 1 ? 'place' : 'places'} in {locationName}
-        </h2>
+        <h2 className="text-base font-semibold text-gray-900">{placesListHeading(total, locationName)}</h2>
       </div>
 
       <div className="flex-1 space-y-1 overflow-y-auto px-2 py-2">
