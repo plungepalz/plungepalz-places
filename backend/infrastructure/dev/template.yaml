@@ -3,7 +3,7 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   PlungePalz Places API - DEV Environment
   Region: us-east-1
-  Self-contained dev stack with DynamoDB, Lambda, API Gateway, and Algolia integration
+  Self-contained dev stack aligned with the MVP API contract (Backend PR #4)
 
 Rules:
   EnforceUsEast1:
@@ -15,20 +15,60 @@ Parameters:
   AllowedOrigin:
     Type: String
     Default: http://localhost:3000
-    Description: CORS allowed origin (single origin)
-  
+    Description: CORS allowed origin (single origin). Set on API Gateway and CORS_ALLOWED_ORIGIN.
+
   EnableAlgoliaSync:
     Type: String
-    Default: 'false'
+    Default: 'true'
     AllowedValues:
       - 'true'
       - 'false'
-    Description: Enable Places_AlgoliaSync function (requires handler implementation)
-  
+    Description: Enable Places_AlgoliaSync (stream consumer). Requires handler from Backend PR #4.
+
+  AlgoliaIndexName:
+    Type: String
+    Default: places_dev
+    Description: Algolia index name for Search and AlgoliaSync
+
   AnthropicModelId:
     Type: String
     Default: claude-3-5-haiku-latest
-    Description: Anthropic model ID for AI generation
+    Description: Anthropic model ID for SubmitAIAutofill
+
+  AnthropicMaxTokens:
+    Type: Number
+    Default: 1024
+    Description: Anthropic max_tokens for SubmitAIAutofill
+
+  AlgoliaAppId:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Algolia application ID (value from --env-file at deploy time; never commit)
+
+  AlgoliaSearchApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Algolia search-only API key (Search only; from --env-file)
+
+  AlgoliaWriteApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Algolia write API key (AlgoliaSync only; from --env-file)
+
+  GooglePlacesApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Google Places API key (SubmitAIAutofill only; from --env-file)
+
+  AnthropicApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Anthropic API key (SubmitAIAutofill only; from --env-file)
 
 Conditions:
   EnableAlgoliaSyncCondition: !Equals [!Ref EnableAlgoliaSync, 'true']
@@ -49,7 +89,7 @@ Resources:
   # ==============================================================
   # DynamoDB Tables
   # ==============================================================
-  
+
   PlacesTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -142,19 +182,30 @@ Resources:
           Value: dev
 
   # ==============================================================
-  # Lambda Layer
+  # Lambda Layers
   # ==============================================================
-  
+
+  PlacesCommonLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: plungepalz-places-dev-places-common
+      Description: Shared HTTP/CORS/validation helpers (no third-party deps)
+      ContentUri: layers/places_common/
+      CompatibleRuntimes:
+        - python3.13
+    Metadata:
+      BuildMethod: makefile
+
   GeneratePlaceWithAILayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
       LayerName: plungepalz-places-dev-generate-place-ai
-      Description: Anthropic SDK and AI generation logic for PlungePalz Places Dev
-      ContentUri: ../../lambda_layers/generate_place_with_ai/
+      Description: Anthropic SDK and AI generation logic (SubmitAIAutofill only)
+      ContentUri: layers/generate_place_with_ai/
       CompatibleRuntimes:
         - python3.13
     Metadata:
-      BuildMethod: python3.13
+      BuildMethod: makefile
 
   # ==============================================================
   # API Gateway
@@ -192,6 +243,10 @@ Resources:
           HttpMethod: POST
           ThrottlingBurstLimit: 10
           ThrottlingRateLimit: 5
+        - ResourcePath: "/~1submit/~1ai_autofill"
+          HttpMethod: POST
+          ThrottlingBurstLimit: 2
+          ThrottlingRateLimit: 1
         - ResourcePath: "/*/*"
           HttpMethod: "*"
           ThrottlingBurstLimit: 20
@@ -226,13 +281,18 @@ Resources:
       FunctionName: Places_Search
       CodeUri: ../../lambda_functions/Places_Search/
       Handler: index.handler
-      Description: Search places by geo, type, activity
+      Description: Search places via Algolia (search-only key)
       Role: !GetAtt PlacesSearchRole.Arn
+      Layers:
+        - !Ref PlacesCommonLayer
       Environment:
         Variables:
           TABLE_PLACES: !Ref PlacesTable
-          ALGOLIA_APP_ID_PARAM: /plungepalz-places-dev/algolia/app_id
-          ALGOLIA_SEARCH_KEY_PARAM: /plungepalz-places-dev/algolia/search_api_key
+          TABLE_SUBMISSIONS: !Ref SubmissionsTable
+          CORS_ALLOWED_ORIGIN: !Ref AllowedOrigin
+          ALGOLIA_APP_ID: !Ref AlgoliaAppId
+          ALGOLIA_SEARCH_API_KEY: !Ref AlgoliaSearchApiKey
+          ALGOLIA_INDEX_NAME: !Ref AlgoliaIndexName
       Events:
         GetSearch:
           Type: Api
@@ -249,11 +309,15 @@ Resources:
       FunctionName: Places_GetByID
       CodeUri: ../../lambda_functions/Places_GetByID/
       Handler: index.handler
-      Description: Fetch single place by place_id
+      Description: Fetch a single public place by place_id
       Role: !GetAtt PlacesGetByIDRole.Arn
+      Layers:
+        - !Ref PlacesCommonLayer
       Environment:
         Variables:
           TABLE_PLACES: !Ref PlacesTable
+          TABLE_SUBMISSIONS: !Ref SubmissionsTable
+          CORS_ALLOWED_ORIGIN: !Ref AllowedOrigin
       Events:
         GetPlace:
           Type: Api
@@ -270,16 +334,15 @@ Resources:
       FunctionName: Places_Submit
       CodeUri: ../../lambda_functions/Places_Submit/
       Handler: index.handler
-      Description: Create submission with verification codes
+      Description: Create submission + place in one TransactWriteItems
       Role: !GetAtt PlacesSubmitRole.Arn
       Layers:
-        - !Ref GeneratePlaceWithAILayer
+        - !Ref PlacesCommonLayer
       Environment:
         Variables:
-          TABLE_SUBMISSIONS: !Ref SubmissionsTable
           TABLE_PLACES: !Ref PlacesTable
-          GOOGLE_PLACES_API_KEY_PARAM: /plungepalz-places-dev/google/places_api_key
-          ANTHROPIC_MODEL_ID: !Ref AnthropicModelId
+          TABLE_SUBMISSIONS: !Ref SubmissionsTable
+          CORS_ALLOWED_ORIGIN: !Ref AllowedOrigin
       Events:
         PostSubmit:
           Type: Api
@@ -289,6 +352,39 @@ Resources:
             Method: POST
       LoggingConfig:
         LogGroup: !Ref PlacesSubmitLogGroup
+
+  PlacesSubmitAIAutofillFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Places_SubmitAIAutofill
+      CodeUri: ../../lambda_functions/Places_SubmitAIAutofill/
+      Handler: index.handler
+      Description: Opt-in AI enrichment of an existing place (IAM-auth)
+      Role: !GetAtt PlacesSubmitAIAutofillRole.Arn
+      Timeout: 60
+      Layers:
+        - !Ref PlacesCommonLayer
+        - !Ref GeneratePlaceWithAILayer
+      Environment:
+        Variables:
+          TABLE_PLACES: !Ref PlacesTable
+          TABLE_SUBMISSIONS: !Ref SubmissionsTable
+          CORS_ALLOWED_ORIGIN: !Ref AllowedOrigin
+          GOOGLE_PLACES_API_KEY: !Ref GooglePlacesApiKey
+          ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY: !Ref AnthropicApiKey
+          ANTHROPIC_MODEL_ID: !Ref AnthropicModelId
+          ANTHROPIC_MAX_TOKENS: !Ref AnthropicMaxTokens
+      Events:
+        PostAIAutofill:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PlacesApi
+            Path: /submit/ai_autofill
+            Method: POST
+            Auth:
+              Authorizer: AWS_IAM
+      LoggingConfig:
+        LogGroup: !Ref PlacesSubmitAIAutofillLogGroup
 
   PlacesAlgoliaSyncFunction:
     Type: AWS::Serverless::Function
@@ -300,11 +396,13 @@ Resources:
       Description: Sync Places_Places DynamoDB stream to Algolia
       Role: !GetAtt PlacesAlgoliaSyncRole.Arn
       Timeout: 60
+      Layers:
+        - !Ref PlacesCommonLayer
       Environment:
         Variables:
-          TABLE_PLACES: !Ref PlacesTable
-          ALGOLIA_APP_ID_PARAM: /plungepalz-places-dev/algolia/app_id
-          ALGOLIA_WRITE_KEY_PARAM: /plungepalz-places-dev/algolia/write_api_key
+          ALGOLIA_APP_ID: !Ref AlgoliaAppId
+          ALGOLIA_WRITE_API_KEY: !Ref AlgoliaWriteApiKey
+          ALGOLIA_INDEX_NAME: !Ref AlgoliaIndexName
       Events:
         DynamoDBStream:
           Type: DynamoDB
@@ -312,7 +410,7 @@ Resources:
             Stream: !GetAtt PlacesTable.StreamArn
             StartingPosition: LATEST
             BatchSize: 10
-            MaximumRetryAttempts: 2
+            MaximumRetryAttempts: 3
             BisectBatchOnFunctionError: true
             DestinationConfig:
               OnFailure:
@@ -326,11 +424,15 @@ Resources:
       FunctionName: Places_AdminReview
       CodeUri: ../../lambda_functions/Places_AdminReview/
       Handler: index.handler
-      Description: Admin review - update internal_status
+      Description: Admin review — set internal_status (IAM-auth)
       Role: !GetAtt PlacesAdminReviewRole.Arn
+      Layers:
+        - !Ref PlacesCommonLayer
       Environment:
         Variables:
           TABLE_PLACES: !Ref PlacesTable
+          TABLE_SUBMISSIONS: !Ref SubmissionsTable
+          CORS_ALLOWED_ORIGIN: !Ref AllowedOrigin
       Events:
         PostReview:
           Type: Api
@@ -380,6 +482,17 @@ Resources:
         - Key: env
           Value: dev
 
+  PlacesSubmitAIAutofillLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/Places_SubmitAIAutofill
+      RetentionInDays: 14
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
   PlacesAlgoliaSyncLogGroup:
     Type: AWS::Logs::LogGroup
     Condition: EnableAlgoliaSyncCondition
@@ -404,7 +517,7 @@ Resources:
           Value: dev
 
   # ==============================================================
-  # IAM Roles (one per function, least privilege)
+  # IAM Roles (one per function, least privilege, no RoleName)
   # ==============================================================
 
   PlacesSearchRole:
@@ -419,29 +532,6 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: DynamoDBReadAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:GetItem
-                Resource:
-                  - !GetAtt PlacesTable.Arn
-                  - !Sub "${PlacesTable.Arn}/index/*"
-        - PolicyName: SSMReadAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                Resource:
-                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/app_id"
-                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/search_api_key"
       Tags:
         - Key: project
           Value: plungepalz-places
@@ -461,7 +551,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: DynamoDBReadAccess
+        - PolicyName: DynamoDBGetItem
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -489,27 +579,48 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: DynamoDBWriteAccess
+        - PolicyName: DynamoDBTransactWrite
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
                   - dynamodb:PutItem
-                  - dynamodb:GetItem
-                  - dynamodb:UpdateItem
+                  - dynamodb:ConditionCheckItem
+                  - dynamodb:TransactWriteItems
                 Resource:
-                  - !GetAtt SubmissionsTable.Arn
                   - !GetAtt PlacesTable.Arn
-        - PolicyName: SSMReadAccess
+                  - !GetAtt SubmissionsTable.Arn
+      Tags:
+        - Key: project
+          Value: plungepalz-places
+        - Key: env
+          Value: dev
+
+  PlacesSubmitAIAutofillRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBGetUpdate
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - ssm:GetParameter
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
                 Resource:
-                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/google/*"
+                  - !GetAtt PlacesTable.Arn
+                  - !GetAtt SubmissionsTable.Arn
       Tags:
         - Key: project
           Value: plungepalz-places
@@ -530,7 +641,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: DynamoDBStreamReadAccess
+        - PolicyName: DynamoDBStreamRead
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -542,16 +653,6 @@ Resources:
                   - dynamodb:ListStreams
                 Resource:
                   - !GetAtt PlacesTable.StreamArn
-        - PolicyName: SSMReadAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                Resource:
-                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/app_id"
-                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/plungepalz-places-dev/algolia/write_api_key"
         - PolicyName: SQSDLQAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -580,7 +681,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: DynamoDBWriteAccess
+        - PolicyName: DynamoDBReview
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -602,7 +703,7 @@ Resources:
           Value: dev
 
 # ==============================================================
-# Outputs
+# Outputs (no secrets)
 # ==============================================================
 
 Outputs:
@@ -636,6 +737,10 @@ Outputs:
     Description: Places_Submit Lambda function name
     Value: !Ref PlacesSubmitFunction
 
+  PlacesSubmitAIAutofillFunctionName:
+    Description: Places_SubmitAIAutofill Lambda function name
+    Value: !Ref PlacesSubmitAIAutofillFunction
+
   PlacesAlgoliaSyncFunctionName:
     Condition: EnableAlgoliaSyncCondition
     Description: Places_AlgoliaSync Lambda function name
@@ -645,16 +750,18 @@ Outputs:
     Description: Places_AdminReview Lambda function name
     Value: !Ref PlacesAdminReviewFunction
 
-  LayerArn:
-    Description: Generate Place with AI Lambda Layer ARN
+  PlacesCommonLayerArn:
+    Description: places_common Lambda Layer ARN
+    Value: !Ref PlacesCommonLayer
+
+  GeneratePlaceWithAILayerArn:
+    Description: generate_place_with_ai Lambda Layer ARN
     Value: !Ref GeneratePlaceWithAILayer
-    Export:
-      Name: plungepalz-places-dev-layer-arn
+
+  AlgoliaIndexNameOutput:
+    Description: Algolia index name (not a secret)
+    Value: !Ref AlgoliaIndexName
 
   StackRegion:
     Description: Stack region
     Value: !Ref AWS::Region
-
-  SSMParameterPrefix:
-    Description: SSM Parameter Store prefix for secrets
-    Value: /plungepalz-places-dev
