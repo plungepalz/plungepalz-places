@@ -78,7 +78,9 @@ def test_algolia_sync_insert_upserts(fake_algolia, monkeypatch):
     assert isinstance(obj["lng"], float)
     assert obj["internal_status"] == "in_review"
     assert obj["is_approved"] is False
-    assert obj["created_ts"] == "2026-02-20T12:00:00Z"
+    assert obj["ts_created"] == "2026-02-20T12:00:00Z"
+    assert "created_ts" not in obj
+    assert obj["ts_created_unix"] == 1771588800  # 2026-02-20T12:00:00Z
 
 
 def test_algolia_sync_modify_upserts(fake_algolia, monkeypatch):

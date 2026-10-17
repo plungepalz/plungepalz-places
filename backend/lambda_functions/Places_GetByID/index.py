@@ -8,7 +8,7 @@ import os
 
 import boto3
 
-from places_common import error_response, public_place, success_response
+from places_common import error_response, place_detail, success_response
 
 TABLE_PLACES = os.environ.get("TABLE_PLACES", "Places_Places")
 
@@ -40,4 +40,4 @@ def handler(event, context):
     if item.get("internal_status") == "rejected" or item.get("visibility") == "hidden":
         return error_response(404, "NOT_FOUND", "Place not found")
 
-    return success_response(200, public_place(item))
+    return success_response(200, place_detail(item))

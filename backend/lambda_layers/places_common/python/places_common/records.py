@@ -11,11 +11,27 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from .constants import PLACE_SUMMARY_FIELDS
+from .constants import PLACE_DETAIL_FIELDS, PLACE_SUMMARY_FIELDS
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def ts_to_unix(ts: str | None) -> int | None:
+    """ISO-8601 UTC timestamp → unix seconds for Algolia customRanking."""
+    if not ts or not isinstance(ts, str):
+        return None
+    text = ts.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
 
 
 def new_place_id() -> str:
@@ -88,33 +104,25 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def public_place(item: dict) -> dict:
-    """Full public place record: DATA_SCHEMAS minus internal_* , plus is_approved.
-
-    DynamoDB field names are preserved (e.g. ts_created, not created_ts).
-    """
-    out = {
-        key: to_jsonable(value)
-        for key, value in item.items()
-        if not str(key).startswith("internal_")
-    }
-    out["is_approved"] = is_approved(item)
-    if "lat" in out:
-        lat = _to_float(out["lat"])
-        if lat is not None:
-            out["lat"] = lat
-    if "lng" in out:
-        lng = _to_float(out["lng"])
-        if lng is not None:
-            out["lng"] = lng
-    return out
+def _hours_of_operation(item: dict) -> Any:
+    """Top-level API field. DATA_SCHEMAS stores this under place_type_metadata, not on Places_Places."""
+    top = item.get("hours_of_operation")
+    if top not in (None, ""):
+        return to_jsonable(top)
+    meta = item.get("place_type_metadata")
+    if isinstance(meta, dict):
+        nested = meta.get("hours_of_operation")
+        if nested not in (None, ""):
+            return to_jsonable(nested)
+    return None
 
 
 def place_summary(item: dict) -> dict:
     """Map a DynamoDB or Algolia record to the PlaceSummary contract.
 
-    Mapping: created_ts ← ts_created (schema name is ts_created).
-    lat/lng Decimal → number. is_approved ← (internal_status == "active").
+    ts_created is the schema name (ISO 8601 UTC). Legacy Algolia `created_ts`
+    is accepted as a fallback when reading. lat/lng Decimal → number.
+    is_approved ← (internal_status == "active").
     """
     geoloc = item.get("_geoloc") if isinstance(item.get("_geoloc"), dict) else {}
     lat = _to_float(item.get("lat"))
@@ -124,7 +132,7 @@ def place_summary(item: dict) -> dict:
     if lng is None:
         lng = _to_float(geoloc.get("lng"))
 
-    created = item.get("created_ts") or item.get("ts_created")
+    created = item.get("ts_created") or item.get("created_ts")
     cover = item.get("cover_image")
     if cover == "":
         cover = None
@@ -148,10 +156,42 @@ def place_summary(item: dict) -> dict:
         "lat": lat,
         "lng": lng,
         "is_approved": is_approved(item),
-        "created_ts": created,
+        "ts_created": created,
     }
-    # Drop nothing required by the contract; unknown extras are not included.
     return {key: summary.get(key) for key in PLACE_SUMMARY_FIELDS}
+
+
+def place_detail(item: dict) -> dict:
+    """GET /place/{id}: explicit allowlist (PlaceSummary + extra public fields).
+
+    Anything not listed — including all internal_* and h3/submission keys — is omitted.
+    """
+    summary = place_summary(item)
+    meta = item.get("place_type_metadata")
+    if not isinstance(meta, dict):
+        meta = {}
+    ratings = item.get("external_ratings_ai_generated")
+    if not isinstance(ratings, dict):
+        ratings = {}
+    website = item.get("place_website_url")
+    if website == "":
+        website = None
+    detail = {
+        **summary,
+        "place_website_url": website,
+        "amenities": to_jsonable(item.get("amenities") or []),
+        "tags": to_jsonable(item.get("tags") or []),
+        "place_type_metadata": to_jsonable(meta),
+        "external_ratings_ai_generated": to_jsonable(ratings),
+        "hours_of_operation": _hours_of_operation(item),
+        "ts_last_updated": item.get("ts_last_updated"),
+    }
+    return {key: detail.get(key) for key in PLACE_DETAIL_FIELDS}
+
+
+def public_place(item: dict) -> dict:
+    """Alias for place_detail (allowlisted GET /place/{id} payload)."""
+    return place_detail(item)
 
 
 def generate_place_slug(place_name: str, city: str | None = None) -> str:
@@ -292,10 +332,13 @@ def algolia_object_from_place(place: dict) -> dict:
         "lat": lat,
         "lng": lng,
         "is_approved": is_approved(place),
-        "created_ts": summary.get("created_ts") or place.get("ts_created"),
+        "ts_created": summary.get("ts_created") or place.get("ts_created"),
         "internal_status": place.get("internal_status"),
         "visibility": place.get("visibility") or "public",
     }
+    unix = ts_to_unix(obj.get("ts_created"))
+    if unix is not None:
+        obj["ts_created_unix"] = unix
     if lat is not None and lng is not None:
         obj["_geoloc"] = {"lat": lat, "lng": lng}
     return omit_empty_strings(obj)

@@ -72,7 +72,21 @@ class FakeAlgoliaIndex:
     def search(self, query, opts=None):
         opts = opts or {}
         self.searches.append((query, opts))
-        return dict(self.search_result)
+        result = dict(self.search_result)
+        hits = list(result.get("hits") or [])
+        # Simulate Algolia customRanking desc(ts_created_unix) when no geo is applied.
+        if "insideBoundingBox" not in opts and "aroundLatLng" not in opts:
+            from places_common.records import ts_to_unix
+
+            def _rank(hit):
+                unix = hit.get("ts_created_unix")
+                if unix is None:
+                    unix = ts_to_unix(hit.get("ts_created") or hit.get("created_ts"))
+                return unix or 0
+
+            hits = sorted(hits, key=_rank, reverse=True)
+            result["hits"] = hits
+        return result
 
 
 @pytest.fixture

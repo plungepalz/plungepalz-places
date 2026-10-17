@@ -33,13 +33,17 @@ See [SCHEMA_MAPPING](#schema-mapping-vs-data_schemasmd) for DynamoDB vs API fiel
 | lat | number | No | Geo alternative. Requires `lng`. Range [-90, 90]. |
 | lng | number | No | Geo alternative. Requires `lat`. Range [-180, 180]. |
 | radius_km | number | No | Geo radius in km (default 10). Ignored when `bbox` is present. |
-| place_type | string | No | Comma-separated subset of `business,nature,temporary_pop_up,gym_amenity` |
-| activity_types | string | No | Comma-separated subset of `cold_plunge,sauna` (match any) |
+| place_type | string | No | **Comma-separated list** — subset of `business,nature,temporary_pop_up,gym_amenity`. Example: `business,nature`. Match any listed type. |
+| activity_types | string | No | **Comma-separated list** — subset of `cold_plunge,sauna` (match any). Example: `cold_plunge,sauna`. |
 | approved_only | true\|false | No | Default `false`. When `true`, only `internal_status=active` |
 | limit | integer | No | Default 100, min 1, max 500 |
 | page | integer | No | 0-based, default 0 |
 
-Always excludes `internal_status=rejected` and `visibility=hidden`. Never returns `internal_status` or `internal_comments`.
+If **neither `bbox` nor `lat`/`lng`** is provided, Search returns the **global catalog**, paginated, **newest first** (`ts_created` descending via Algolia `customRanking: desc(ts_created_unix)`). Text (`q`) and geo (`bbox` / aroundLatLng) still rank by relevance / distance first; recency is the tiebreaker. See [ALGOLIA.md](ALGOLIA.md).
+
+Always excludes `internal_status=rejected` and `visibility=hidden`. Never returns `internal_status`, `internal_comments`, or `ts_created_unix`.
+
+Each element of `places` is a **PlaceSummary** (`ts_created` is ISO 8601 UTC, same name as DynamoDB).
 
 ### Success Response (200)
 
@@ -47,7 +51,7 @@ Always excludes `internal_status=rejected` and `visibility=hidden`. Never return
 {
   "places": [
     {
-      "place_id": "uuid",
+      "place_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "place_slug": "plunge-lab-salt-lake-city",
       "place_name": "Plunge Lab",
       "place_type": "business",
@@ -56,12 +60,12 @@ Always excludes `internal_status=rejected` and `visibility=hidden`. Never return
       "state_province": "UT",
       "country": "USA",
       "activity_types": ["cold_plunge", "sauna"],
-      "description": "string",
-      "cover_image": "url or null",
+      "description": "A dedicated cold plunge and sauna studio in downtown SLC.",
+      "cover_image": null,
       "lat": 40.7608,
       "lng": -111.891,
       "is_approved": false,
-      "created_ts": "2026-02-20T12:00:00Z"
+      "ts_created": "2026-02-20T12:00:00Z"
     }
   ],
   "total": 1,
@@ -71,7 +75,7 @@ Always excludes `internal_status=rejected` and `visibility=hidden`. Never return
 }
 ```
 
-`created_ts` is mapped from DynamoDB/Algolia `ts_created`. `lat`/`lng` are JSON numbers (storage is Decimal).
+`lat`/`lng` are JSON numbers (storage is Decimal).
 
 ### Error Responses
 
@@ -96,7 +100,47 @@ Always excludes `internal_status=rejected` and `visibility=hidden`. Never return
 
 ### Success Response (200)
 
-The full public place record: [DATA_SCHEMAS.md](DATA_SCHEMAS.md) minus every `internal_*` attribute, **plus** `is_approved`. Storage names are preserved (`ts_created`, not `created_ts`).
+A **flat** object: every PlaceSummary field (including `is_approved` and `ts_created`) plus the extra public fields below. Built from an **explicit allowlist** — not “strip `internal_*` and return the rest”. Anything not listed is omitted (`h3_*`, `submission_id`, all `internal_*`, etc.).
+
+Allowlist: `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types`, `description`, `cover_image`, `lat`, `lng`, `is_approved`, `ts_created`, `place_website_url`, `amenities`, `tags`, `place_type_metadata`, `external_ratings_ai_generated`, `hours_of_operation`, `ts_last_updated`.
+
+`hours_of_operation` is **not** a top-level Places_Places attribute in [DATA_SCHEMAS.md](DATA_SCHEMAS.md) (it lives under `place_type_metadata` for `business` / `gym_amenity`). The API still exposes it as a top-level field: copied from the record or from `place_type_metadata.hours_of_operation` when present, otherwise **`null`**.
+
+```json
+{
+  "place_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "place_slug": "plunge-lab-salt-lake-city",
+  "place_name": "Plunge Lab",
+  "place_type": "business",
+  "address": "457 E 300 S, Salt Lake City, UT 84111",
+  "city": "Salt Lake City",
+  "state_province": "UT",
+  "country": "USA",
+  "activity_types": ["cold_plunge", "sauna"],
+  "description": "A dedicated cold plunge and sauna studio in downtown SLC.",
+  "cover_image": null,
+  "lat": 40.7608,
+  "lng": -111.891,
+  "is_approved": false,
+  "ts_created": "2026-02-20T12:00:00Z",
+  "place_website_url": "https://plungelab.com",
+  "amenities": ["wifi", "lockers", "towels"],
+  "tags": ["downtown", "studio"],
+  "place_type_metadata": {
+    "hours_of_operation": "Mon-Sat 6am-9pm",
+    "experience_type": "Hybrid",
+    "access_type": "pay"
+  },
+  "external_ratings_ai_generated": {
+    "google": {
+      "count_string": "94",
+      "rating_score": 4.7
+    }
+  },
+  "hours_of_operation": "Mon-Sat 6am-9pm",
+  "ts_last_updated": "2026-02-20T12:00:00Z"
+}
+```
 
 ### Error Responses
 
@@ -514,9 +558,10 @@ Storage (DynamoDB) keeps DATA_SCHEMAS.md names. The response layer maps:
 
 | API / client | DynamoDB | Notes |
 |--------------|----------|-------|
-| `created_ts` (PlaceSummary) | `ts_created` | Mapped in Search / Algolia objects only. GetByID returns `ts_created`. |
+| `ts_created` | `ts_created` | Same name in PlaceSummary, GetByID, and Algolia. Ranking uses extra numeric `ts_created_unix` (Algolia only). |
 | `lat`, `lng` JSON number | `Number` (Decimal) | Converted for JSON and Algolia `_geoloc` |
 | `is_approved` | *(derived)* | `internal_status == "active"` — not stored |
+| `hours_of_operation` (GetByID top-level) | `place_type_metadata.hours_of_operation` | Not a top-level Places_Places attribute. Copied up when present; otherwise `null`. |
 | `internal_status` | `internal_status` | `in_review` \| `active` \| `rejected`. Filter-only in Algolia; never returned by Search or GetByID |
 | POST /submit `lat`/`lng` | `lat`/`lng` | Older API_REFERENCE used `latitude`/`longitude` — those names are not accepted in MVP |
 | `ai_autofill_ts` | *(MVP extension)* | Per-place spend/idempotency guard; not yet in DATA_SCHEMAS.md |
@@ -525,4 +570,5 @@ Conflicts flagged, not silently renamed:
 
 - Schema samples still show empty strings (`claimed_ts: ""`, `internal_comments: ""`). MVP **omits** empty strings on write.
 - Schema `Places_Submissions` is described as existing *before* a place is created. MVP writes both records in one transaction (`place_id_generated` set immediately, `verified` remains false).
-- PlaceSummary no longer includes `external_ratings_ai_generated` (GetByID still can, as a public schema field).
+- PlaceSummary does not include `external_ratings_ai_generated`; GetByID does (allowlisted).
+- GET /place/{id} is **not** the full public schema document — only the allowlist above.

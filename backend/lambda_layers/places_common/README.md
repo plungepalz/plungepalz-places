@@ -8,7 +8,7 @@ Shared helper used by every HTTP Lambda in this API. Chosen as a **Lambda layer*
 - Error envelope `{"error":{"code","message","details"?}}`
 - Decimal → JSON
 - Query/body validation (search, submit, admin review)
-- Public-record sanitizing (`internal_*` stripped) and PlaceSummary mapping (`ts_created` → `created_ts`)
+- PlaceSummary / GET /place/{id} allowlists (`ts_created` ISO 8601 UTC; GetByID is an explicit field list, not strip-internal_*)
 - H3 / slug helpers and DynamoDB TypeSerializer helpers (no table I/O)
 
 ## Attach to

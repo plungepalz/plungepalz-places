@@ -32,7 +32,7 @@ def _hit(**overrides):
         "lat": 40.7608,
         "lng": -111.891,
         "is_approved": False,
-        "created_ts": "2026-02-20T12:00:00Z",
+        "ts_created": "2026-02-20T12:00:00Z",
         "internal_status": "in_review",
         "visibility": "public",
         "internal_comments": "secret",
@@ -55,7 +55,8 @@ def test_search_default_ok(fake_algolia, monkeypatch):
     place = body["places"][0]
     assert place["place_id"] == "p1"
     assert place["is_approved"] is False
-    assert place["created_ts"] == "2026-02-20T12:00:00Z"
+    assert place["ts_created"] == "2026-02-20T12:00:00Z"
+    assert "created_ts" not in place
     assert isinstance(place["lat"], float)
     assert "internal_status" not in place
     assert "internal_comments" not in place
@@ -223,3 +224,53 @@ def test_search_activity_and_place_type_filters(fake_algolia, monkeypatch):
     assert "place_type:business" in filters
     assert "place_type:nature" in filters
     assert "activity_types:sauna" in filters
+
+
+def test_search_no_geo_is_global_catalog_newest_first(fake_algolia, monkeypatch):
+    """Neither bbox nor lat/lng: paginated global catalog, newest ts_created first."""
+    fake_algolia.search_result = {
+        "hits": [
+            _hit(
+                place_id="old",
+                objectID="old",
+                ts_created="2026-01-01T00:00:00Z",
+                ts_created_unix=1767225600,
+            ),
+            _hit(
+                place_id="new",
+                objectID="new",
+                ts_created="2026-03-01T00:00:00Z",
+                ts_created_unix=1772323200,
+            ),
+        ],
+        "nbHits": 2,
+    }
+    mod = _mod(fake_algolia, monkeypatch)
+    resp = mod.handler(api_event(query={"page": "0", "limit": "100"}), None)
+    assert resp["statusCode"] == 200
+    body = parse_body(resp)
+    assert [p["place_id"] for p in body["places"]] == ["new", "old"]
+    assert body["places"][0]["ts_created"] == "2026-03-01T00:00:00Z"
+    q, opts = fake_algolia.searches[0]
+    assert q == ""
+    assert "insideBoundingBox" not in opts
+    assert "aroundLatLng" not in opts
+    assert "aroundRadius" not in opts
+
+
+def test_algolia_settings_custom_ranking_newest_first():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "algolia_index_settings.py"
+    spec = importlib.util.spec_from_file_location("algolia_index_settings", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.SETTINGS["customRanking"] == ["desc(ts_created_unix)"]
+    ranking = mod.SETTINGS["ranking"]
+    assert ranking.index("geo") < ranking.index("custom")
+    assert ranking.index("typo") < ranking.index("custom")
+    assert ranking.index("words") < ranking.index("custom")
+    assert "ts_created" in mod.SETTINGS["attributesToRetrieve"]
+    assert "created_ts" not in mod.SETTINGS["attributesToRetrieve"]
+    assert "ts_created_unix" not in mod.SETTINGS["attributesToRetrieve"]

@@ -1,9 +1,8 @@
-"""Places_GetByID 200 / 404 cases."""
+"""Places_GetByID 200 / 404 cases — allowlisted flat payload."""
 
 from __future__ import annotations
 
-from decimal import Decimal
-
+from places_common.constants import PLACE_DETAIL_FIELDS
 from tests.conftest import SAMPLE_PLACE, api_event, load_handler, parse_body
 
 
@@ -12,19 +11,54 @@ def _put(dynamodb_tables, item):
 
 
 def test_get_by_id_200_public_in_review(dynamodb_tables):
-    _put(dynamodb_tables, dict(SAMPLE_PLACE))
+    extra = dict(SAMPLE_PLACE)
+    extra["h3_r7"] = "8729abc"
+    extra["submission_id"] = "sub-secret"
+    extra["internal_verified"] = False
+    _put(dynamodb_tables, extra)
     mod = load_handler("Places_GetByID")
     resp = mod.handler(api_event(path_parameters={"place_id": SAMPLE_PLACE["place_id"]}), None)
     assert resp["statusCode"] == 200
     body = parse_body(resp)
+    assert set(body.keys()) == set(PLACE_DETAIL_FIELDS)
     assert body["place_id"] == SAMPLE_PLACE["place_id"]
     assert body["is_approved"] is False
     assert body["ts_created"] == SAMPLE_PLACE["ts_created"]
-    assert "created_ts" not in body  # GetByID keeps schema names
+    assert body["ts_last_updated"] == SAMPLE_PLACE["ts_last_updated"]
+    assert "created_ts" not in body
     assert "internal_status" not in body
     assert "internal_comments" not in body
+    assert "h3_r7" not in body
+    assert "submission_id" not in body
     assert isinstance(body["lat"], float)
     assert isinstance(body["lng"], float)
+    assert body["amenities"] == []
+    assert body["tags"] == []
+    assert body["place_type_metadata"] == {}
+    assert body["external_ratings_ai_generated"] == {}
+    assert body["hours_of_operation"] is None
+    assert body["place_website_url"] is None
+
+
+def test_get_by_id_hours_from_metadata(dynamodb_tables):
+    item = dict(SAMPLE_PLACE)
+    item["place_type_metadata"] = {
+        "hours_of_operation": "Mon-Sat 6am-9pm",
+        "access_type": "pay",
+    }
+    item["amenities"] = ["lockers"]
+    item["tags"] = ["downtown"]
+    item["place_website_url"] = "https://plungelab.com"
+    _put(dynamodb_tables, item)
+    mod = load_handler("Places_GetByID")
+    body = parse_body(
+        mod.handler(api_event(path_parameters={"place_id": item["place_id"]}), None)
+    )
+    assert body["hours_of_operation"] == "Mon-Sat 6am-9pm"
+    assert body["amenities"] == ["lockers"]
+    assert body["tags"] == ["downtown"]
+    assert body["place_website_url"] == "https://plungelab.com"
+    assert body["place_type_metadata"]["access_type"] == "pay"
 
 
 def test_get_by_id_200_active_is_approved(dynamodb_tables):

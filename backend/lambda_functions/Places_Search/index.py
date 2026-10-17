@@ -60,7 +60,6 @@ def _search_options(params: dict) -> dict:
             "lat",
             "lng",
             "is_approved",
-            "created_ts",
             "ts_created",
             "_geoloc",
         ],

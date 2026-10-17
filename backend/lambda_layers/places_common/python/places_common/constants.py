@@ -11,7 +11,7 @@ MAX_SEARCH_LIMIT = 500
 MIN_SEARCH_LIMIT = 1
 DEFAULT_RADIUS_KM = 10.0
 
-# PlaceSummary response fields (Search). created_ts is mapped from ts_created.
+# PlaceSummary response fields (Search and the prefix of GET /place/{id}).
 PLACE_SUMMARY_FIELDS = (
     "place_id",
     "place_slug",
@@ -27,7 +27,18 @@ PLACE_SUMMARY_FIELDS = (
     "lat",
     "lng",
     "is_approved",
-    "created_ts",
+    "ts_created",
+)
+
+# GET /place/{id} is this allowlist only — not "all public schema fields".
+PLACE_DETAIL_FIELDS = PLACE_SUMMARY_FIELDS + (
+    "place_website_url",
+    "amenities",
+    "tags",
+    "place_type_metadata",
+    "external_ratings_ai_generated",
+    "hours_of_operation",
+    "ts_last_updated",
 )
 
 # Stored on the Algolia object in addition to PlaceSummary (filters only).

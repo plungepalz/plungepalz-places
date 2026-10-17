@@ -51,13 +51,16 @@ SETTINGS = {
         "lat",
         "lng",
         "is_approved",
-        "created_ts",
+        "ts_created",
         "_geoloc",
     ],
-    "customRanking": ["desc(is_approved)"],
+    # Newest-first for the no-geo catalog (empty query: all relevance
+    # criteria tie, so customRanking wins). Geo and text still rank first
+    # because `geo` / typo / words sit above `custom` in ranking.
+    "customRanking": ["desc(ts_created_unix)"],
     "ranking": [
-        "geo",
         "typo",
+        "geo",
         "words",
         "filters",
         "proximity",

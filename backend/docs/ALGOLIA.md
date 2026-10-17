@@ -11,14 +11,28 @@ Index name (dev): `places_dev` (`ALGOLIA_INDEX_NAME`).
 |-----------|------|
 | `objectID` | `place_id` |
 | `_geoloc` | `{lat, lng}` for geo / bbox |
-| PlaceSummary fields | `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types`, `description`, `cover_image`, `lat`, `lng`, `is_approved`, `created_ts` |
+| PlaceSummary fields | `place_id`, `place_slug`, `place_name`, `place_type`, `address`, `city`, `state_province`, `country`, `activity_types`, `description`, `cover_image`, `lat`, `lng`, `is_approved`, `ts_created` |
+| `ts_created_unix` | numeric unix seconds — **ranking only**, not returned by Search |
 | `internal_status` | **filter only** — never returned by Search |
 | `visibility` | filter only |
 | `place_type`, `activity_types` | filters |
 
 Deletes when `internal_status=rejected`, `visibility=hidden`, or stream `REMOVE`.
 
-## Required settings
+## Ranking (newest-first catalog, sensible geo/text)
+
+No sort replica. One index:
+
+- `customRanking: ["desc(ts_created_unix)"]`
+- Default Algolia `ranking`: `typo, geo, words, filters, proximity, attribute, exact, custom`
+
+Behavior:
+
+| Query | What ranks |
+|-------|------------|
+| Neither `bbox` nor `lat`/`lng` (global catalog) | Relevance criteria all tie → **newest first** (`ts_created` desc) |
+| Text `q` | Typo/words/etc. first; recency only as a tiebreaker |
+| `bbox` / aroundLatLng | `geo` (distance / viewport) first; recency as a tiebreaker |
 
 Apply with:
 
@@ -27,7 +41,7 @@ cd backend
 python scripts/algolia_index_settings.py
 ```
 
-Or set manually in the Algolia dashboard:
+Or set manually:
 
 ```json
 {
@@ -47,11 +61,15 @@ Or set manually in the Algolia dashboard:
     "filterOnly(activity_types)",
     "filterOnly(is_approved)"
   ],
-  "unretrievableAttributes": ["internal_status", "internal_comments"]
+  "unretrievableAttributes": ["internal_status", "internal_comments"],
+  "customRanking": ["desc(ts_created_unix)"],
+  "ranking": ["typo", "geo", "words", "filters", "proximity", "attribute", "exact", "custom"]
 }
 ```
 
 Search always adds `NOT internal_status:rejected AND NOT visibility:hidden`.
 `approved_only=true` adds `internal_status:active`.
+
+`place_type` and `activity_types` query params are **comma-separated lists**.
 
 `bbox` uses `insideBoundingBox` (Algolia order: minLat,minLng,maxLat,maxLng — converted from our minLng,minLat,maxLng,maxLat). Geo alternative uses `aroundLatLng` + `aroundRadius` (meters).

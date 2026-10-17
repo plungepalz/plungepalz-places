@@ -9,7 +9,7 @@ Provides:
 - Canonical error shape {"error": {"code", "message", "details"?}}
 - Decimal-to-JSON encoding
 - Query/body validation helpers
-- Public-record sanitizing (strip internal_*) and PlaceSummary mapping
+- PlaceSummary mapping and GET /place/{id} allowlist (ts_created ISO 8601 UTC)
 """
 
 from .http import (  # noqa: F401
@@ -30,6 +30,7 @@ from .records import (  # noqa: F401
     new_submission_id,
     omit_empty_strings,
     parse_address_parts,
+    place_detail,
     place_summary,
     prepare_item,
     public_place,
@@ -60,6 +61,7 @@ __all__ = [
     "parse_address_parts",
     "parse_json_body",
     "parse_search_params",
+    "place_detail",
     "place_summary",
     "prepare_item",
     "public_place",
