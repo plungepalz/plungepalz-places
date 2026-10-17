@@ -72,4 +72,8 @@ Search always adds `NOT internal_status:rejected AND NOT visibility:hidden`.
 
 `place_type` and `activity_types` query params are **comma-separated lists**.
 
-`bbox` uses `insideBoundingBox` (Algolia order: minLat,minLng,maxLat,maxLng — converted from our minLng,minLat,maxLng,maxLat). Geo alternative uses `aroundLatLng` + `aroundRadius` (meters).
+`bbox` uses `insideBoundingBox` (Algolia order: minLat,minLng,maxLat,maxLng — converted from our minLng,minLat,maxLng,maxLat). Out-of-range lat/lng on the bbox are **clamped** (±90 / ±180). A viewport that crosses the antimeridian (`minLng > maxLng`) is sent as **two** boxes (Algolia accepts a list). Geo alternative uses `aroundLatLng` + `aroundRadius` (meters).
+
+## Pagination cap
+
+Algolia only retrieves the first `paginationLimitedTo` hits (index default **1000**). `Places_Search` computes `has_more` against `min(nbHits, paginationLimitedTo or 1000)` and never requests a `page`/`hitsPerPage` window past that cap. Clients must stop loading when `has_more` is false; `total` may still report the raw `nbHits` above the cap.

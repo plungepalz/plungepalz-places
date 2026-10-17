@@ -55,6 +55,12 @@ def _ai_record():
     }
 
 
+def test_ai_autofill_default_model_is_current_haiku():
+    mod = load_handler("Places_SubmitAIAutofill")
+    assert mod.ANTHROPIC_MODEL == "claude-haiku-4-5-20251001"
+    assert mod.ANTHROPIC_MAX_TOKENS == 1024
+
+
 def test_ai_autofill_without_verified_updates_existing(dynamodb_tables, monkeypatch):
     _seed(dynamodb_tables, verified=False, description="Keep me")
     monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
@@ -96,9 +102,115 @@ def test_ai_autofill_idempotent_409(dynamodb_tables, monkeypatch):
     place = _seed(dynamodb_tables)
     place["ai_autofill_ts"] = "2026-01-01T00:00:00Z"
     dynamodb_tables.Table("Places_Places").put_item(Item=place)
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "ak")
     mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "ak")
     mocked = MagicMock()
     monkeypatch.setattr(mod, "generate_place_record", mocked)
     resp = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
     assert resp["statusCode"] == 409
     mocked.assert_not_called()
+
+
+def test_ai_autofill_sets_complete_status(dynamodb_tables, monkeypatch):
+    _seed(dynamodb_tables, description="Keep me")
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "ak")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "ak")
+    monkeypatch.setattr(mod, "generate_place_record", MagicMock(return_value=_ai_record()))
+
+    resp = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
+    assert resp["statusCode"] == 200
+    stored = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": "place-ai-1"})["Item"]
+    assert stored["ai_autofill_status"] == "complete"
+    assert stored.get("ai_autofill_ts")
+
+
+def test_ai_autofill_second_claim_makes_no_outbound_calls(dynamodb_tables, monkeypatch):
+    _seed(dynamodb_tables)
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "ak")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "ak")
+    mocked = MagicMock(return_value=_ai_record())
+    monkeypatch.setattr(mod, "generate_place_record", mocked)
+
+    first = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
+    assert first["statusCode"] == 200
+    mocked.reset_mock()
+
+    second = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
+    assert second["statusCode"] == 409
+    mocked.assert_not_called()
+
+
+def test_ai_autofill_pending_claim_makes_no_outbound_calls(dynamodb_tables, monkeypatch):
+    place = _seed(dynamodb_tables)
+    place["ai_autofill_status"] = "pending"
+    dynamodb_tables.Table("Places_Places").put_item(Item=place)
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "ak")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "ak")
+    mocked = MagicMock()
+    monkeypatch.setattr(mod, "generate_place_record", mocked)
+
+    resp = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
+    assert resp["statusCode"] == 409
+    mocked.assert_not_called()
+
+
+def test_ai_autofill_failure_sets_failed_and_hides_provider_errors(
+    dynamodb_tables, monkeypatch
+):
+    _seed(dynamodb_tables)
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "ak")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "ak")
+    leaked = "Google Places searchText error: 403 REQUEST_DENIED secret-key-xyz"
+    monkeypatch.setattr(
+        mod,
+        "generate_place_record",
+        MagicMock(return_value={"success": False, "record": None, "errors": [leaked]}),
+    )
+
+    resp = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
+    assert resp["statusCode"] == 500
+    body = parse_body(resp)
+    dumped = resp["body"]
+    assert leaked not in dumped
+    assert "secret-key-xyz" not in dumped
+    assert "REQUEST_DENIED" not in dumped
+    assert body["error"]["message"] == "AI autofill failed"
+    assert "details" not in body["error"] or leaked not in str(body["error"].get("details"))
+
+    stored = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": "place-ai-1"})["Item"]
+    assert stored["ai_autofill_status"] == "failed"
+    assert "ai_autofill_ts" not in stored
+
+
+def test_ai_autofill_failed_can_retry(dynamodb_tables, monkeypatch):
+    place = _seed(dynamodb_tables)
+    place["ai_autofill_status"] = "failed"
+    dynamodb_tables.Table("Places_Places").put_item(Item=place)
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setenv("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "ak")
+    mod = load_handler("Places_SubmitAIAutofill")
+    monkeypatch.setattr(mod, "GOOGLE_PLACES_API_KEY", "gk")
+    monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "ak")
+    mocked = MagicMock(return_value=_ai_record())
+    monkeypatch.setattr(mod, "generate_place_record", mocked)
+
+    resp = mod.handler(api_event(body={"submission_id": "sub-ai-1"}), None)
+    assert resp["statusCode"] == 200
+    mocked.assert_called_once()
+    stored = dynamodb_tables.Table("Places_Places").get_item(Key={"place_id": "place-ai-1"})["Item"]
+    assert stored["ai_autofill_status"] == "complete"

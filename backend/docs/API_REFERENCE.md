@@ -8,7 +8,7 @@ All endpoints return JSON. Errors are always:
 
 `details` is present on 400s (field-level). CORS headers are included on **every** response, including errors (`CORS_ALLOWED_ORIGIN`, default `*`).
 
-**Environment (this MVP):** region `us-east-1`, stage `dev`. Public endpoints have no auth. Admin endpoints use AWS_IAM.
+**Environment (this MVP):** region `us-east-1`, stage `dev`. Public endpoints have no auth. Admin endpoints (including AI autofill) use AWS_IAM.
 
 Base URL format: `https://{api-id}.execute-api.us-east-1.amazonaws.com/dev`
 
@@ -29,7 +29,7 @@ See [SCHEMA_MAPPING](#schema-mapping-vs-data_schemasmd) for DynamoDB vs API fiel
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | q | string | No | Text query |
-| bbox | string | No | Map viewport `minLng,minLat,maxLng,maxLat` (**preferred** geo). Wins over lat/lng/radius when present. |
+| bbox | string | No | Map viewport `minLng,minLat,maxLng,maxLat` (**preferred** geo). Wins over lat/lng/radius when present. Lat is clamped to ±90 and lng to ±180. A box that crosses the antimeridian (`minLng > maxLng` after clamp) is split into two Algolia `insideBoundingBox` boxes. |
 | lat | number | No | Geo alternative. Requires `lng`. Range [-90, 90]. |
 | lng | number | No | Geo alternative. Requires `lat`. Range [-180, 180]. |
 | radius_km | number | No | Geo radius in km (default 10). Ignored when `bbox` is present. |
@@ -42,6 +42,8 @@ See [SCHEMA_MAPPING](#schema-mapping-vs-data_schemasmd) for DynamoDB vs API fiel
 If **neither `bbox` nor `lat`/`lng`** is provided, Search returns the **global catalog**, paginated, **newest first** (`ts_created` descending via Algolia `customRanking: desc(ts_created_unix)`). Text (`q`) and geo (`bbox` / aroundLatLng) still rank by relevance / distance first; recency is the tiebreaker. See [ALGOLIA.md](ALGOLIA.md).
 
 Always excludes `internal_status=rejected` and `visibility=hidden`. Never returns `internal_status`, `internal_comments`, or `ts_created_unix`.
+
+Algolia only paginates the first `paginationLimitedTo` hits (default **1000**). `has_more` is `(page+1)*limit < min(nbHits, paginationLimitedTo or 1000)`. Search never requests a page past that cap; `Load more` must stop when `has_more` is false even if `total` (raw `nbHits`) is larger.
 
 Each element of `places` is a **PlaceSummary** (`ts_created` is ISO 8601 UTC, same name as DynamoDB).
 
@@ -81,7 +83,7 @@ Each element of `places` is a **PlaceSummary** (`ts_created` is ISO 8601 UTC, sa
 
 | Code | Meaning |
 |------|---------|
-| 400 | Any bad param: bad bbox, out-of-range lat/lng, unknown enum, bad limit/page, partial lat/lng |
+| 400 | Malformed/non-numeric bbox, out-of-range point `lat`/`lng`, unknown enum, bad limit/page, partial lat/lng. Out-of-range **bbox** values are clamped, not rejected. |
 | 500 | Internal error |
 
 ---
@@ -177,12 +179,12 @@ MVP: **no verification codes** and **no AI autofill** on this path. Creates an `
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| place_name | yes | string |
+| place_name | yes | string, max 200 characters |
 | place_type | yes | `business` \| `nature` \| `temporary_pop_up` \| `gym_amenity` |
 | activity_types | yes | non-empty subset of `cold_plunge`, `sauna` |
 | lat, lng | yes | numbers in range |
-| address | yes unless `place_type` is `nature` | |
-| description | no | |
+| address | yes unless `place_type` is `nature` | string, max 500 characters |
+| description | no | string, max 2000 characters |
 | email | no | basic format check if present |
 
 Empty strings are never written. H3 `h3_r7` / `h3_r5` / `h3_r4` are set when the `h3` lib is available and **omitted** when it is not.
@@ -218,15 +220,15 @@ Empty strings are never written. H3 `h3_r7` / `h3_r5` / `h3_r4` are set when the
 
 ## POST /submit/ai_autofill
 
-**Auth:** NONE  
+**Auth:** AWS_IAM (admin-triggered; not public)  
 **Lambda:** Places_SubmitAIAutofill  
 **Tables:** Places_Submissions, Places_Places
 
-**Opt-in**, off the submit path. Enriches an **existing** place via `UpdateItem`. No `verified` gate.
+**Opt-in**, off the submit path, **admin-triggered only**. Enriches an **existing** place via `UpdateItem`. No `verified` gate. Not callable by the public client.
 
 Touches only AI-generated fields: `description` (only if currently empty), `place_type_metadata`, `amenities`, `tags`, `external_ratings_ai_generated`, `google_places_api_data`. User-submitted fields are preserved.
 
-Spend: `ANTHROPIC_MODEL_ID` (default cheap Haiku `claude-3-5-haiku-latest`), `ANTHROPIC_MAX_TOKENS` (default 1024, cap 2048), per-place `ai_autofill_ts` idempotency guard (409 if already enriched).
+Spend: `ANTHROPIC_MODEL` (default current Haiku `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` is also accepted), `ANTHROPIC_MAX_TOKENS` (default 1024, cap 2048). Before any Google or Anthropic call the handler claims the job with a conditional `SET ai_autofill_status = pending` (allowed when the attribute is missing or not `pending`/`complete`, so `failed` can retry). ConditionalCheckFailed → **409** and no outbound calls. Success sets `ai_autofill_status=complete` and `ai_autofill_ts`. Failure sets `ai_autofill_status=failed`. Provider error strings are logged server-side and never returned.
 
 ### Request Body
 
@@ -264,9 +266,10 @@ Provide `submission_id` and/or `place_id`. `submission_id` loads `place_id_gener
 | Code | Meaning |
 |------|---------|
 | 400 | Missing ids / missing location |
+| 401 | IAM auth failed (API Gateway) |
 | 404 | Submission or place not found |
-| 409 | Already AI-enriched (`ai_autofill_ts` set) |
-| 500 | AI autofill failed |
+| 409 | Already claimed or completed (`ai_autofill_status` is `pending` or `complete`) |
+| 500 | AI autofill failed (generic message; provider errors are not returned) |
 
 ---
 
@@ -561,14 +564,15 @@ Storage (DynamoDB) keeps DATA_SCHEMAS.md names. The response layer maps:
 | `ts_created` | `ts_created` | Same name in PlaceSummary, GetByID, and Algolia. Ranking uses extra numeric `ts_created_unix` (Algolia only). |
 | `lat`, `lng` JSON number | `Number` (Decimal) | Converted for JSON and Algolia `_geoloc` |
 | `is_approved` | *(derived)* | `internal_status == "active"` — not stored |
-| `hours_of_operation` (GetByID top-level) | `place_type_metadata.hours_of_operation` | Not a top-level Places_Places attribute. Copied up when present; otherwise `null`. |
+| `hours_of_operation` (GetByID top-level) | `place_type_metadata.hours_of_operation` | Not a top-level Places_Places attribute. Lifted from `place_type_metadata` when present; otherwise `null`. |
 | `internal_status` | `internal_status` | `in_review` \| `active` \| `rejected`. Filter-only in Algolia; never returned by Search or GetByID |
 | POST /submit `lat`/`lng` | `lat`/`lng` | Older API_REFERENCE used `latitude`/`longitude` — those names are not accepted in MVP |
-| `ai_autofill_ts` | *(MVP extension)* | Per-place spend/idempotency guard; not yet in DATA_SCHEMAS.md |
+| `ai_autofill_ts` | `ai_autofill_ts` | Set when autofill completes. Omitted until then. |
+| `ai_autofill_status` | `ai_autofill_status` | `pending` \| `complete` \| `failed`. Claim guard before any paid outbound call. |
 
 Conflicts flagged, not silently renamed:
 
-- Schema samples still show empty strings (`claimed_ts: ""`, `internal_comments: ""`). MVP **omits** empty strings on write.
+- Schema samples omit empty strings (or use `null` where a field is explicitly absent). MVP **omits** empty strings on write.
 - Schema `Places_Submissions` is described as existing *before* a place is created. MVP writes both records in one transaction (`place_id_generated` set immediately, `verified` remains false).
 - PlaceSummary does not include `external_ratings_ai_generated`; GetByID does (allowlisted).
 - GET /place/{id} is **not** the full public schema document — only the allowlist above.

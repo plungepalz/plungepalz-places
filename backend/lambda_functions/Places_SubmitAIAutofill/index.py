@@ -4,14 +4,18 @@ PlungePalz Places API — Places_SubmitAIAutofill
 Opt-in enrichment of an EXISTING place (created by Places_Submit).
 Not on the submit path. No verification-code gate.
 
+AWS_IAM only (admin-triggered). Not a public route.
+
 Touches only AI-generated fields via UpdateItem:
   description (only if currently empty), place_type_metadata, amenities, tags,
   external_ratings_ai_generated, google_places_api_data.
 
-Spend controls: cheap Haiku default, ANTHROPIC_MAX_TOKENS, per-place
-ai_autofill_ts idempotency guard (ConditionalCheckFailed → 409).
+Spend controls: cheap Haiku default, ANTHROPIC_MAX_TOKENS, and a conditional
+claim on ai_autofill_status before any Google/Anthropic call
+(ConditionalCheckFailed → 409).
 """
 
+import logging
 import os
 from decimal import Decimal
 
@@ -27,17 +31,33 @@ from places_common import (
     success_response,
     utc_now,
 )
+from places_common.constants import (
+    AI_AUTOFILL_STATUS_COMPLETE,
+    AI_AUTOFILL_STATUS_FAILED,
+    AI_AUTOFILL_STATUS_PENDING,
+)
+
+logger = logging.getLogger(__name__)
 
 TABLE_SUBMISSIONS = os.environ.get("TABLE_SUBMISSIONS", "Places_Submissions")
 TABLE_PLACES = os.environ.get("TABLE_PLACES", "Places_Places")
 GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "")
-ANTHROPIC_MODEL_ID = os.environ.get("ANTHROPIC_MODEL_ID", "claude-3-5-haiku-latest")
+# ANTHROPIC_MODEL is the contract name; ANTHROPIC_MODEL_ID is accepted as a fallback.
+ANTHROPIC_MODEL = (
+    os.environ.get("ANTHROPIC_MODEL")
+    or os.environ.get("ANTHROPIC_MODEL_ID")
+    or "claude-haiku-4-5-20251001"
+)
 try:
     ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "1024"))
 except ValueError:
     ANTHROPIC_MAX_TOKENS = 1024
 ANTHROPIC_MAX_TOKENS = max(1, min(ANTHROPIC_MAX_TOKENS, 2048))
+
+# Keep the old name as an alias so tests/scripts that patch ANTHROPIC_MODEL_ID still work.
+ANTHROPIC_MODEL_ID = ANTHROPIC_MODEL
+
 
 def _dynamodb():
     return boto3.resource("dynamodb")
@@ -51,6 +71,51 @@ def _to_dynamo(obj):
     if isinstance(obj, float):
         return Decimal(str(obj))
     return obj
+
+
+def _generic_autofill_error():
+    return error_response(500, "INTERNAL_ERROR", "AI autofill failed")
+
+
+def _claim_autofill(table_places, place_id: str):
+    """Claim the job before any paid outbound call. failed can retry."""
+    try:
+        table_places.update_item(
+            Key={"place_id": place_id},
+            UpdateExpression="SET ai_autofill_status = :pending",
+            ConditionExpression=(
+                "(attribute_not_exists(ai_autofill_status) "
+                "OR NOT ai_autofill_status IN (:pending, :complete)) "
+                "AND attribute_not_exists(ai_autofill_ts)"
+            ),
+            ExpressionAttributeValues={
+                ":pending": AI_AUTOFILL_STATUS_PENDING,
+                ":complete": AI_AUTOFILL_STATUS_COMPLETE,
+            },
+        )
+        return None
+    except ClientError as exc:
+        code = (exc.response.get("Error") or {}).get("Code", "")
+        if code == "ConditionalCheckFailedException":
+            return error_response(409, "CONFLICT", "Place already AI-enriched (idempotency)")
+        logger.exception("Failed to claim AI autofill for place_id=%s", place_id)
+        return error_response(500, "INTERNAL_ERROR", "Failed to claim AI autofill")
+    except Exception:
+        logger.exception("Failed to claim AI autofill for place_id=%s", place_id)
+        return error_response(500, "INTERNAL_ERROR", "Failed to claim AI autofill")
+
+
+def _set_autofill_status(table_places, place_id: str, status: str) -> None:
+    try:
+        table_places.update_item(
+            Key={"place_id": place_id},
+            UpdateExpression="SET ai_autofill_status = :status, ts_last_updated = :ts",
+            ExpressionAttributeValues={":status": status, ":ts": utc_now()},
+        )
+    except Exception:
+        logger.exception(
+            "Failed to set ai_autofill_status=%s for place_id=%s", status, place_id
+        )
 
 
 def handler(event, context):
@@ -100,13 +165,6 @@ def handler(event, context):
     if not place:
         return error_response(404, "NOT_FOUND", "Place not found")
 
-    if place.get("ai_autofill_ts"):
-        return error_response(
-            409,
-            "CONFLICT",
-            "Place already AI-enriched (idempotency)",
-        )
-
     original = (submission or {}).get("original_submission_record_json") or {}
     place_name = place.get("place_name") or original.get("place_name") or ""
     place_type = place.get("place_type") or original.get("place_type") or "business"
@@ -146,6 +204,10 @@ def handler(event, context):
             "ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY not configured",
         )
 
+    claimed = _claim_autofill(table_places, place_id)
+    if claimed is not None:
+        return claimed
+
     result = generate_place_record(
         place_name=place_name,
         place_type=place_type,
@@ -153,18 +215,19 @@ def handler(event, context):
         activity_types=list(activity_types),
         google_places_api_key=GOOGLE_PLACES_API_KEY,
         anthropic_api_key=ANTHROPIC_API_KEY,
-        model_id=ANTHROPIC_MODEL_ID,
+        model_id=ANTHROPIC_MODEL,
         submission_id=submission_id or place.get("submission_id") or "",
         max_tokens=ANTHROPIC_MAX_TOKENS,
     )
 
     if not result.get("success"):
-        return error_response(
-            500,
-            "INTERNAL_ERROR",
-            "AI autofill failed",
-            {"ai": "; ".join(result.get("errors") or ["unknown error"])},
+        logger.error(
+            "AI autofill provider error for place_id=%s: %s",
+            place_id,
+            "; ".join(result.get("errors") or ["unknown error"]),
         )
+        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED)
+        return _generic_autofill_error()
 
     record = result.get("record") or {}
     ts = utc_now()
@@ -177,6 +240,7 @@ def handler(event, context):
         "google_places_api_data = :gp",
         "latest_google_places_refresh = :ts",
         "ai_autofill_ts = :ts",
+        "ai_autofill_status = :complete",
         "ts_last_updated = :ts",
         "use_google_places_api_data = :use_gp",
     ]
@@ -187,6 +251,7 @@ def handler(event, context):
         ":ratings": _to_dynamo(record.get("external_ratings_ai_generated") or {}),
         ":gp": _to_dynamo(record.get("google_places_api_data") or {}),
         ":ts": ts,
+        ":complete": AI_AUTOFILL_STATUS_COMPLETE,
         ":use_gp": bool(record.get("google_places_api_data")),
     }
 
@@ -210,9 +275,20 @@ def handler(event, context):
         code = (exc.response.get("Error") or {}).get("Code", "")
         if code == "ConditionalCheckFailedException":
             return error_response(409, "CONFLICT", "Place already AI-enriched (idempotency)")
-        return error_response(500, "INTERNAL_ERROR", "Failed to update place")
+        logger.exception("Failed to persist AI autofill for place_id=%s", place_id)
+        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED)
+        return _generic_autofill_error()
     except Exception:
-        return error_response(500, "INTERNAL_ERROR", "Failed to update place")
+        logger.exception("Failed to persist AI autofill for place_id=%s", place_id)
+        _set_autofill_status(table_places, place_id, AI_AUTOFILL_STATUS_FAILED)
+        return _generic_autofill_error()
+
+    if result.get("errors"):
+        logger.warning(
+            "AI autofill completed with non-fatal provider notes for place_id=%s: %s",
+            place_id,
+            "; ".join(result.get("errors") or []),
+        )
 
     ai_result = omit_empty_strings(
         {
@@ -223,7 +299,7 @@ def handler(event, context):
             "tags": record.get("tags", []),
             "external_ratings_ai_generated": record.get("external_ratings_ai_generated", {}),
             "google_places_api_data": record.get("google_places_api_data", {}),
-            "ai_errors": result.get("errors", []),
+            "ai_errors": [],
             "generated_ts": ts,
         }
     )

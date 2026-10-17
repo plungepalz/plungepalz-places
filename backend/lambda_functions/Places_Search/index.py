@@ -13,6 +13,7 @@ from places_common import (
     place_summary,
     success_response,
 )
+from places_common.constants import ALGOLIA_PAGINATION_CAP
 from places_common.records import should_delete_from_algolia
 
 
@@ -65,9 +66,12 @@ def _search_options(params: dict) -> dict:
         ],
     }
     if params.get("bbox"):
-        min_lng, min_lat, max_lng, max_lat = params["bbox"]
-        # Algolia bbox order is minLat, minLng, maxLat, maxLng
-        opts["insideBoundingBox"] = [[min_lat, min_lng, max_lat, max_lng]]
+        # Algolia bbox order is minLat, minLng, maxLat, maxLng.
+        # A crossing viewport is two boxes (list of boxes).
+        opts["insideBoundingBox"] = [
+            [min_lat, min_lng, max_lat, max_lng]
+            for min_lng, min_lat, max_lng, max_lat in params["bbox"]
+        ]
     elif params.get("lat") is not None and params.get("lng") is not None:
         opts["aroundLatLng"] = f"{params['lat']},{params['lng']}"
         opts["aroundRadius"] = max(1, int(round(float(params["radius_km"]) * 1000)))
@@ -80,19 +84,35 @@ def handler(event, context):
     except ValidationError as exc:
         return error_response(400, exc.code, exc.message, exc.details)
 
+    limit = params["limit"]
+    page = params["page"]
+    opts = _search_options(params)
+    offset = page * limit
+    discard_hits = False
+    if offset >= ALGOLIA_PAGINATION_CAP:
+        # Never request a page past Algolia's pagination cap. Fetch metadata only.
+        opts["page"] = 0
+        opts["hitsPerPage"] = 1
+        discard_hits = True
+    else:
+        opts["page"] = page
+        opts["hitsPerPage"] = min(limit, ALGOLIA_PAGINATION_CAP - offset)
+
     try:
         index = _get_index()
-        raw = index.search(params["q"], _search_options(params))
+        raw = index.search(params["q"], opts)
     except Exception:
         return error_response(500, "INTERNAL_ERROR", "Search failed")
 
-    hits = raw.get("hits") or []
+    hits = [] if discard_hits else (raw.get("hits") or [])
     total = int(raw.get("nbHits") if raw.get("nbHits") is not None else len(hits))
-    limit = params["limit"]
-    page = params["page"]
+    retrievable = min(total, _algolia_pagination_cap(raw))
 
     places = []
     for hit in hits:
+        # Defensive only: internal_status and visibility are unretrievable
+        # (Algolia unretrievableAttributes), so this post-filter is a no-op
+        # for normal Search hits. Stream sync already deletes rejected/hidden.
         if should_delete_from_algolia(hit):
             continue
         summary = place_summary(hit)
@@ -102,7 +122,7 @@ def handler(event, context):
         summary.pop("visibility", None)
         places.append(summary)
 
-    has_more = (page + 1) * limit < total
+    has_more = (page + 1) * limit < retrievable
     return success_response(
         200,
         {
@@ -113,3 +133,16 @@ def handler(event, context):
             "has_more": has_more,
         },
     )
+
+
+def _algolia_pagination_cap(raw: dict | None) -> int:
+    if raw:
+        value = raw.get("paginationLimitedTo")
+        if value is not None:
+            try:
+                cap = int(value)
+                if cap > 0:
+                    return cap
+            except (TypeError, ValueError):
+                pass
+    return ALGOLIA_PAGINATION_CAP

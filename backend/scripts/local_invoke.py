@@ -149,7 +149,10 @@ def invoke_places_submit_ai_autofill(
         "ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY": (
             "mock-key" if not use_live else os.environ.get("ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY", "")
         ),
-        "ANTHROPIC_MODEL_ID": os.environ.get("ANTHROPIC_MODEL_ID", "claude-3-5-haiku-latest"),
+        "ANTHROPIC_MODEL": os.environ.get(
+            "ANTHROPIC_MODEL",
+            os.environ.get("ANTHROPIC_MODEL_ID", "claude-haiku-4-5-20251001"),
+        ),
         "USE_CLAUDE_AGENT_SDK": "1" if use_agent_sdk else "0",
     }
 

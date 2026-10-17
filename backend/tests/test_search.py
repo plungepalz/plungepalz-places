@@ -67,10 +67,9 @@ def test_search_400_bad_bbox(fake_algolia, monkeypatch):
     cases = [
         {"bbox": "1,2,3"},
         {"bbox": "not-a-bbox"},
-        {"bbox": "200,40,210,41"},
-        {"bbox": "-111,100,-110,101"},
-        {"bbox": "-110,40,-111,41"},  # minLng >= maxLng
+        {"bbox": "nan,40,41,42"},
         {"bbox": "-111,41,-110,40"},  # minLat >= maxLat
+        {"bbox": "180,40,180,41"},  # zero-width after clamp
     ]
     for query in cases:
         resp = mod.handler(api_event(query=query), None)
@@ -78,6 +77,36 @@ def test_search_400_bad_bbox(fake_algolia, monkeypatch):
         body = parse_body(resp)
         assert body["error"]["code"] == "VALIDATION_ERROR"
         assert "bbox" in body["error"]["details"]
+
+
+def test_search_bbox_clamps_out_of_range(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {"hits": [], "nbHits": 0}
+    mod = _mod(fake_algolia, monkeypatch)
+    resp = mod.handler(api_event(query={"bbox": "-200,40,-170,41"}), None)
+    assert resp["statusCode"] == 200
+    opts = fake_algolia.searches[0][1]
+    assert opts["insideBoundingBox"] == [[40.0, -180.0, 41.0, -170.0]]
+
+
+def test_search_bbox_antimeridian_split(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {"hits": [], "nbHits": 0}
+    mod = _mod(fake_algolia, monkeypatch)
+    resp = mod.handler(api_event(query={"bbox": "170,-10,-170,10"}), None)
+    assert resp["statusCode"] == 200
+    opts = fake_algolia.searches[0][1]
+    assert opts["insideBoundingBox"] == [
+        [-10.0, 170.0, 10.0, 180.0],
+        [-10.0, -180.0, 10.0, -170.0],
+    ]
+
+
+def test_search_bbox_whole_world(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {"hits": [], "nbHits": 0}
+    mod = _mod(fake_algolia, monkeypatch)
+    resp = mod.handler(api_event(query={"bbox": "-200,-100,200,100"}), None)
+    assert resp["statusCode"] == 200
+    opts = fake_algolia.searches[0][1]
+    assert opts["insideBoundingBox"] == [[-90.0, -180.0, 90.0, 180.0]]
 
 
 def test_search_400_lat_lng_range_and_partial(fake_algolia, monkeypatch):
@@ -211,6 +240,51 @@ def test_search_pagination_has_more(fake_algolia, monkeypatch):
     fake_algolia.search_result = {"hits": [_hit()], "nbHits": 250}
     body = parse_body(mod.handler(api_event(query={"limit": "100", "page": "2"}), None))
     assert body["has_more"] is False
+
+
+def test_search_has_more_respects_algolia_1000_cap(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {"hits": [_hit()], "nbHits": 2500}
+    mod = _mod(fake_algolia, monkeypatch)
+    body = parse_body(mod.handler(api_event(query={"limit": "100", "page": "8"}), None))
+    assert body["has_more"] is True
+    assert body["total"] == 2500
+
+    fake_algolia.search_result = {"hits": [_hit()], "nbHits": 2500}
+    body = parse_body(mod.handler(api_event(query={"limit": "100", "page": "9"}), None))
+    assert body["has_more"] is False
+
+
+def test_search_has_more_uses_pagination_limited_to(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {
+        "hits": [_hit()],
+        "nbHits": 2500,
+        "paginationLimitedTo": 500,
+    }
+    mod = _mod(fake_algolia, monkeypatch)
+    body = parse_body(mod.handler(api_event(query={"limit": "100", "page": "4"}), None))
+    assert body["has_more"] is False
+    body = parse_body(mod.handler(api_event(query={"limit": "100", "page": "3"}), None))
+    assert body["has_more"] is True
+
+
+def test_search_never_requests_past_pagination_cap(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {"hits": [_hit()], "nbHits": 2500}
+    mod = _mod(fake_algolia, monkeypatch)
+    body = parse_body(mod.handler(api_event(query={"limit": "100", "page": "10"}), None))
+    assert body["has_more"] is False
+    assert body["places"] == []
+    opts = fake_algolia.searches[0][1]
+    assert opts["page"] * opts["hitsPerPage"] < 1000
+    assert opts["page"] * opts["hitsPerPage"] + opts["hitsPerPage"] <= 1000
+
+
+def test_search_clamps_hits_per_page_to_remaining_cap(fake_algolia, monkeypatch):
+    fake_algolia.search_result = {"hits": [_hit()], "nbHits": 2500}
+    mod = _mod(fake_algolia, monkeypatch)
+    mod.handler(api_event(query={"limit": "150", "page": "6"}), None)
+    opts = fake_algolia.searches[0][1]
+    assert opts["page"] == 6
+    assert opts["hitsPerPage"] == 100  # 900 + 100 = 1000, not 1050
 
 
 def test_search_activity_and_place_type_filters(fake_algolia, monkeypatch):

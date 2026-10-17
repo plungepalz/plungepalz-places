@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
 from .constants import (
     DEFAULT_RADIUS_KM,
     DEFAULT_SEARCH_LIMIT,
+    MAX_ADDRESS_LEN,
+    MAX_DESCRIPTION_LEN,
+    MAX_PLACE_NAME_LEN,
     MAX_SEARCH_LIMIT,
     MIN_SEARCH_LIMIT,
     VALID_ACTIVITY_TYPES,
@@ -144,8 +148,16 @@ def parse_enum_csv(
     return out
 
 
-def parse_bbox(raw: Any, details: dict[str, str]) -> tuple[float, float, float, float] | None:
-    """Parse bbox=minLng,minLat,maxLng,maxLat."""
+def parse_bbox(
+    raw: Any, details: dict[str, str]
+) -> list[tuple[float, float, float, float]] | None:
+    """Parse bbox=minLng,minLat,maxLng,maxLat.
+
+    Clamps lat to ±90 and lng to ±180 (Mapbox world zoom can exceed those).
+    When the box crosses the antimeridian (minLng > maxLng after clamp),
+    splits into two boxes for Algolia insideBoundingBox.
+    400 only for non-numeric or malformed input.
+    """
     if raw is None or raw == "":
         return None
     parts = [p.strip() for p in str(raw).split(",")]
@@ -167,23 +179,33 @@ def parse_bbox(raw: Any, details: dict[str, str]) -> tuple[float, float, float, 
                 details,
             )
             return None
-    min_lng, min_lat, max_lng, max_lat = nums
-    if any(n != n for n in nums):
+    if any(not math.isfinite(n) for n in nums):
         _field_error("bbox", "bbox values must be finite numbers", details)
         return None
-    if not (-180 <= min_lng <= 180) or not (-180 <= max_lng <= 180):
-        _field_error("bbox", "bbox longitude must be between -180 and 180", details)
-        return None
-    if not (-90 <= min_lat <= 90) or not (-90 <= max_lat <= 90):
-        _field_error("bbox", "bbox latitude must be between -90 and 90", details)
-        return None
-    if min_lng >= max_lng:
-        _field_error("bbox", "bbox minLng must be less than maxLng", details)
-        return None
+    min_lng, min_lat, max_lng, max_lat = nums
+    min_lng = max(-180.0, min(180.0, min_lng))
+    max_lng = max(-180.0, min(180.0, max_lng))
+    min_lat = max(-90.0, min(90.0, min_lat))
+    max_lat = max(-90.0, min(90.0, max_lat))
     if min_lat >= max_lat:
         _field_error("bbox", "bbox minLat must be less than maxLat", details)
         return None
-    return min_lng, min_lat, max_lng, max_lat
+
+    boxes: list[tuple[float, float, float, float]] = []
+    if min_lng > max_lng:
+        # Antimeridian crossing: west piece then east piece.
+        if min_lng < 180.0:
+            boxes.append((min_lng, min_lat, 180.0, max_lat))
+        if max_lng > -180.0:
+            boxes.append((-180.0, min_lat, max_lng, max_lat))
+        if not boxes:
+            _field_error("bbox", "bbox is empty after normalizing", details)
+            return None
+        return boxes
+    if min_lng >= max_lng:
+        _field_error("bbox", "bbox minLng must be less than maxLng", details)
+        return None
+    return [(min_lng, min_lat, max_lng, max_lat)]
 
 
 def parse_search_params(event: dict | None) -> dict[str, Any]:
@@ -279,6 +301,13 @@ def validate_submit_body(body: dict) -> dict[str, Any]:
         place_name = None
     else:
         place_name = place_name.strip()
+        if len(place_name) > MAX_PLACE_NAME_LEN:
+            _field_error(
+                "place_name",
+                f"place_name must be <= {MAX_PLACE_NAME_LEN} characters",
+                details,
+            )
+            place_name = None
 
     place_type = body.get("place_type")
     if not isinstance(place_type, str) or place_type not in VALID_PLACE_TYPES:
@@ -340,6 +369,13 @@ def validate_submit_body(body: dict) -> dict[str, Any]:
         address = address.strip()
         if address == "":
             address = None
+        elif len(address) > MAX_ADDRESS_LEN:
+            _field_error(
+                "address",
+                f"address must be <= {MAX_ADDRESS_LEN} characters",
+                details,
+            )
+            address = None
 
     if place_type and place_type != "nature" and not address:
         _field_error("address", "address is required unless place_type is nature", details)
@@ -350,6 +386,13 @@ def validate_submit_body(body: dict) -> dict[str, Any]:
         description = None
     elif isinstance(description, str):
         description = description.strip() or None
+        if description is not None and len(description) > MAX_DESCRIPTION_LEN:
+            _field_error(
+                "description",
+                f"description must be <= {MAX_DESCRIPTION_LEN} characters",
+                details,
+            )
+            description = None
 
     email = body.get("email")
     if email is not None and email != "":

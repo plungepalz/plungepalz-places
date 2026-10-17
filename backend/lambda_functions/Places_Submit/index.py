@@ -46,7 +46,7 @@ def handler(event, context):
 
     address_parts = parse_address_parts(data.get("address"))
     city = address_parts.get("city")
-    place_slug = generate_place_slug(data["place_name"], city)
+    place_slug = generate_place_slug(data["place_name"], city, place_id)
 
     original = omit_empty_strings(
         {

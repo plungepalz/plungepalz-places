@@ -11,6 +11,17 @@ MAX_SEARCH_LIMIT = 500
 MIN_SEARCH_LIMIT = 1
 DEFAULT_RADIUS_KM = 10.0
 
+# Algolia only paginates the first paginationLimitedTo hits (default 1000).
+ALGOLIA_PAGINATION_CAP = 1000
+
+MAX_PLACE_NAME_LEN = 200
+MAX_ADDRESS_LEN = 500
+MAX_DESCRIPTION_LEN = 2000
+
+AI_AUTOFILL_STATUS_PENDING = "pending"
+AI_AUTOFILL_STATUS_COMPLETE = "complete"
+AI_AUTOFILL_STATUS_FAILED = "failed"
+
 # PlaceSummary response fields (Search and the prefix of GET /place/{id}).
 PLACE_SUMMARY_FIELDS = (
     "place_id",

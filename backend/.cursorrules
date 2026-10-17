@@ -64,7 +64,7 @@ Array of 1 or 2 items from:
 
 - Use Anthropic API (not Bedrock) — enables internet access for web scraping tools
 - Always invoked via `tool_use` with `tool_choice` for structured JSON output
-- Model: `claude-3-5-haiku-latest` (configurable via `ANTHROPIC_MODEL_ID`)
+- Model: `claude-haiku-4-5-20251001` (configurable via `ANTHROPIC_MODEL`)
 
 ## Timestamps
 
@@ -73,10 +73,10 @@ Array of 1 or 2 items from:
 ## place_slug Format
 
 ```
-{place_name_lowercased_hyphenated}-{city_lowercased_hyphenated}
+{place_name_lowercased_hyphenated}-{city_lowercased_hyphenated}-{place_id_suffix}
 ```
 
-Example: `plunge-lab-salt-lake-city`
+Example: `plunge-lab-salt-lake-city-34567890` (suffix is a short slice of `place_id` so the same name + city do not collide)
 
 ## H3 Indexes
 

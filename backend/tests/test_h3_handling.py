@@ -100,7 +100,7 @@ def _call_generate(core_mod):
         activity_types=["cold_plunge", "sauna"],
         google_places_api_key="test-google-key",
         anthropic_api_key="test-anthropic-key",
-        model_id="claude-3-5-haiku-latest",
+        model_id="claude-haiku-4-5-20251001",
         submission_id="sub_test",
         max_tokens=256,
     )

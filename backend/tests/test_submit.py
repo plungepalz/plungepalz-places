@@ -25,6 +25,8 @@ def test_submit_201_and_transaction(dynamodb_tables):
     assert body["is_approved"] is False
     assert body["submission_id"].startswith("sub_")
     assert body["place_slug"].startswith("plunge-lab")
+    compact_id = body["place_id"].replace("-", "").lower()
+    assert body["place_slug"].endswith(compact_id[-8:])
 
     places = dynamodb_tables.Table("Places_Places")
     subs = dynamodb_tables.Table("Places_Submissions")
@@ -110,6 +112,21 @@ def test_submit_validation_errors(dynamodb_tables):
     assert "lng" in details({**VALID, "lng": -200})
     assert "lat" in details({k: v for k, v in VALID.items() if k != "lat"})
     assert "email" in details({**VALID, "email": "not-an-email"})
+    assert "place_name" in details({**VALID, "place_name": "x" * 201})
+    assert "address" in details({**VALID, "address": "x" * 501})
+    assert "description" in details({**VALID, "description": "x" * 2001})
+
+
+def test_submit_max_lengths_at_limit_ok(dynamodb_tables):
+    mod = load_handler("Places_Submit")
+    payload = {
+        **VALID,
+        "place_name": "x" * 200,
+        "address": "x" * 500,
+        "description": "x" * 2000,
+    }
+    resp = mod.handler(api_event(body=payload), None)
+    assert resp["statusCode"] == 201
 
 
 def test_submit_invalid_json():

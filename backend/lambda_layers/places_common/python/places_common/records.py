@@ -194,8 +194,19 @@ def public_place(item: dict) -> dict:
     return place_detail(item)
 
 
-def generate_place_slug(place_name: str, city: str | None = None) -> str:
-    """{place_name_lowercased_hyphenated}-{city_lowercased_hyphenated}."""
+def _slug_suffix_from_place_id(place_id: str | None) -> str:
+    if not place_id or not isinstance(place_id, str):
+        return ""
+    compact = re.sub(r"[^a-zA-Z0-9]", "", place_id).lower()
+    return compact[-8:] if compact else ""
+
+
+def generate_place_slug(
+    place_name: str,
+    city: str | None = None,
+    place_id: str | None = None,
+) -> str:
+    """{name}-{city}-{place_id_suffix} so the same name + city do not collide."""
 
     def _slug_part(text: str) -> str:
         if not text:
@@ -207,12 +218,17 @@ def generate_place_slug(place_name: str, city: str | None = None) -> str:
     name_part = _slug_part(place_name or "")
     city_part = _slug_part(city or "")
     if not name_part and not city_part:
-        return "unknown"
-    if not city_part:
-        return name_part
-    if not name_part:
-        return city_part
-    return f"{name_part}-{city_part}"
+        base = "unknown"
+    elif not city_part:
+        base = name_part
+    elif not name_part:
+        base = city_part
+    else:
+        base = f"{name_part}-{city_part}"
+    suffix = _slug_suffix_from_place_id(place_id)
+    if suffix:
+        return f"{base}-{suffix}"
+    return base
 
 
 def parse_address_parts(address: str | None) -> dict[str, str]:

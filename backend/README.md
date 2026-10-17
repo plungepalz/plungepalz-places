@@ -7,7 +7,7 @@ Production AWS serverless backend that powers the discovery, submission, rating,
 The PlungePalz Places API provides:
 
 - **Submission Flow**: Users submit a place; an `in_review` record is created immediately (verification codes deferred)
-- **AI Autofill**: Optional later enrichment via Google Places New API + Claude (Anthropic API)
+- **AI Autofill**: Optional later enrichment via Google Places New API + Claude (Anthropic API). **AWS_IAM / admin-triggered only** — not a public route.
 - **Public Discovery**: Algolia search and DynamoDB get-by-id
 - **Ratings & Comments**: User-generated ratings and feedback
 - **Claiming & Reporting**: Place claiming by business owners, abuse reporting
@@ -24,7 +24,7 @@ API Gateway (REST) → Lambda Functions → DynamoDB
 
 - **Region**: `us-east-1`
 - **API Stage**: `dev`
-- **Auth**: Public endpoints = `NONE` | Admin endpoints = `AWS_IAM`
+- **Auth**: Public endpoints = `NONE` | Admin endpoints (review, edit, AI autofill) = `AWS_IAM`
 
 ## Directory Map
 
@@ -58,7 +58,7 @@ For deployed Lambdas, configure via CloudFormation parameters or the AWS console
 |----------|-------------|
 | `GOOGLE_PLACES_API_KEY` | Google Places New API v1 key |
 | `ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY` | Anthropic API key for Claude |
-| `ANTHROPIC_MODEL_ID` | Claude model (default: `claude-3-5-haiku-latest`) |
+| `ANTHROPIC_MODEL` | Claude model (default: `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` also accepted) |
 | `ANTHROPIC_MAX_TOKENS` | Autofill token cap (default 1024) |
 | `TABLE_PLACES` | DynamoDB table for places (default: `Places_Places`) |
 | `TABLE_SUBMISSIONS` | DynamoDB table for submissions (default: `Places_Submissions`) |

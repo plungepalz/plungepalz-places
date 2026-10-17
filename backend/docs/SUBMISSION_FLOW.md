@@ -35,19 +35,19 @@ The client sends core fields (no identity, no codes):
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| place_name | Yes | |
+| place_name | Yes | max 200 characters |
 | place_type | Yes | business \| nature \| temporary_pop_up \| gym_amenity |
 | activity_types | Yes | non-empty subset of cold_plunge, sauna |
 | lat, lng | Yes | numbers in range |
-| address | Yes unless nature | |
-| description | No | preserved; AI will not overwrite a non-empty description |
+| address | Yes unless nature | max 500 characters |
+| description | No | max 2000 characters; preserved; AI will not overwrite a non-empty description |
 | email | No | stored on the submission if valid |
 
 ### Places_Submit
 
 1. Validates the body (400 + field `details` on failure).
 2. Generates `place_id` (UUID v4) and `submission_id` (`sub_` + UUID).
-3. Generates `place_slug` from name + parsed city.
+3. Generates `place_slug` from name + parsed city + a short `place_id` suffix (avoids same-name/city collisions).
 4. Computes `h3_r7` / `h3_r5` / `h3_r4` if `h3` is installed; **omits** those attributes otherwise. Never writes empty strings.
 5. In **one** `TransactWriteItems`:
    - `Places_Submissions`: `submitted_ts`, `submitted_via=web_app`, `verified=false`, `place_id_generated`, `original_submission_record_json`
@@ -62,15 +62,16 @@ The place is immediately GetByID-able and Search-able (unless `approved_only=tru
 
 ### Places_SubmitAIAutofill
 
-**Not** invoked by Submit. No verification-code gate.
+**Auth: AWS_IAM** — admin-triggered only; not a public route. **Not** invoked by Submit. No verification-code gate.
 
 1. Load submission and/or existing place (`place_id` or `submission.place_id_generated`).
-2. **409** if `ai_autofill_ts` is already set (per-place idempotency / spend guard).
+2. **Claim first** with a conditional `SET ai_autofill_status = pending` (`attribute_not_exists(ai_autofill_status) OR ai_autofill_status NOT IN (pending, complete)`). **409** and **no** Google/Anthropic calls on ConditionalCheckFailed. `failed` can retry.
 3. Call `generate_place_record()` from the `generate_place_with_ai` layer.
-4. `UpdateItem` **only** AI fields; do not replace user-submitted name/type/coords/address.
-5. `description` is set only if the existing description is empty.
+4. On success, `UpdateItem` **only** AI fields plus `ai_autofill_status=complete` and `ai_autofill_ts`. Do not replace user-submitted name/type/coords/address.
+5. On failure, set `ai_autofill_status=failed`. Provider error strings are logged, never returned.
+6. `description` is set only if the existing description is empty.
 
-Model: `ANTHROPIC_MODEL_ID` (default `claude-3-5-haiku-latest`). Token cap: `ANTHROPIC_MAX_TOKENS` (default 1024).
+Model: `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` is also accepted). Token cap: `ANTHROPIC_MAX_TOKENS` (default 1024).
 
 ---
 
@@ -105,7 +106,7 @@ Model: `ANTHROPIC_MODEL_ID` (default `claude-3-5-haiku-latest`). Token cap: `ANT
 
 ## Idempotency
 
-- **Places_SubmitAIAutofill:** ConditionExpression `attribute_not_exists(ai_autofill_ts)`. 409 if already enriched.
+- **Places_SubmitAIAutofill:** Conditional claim `SET ai_autofill_status = pending` before any paid outbound call. 409 if already `pending` or `complete`. `failed` may retry.
 - **Places_AlgoliaSync:** `save_objects` by `objectID=place_id`; deletes of missing IDs are ignored.
 
 ---

@@ -487,7 +487,7 @@ def generate_place_record(
         activity_types: ["cold_plunge"] and/or ["sauna"]
         google_places_api_key: API key for Google Places
         anthropic_api_key: Anthropic API key for Claude
-        model_id: Claude model (e.g. claude-3-5-haiku-latest)
+        model_id: Claude model (e.g. claude-haiku-4-5-20251001)
         submission_id: For traceability
         max_tokens: Anthropic max_tokens cap (default 1024; keep low for spend)
 

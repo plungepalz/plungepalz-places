@@ -43,7 +43,7 @@ All DynamoDB writes occur **only** inside Lambda functions (or the operator CLI 
 | GET | `/place/{place_id}` | NONE | Get single place by ID |
 | POST | `/submit` | NONE | Create submission + in_review place |
 | POST | `/submit/verify` | NONE | Placeholder (deferred) |
-| POST | `/submit/ai_autofill` | NONE | Opt-in AI enrich of existing place |
+| POST | `/submit/ai_autofill` | **AWS_IAM** | Admin-triggered AI enrich of existing place (not public) |
 | GET | `/ratings/{place_id}` | NONE | Get ratings |
 | POST | `/ratings/{place_id}` | NONE | Post a rating |
 | POST | `/claim` | NONE | Claim a place |
@@ -60,7 +60,7 @@ All DynamoDB writes occur **only** inside Lambda functions (or the operator CLI 
 |---------------|-----------------|---------|--------|--------|-------------|
 | Places_Submit | POST /submit | 30s | 256MB | MVP | TransactWrite submission + place |
 | Places_SubmitVerify | POST /submit/verify | 10s | 256MB | Deferred | Placeholder |
-| Places_SubmitAIAutofill | POST /submit/ai_autofill | 60s | 512MB | MVP | UpdateItem AI fields only |
+| Places_SubmitAIAutofill | POST /submit/ai_autofill (AWS_IAM) | 60s | 512MB | MVP | UpdateItem AI fields only |
 | Places_Search | GET /search | 15s | 256MB | MVP | Algolia query |
 | Places_GetByID | GET /place/{place_id} | 5s | 256MB | MVP | DynamoDB get |
 | Places_AlgoliaSync | DynamoDB stream (Places_Places) | 30s | 256MB | MVP | Upsert/delete Algolia |
@@ -126,7 +126,7 @@ See [ALGOLIA.md](ALGOLIA.md). Dev index: `places_dev`.
 | `CORS_ALLOWED_ORIGIN` | All HTTP Lambdas (default `*`) |
 | `GOOGLE_PLACES_API_KEY` | SubmitAIAutofill |
 | `ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY` | SubmitAIAutofill |
-| `ANTHROPIC_MODEL_ID` | SubmitAIAutofill (default `claude-3-5-haiku-latest`) |
+| `ANTHROPIC_MODEL` | SubmitAIAutofill (default `claude-haiku-4-5-20251001`; `ANTHROPIC_MODEL_ID` also accepted) |
 | `ANTHROPIC_MAX_TOKENS` | SubmitAIAutofill (default 1024, max 2048) |
 | `AWS_REGION` | `us-east-1` |
 
@@ -153,7 +153,7 @@ Shared: `logs:CreateLogStream`, `logs:PutLogEvents`.
 
 ## 9. AI stack
 
-- **Model:** `claude-3-5-haiku-latest` via `ANTHROPIC_MODEL_ID`
+- **Model:** `claude-haiku-4-5-20251001` via `ANTHROPIC_MODEL`
 - **Invocation:** `tool_use` + `tool_choice` `populate_place_listing`
 - **Google Places New API v1:** `places.googleapis.com/v1`
 
