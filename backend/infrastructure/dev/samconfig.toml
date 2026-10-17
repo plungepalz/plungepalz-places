@@ -1,0 +1,17 @@
+version = 0.1
+
+[default.build.parameters]
+cached = false
+
+[default.validate.parameters]
+lint = true
+region = "us-east-1"
+
+[default.deploy.parameters]
+stack_name = "plungepalz-places-dev"
+region = "us-east-1"
+s3_prefix = "sam-artifacts"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+fail_on_empty_changeset = false
+tags = "project=plungepalz-places env=dev"
