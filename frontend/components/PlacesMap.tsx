@@ -30,6 +30,26 @@ function pinSvg(fill: string, innerWhiteDot: boolean): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="80" viewBox="0 0 32 40"><path d="${PIN_PATH}" fill="${fill}"/>${inner}</svg>`;
 }
 
+function addFallbackOrangePin(map: MapboxMap, id: string): void {
+  if (map.hasImage(id)) return;
+  const width = 64;
+  const height = 80;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.fillStyle = '#f97316';
+  ctx.beginPath();
+  ctx.moveTo(32, 76);
+  ctx.quadraticCurveTo(8, 44, 8, 28);
+  ctx.arc(32, 28, 24, Math.PI, 0, false);
+  ctx.quadraticCurveTo(56, 44, 32, 76);
+  ctx.closePath();
+  ctx.fill();
+  map.addImage(id, ctx.getImageData(0, 0, width, height), { pixelRatio: 2 });
+}
+
 function loadMapImage(map: MapboxMap, id: string, svg: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (map.hasImage(id)) {
@@ -46,6 +66,15 @@ function loadMapImage(map: MapboxMap, id: string, svg: string): Promise<void> {
     img.onerror = () => reject(new Error(`Failed to load pin ${id}`));
     img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   });
+}
+
+async function ensurePinImage(map: MapboxMap, id: string, svg: string): Promise<void> {
+  try {
+    await loadMapImage(map, id, svg);
+  } catch (error) {
+    console.warn(`Map pin image "${id}" failed to load; using a plain orange pin fallback.`, error);
+    addFallbackOrangePin(map, id);
+  }
 }
 
 export default function PlacesMap({
@@ -99,12 +128,10 @@ export default function PlacesMap({
     const map = mapRef.current?.getMap();
     if (!map) return;
     void Promise.all([
-      loadMapImage(map, 'pin-cluster', pinSvg('#111111', false)),
-      loadMapImage(map, 'pin-place', pinSvg('#f97316', true)),
-      loadMapImage(map, 'pin-place-active', pinSvg('#ea580c', true)),
-    ])
-      .then(() => setImagesReady(true))
-      .catch(() => setImagesReady(true));
+      ensurePinImage(map, 'pin-cluster', pinSvg('#111111', false)),
+      ensurePinImage(map, 'pin-place', pinSvg('#f97316', true)),
+      ensurePinImage(map, 'pin-place-active', pinSvg('#ea580c', true)),
+    ]).finally(() => setImagesReady(true));
     reportViewport();
   }, [reportViewport]);
 
@@ -152,15 +179,20 @@ export default function PlacesMap({
 
   const handleMapClick = (event: MapMouseEvent) => {
     const feature = event.features?.[0] as
-      | { properties?: { cluster?: boolean; cluster_id?: number; place_id?: string } }
+      | {
+          properties?: { cluster?: boolean; cluster_id?: number | string; place_id?: string };
+          geometry?: { type?: string; coordinates?: [number, number] };
+        }
       | undefined;
     if (!feature || !mapRef.current) return;
     const props = feature.properties;
     if (props?.cluster && props.cluster_id != null) {
       const source = mapRef.current.getMap().getSource('places') as GeoJSONSource;
-      source.getClusterExpansionZoom(props.cluster_id, (error, zoom) => {
+      const coords = feature.geometry?.type === 'Point' ? feature.geometry.coordinates : undefined;
+      const clusterCenter: [number, number] = coords ?? [event.lngLat.lng, event.lngLat.lat];
+      source.getClusterExpansionZoom(Number(props.cluster_id), (error, zoom) => {
         if (error || zoom == null) return;
-        mapRef.current?.easeTo({ center: [event.lngLat.lng, event.lngLat.lat], zoom, duration: 500 });
+        mapRef.current?.easeTo({ center: clusterCenter, zoom, duration: 500 });
       });
       return;
     }

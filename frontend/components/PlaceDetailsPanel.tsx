@@ -1,12 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { isApproved } from '@/lib/approval';
 import { client } from '@/lib/client';
 import { isPlacesApiError } from '@/lib/errors';
 import { ACTIVITY_LABELS, formatLocation, formatPlaceType } from '@/lib/labels';
 import type { ExternalRatingsAiGenerated, PlaceDetail } from '@/lib/types';
 import CoverImage from './CoverImage';
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
 interface PlaceDetailsPanelProps {
   placeId: string;
@@ -49,6 +52,9 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
   const [place, setPlace] = useState<PlaceDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,8 +80,37 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
   }, [placeId]);
 
   useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    return () => {
+      const previous = previousFocusRef.current;
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !panelRef.current) return;
+      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (el) => !el.hasAttribute('disabled') && el.tabIndex !== -1
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -83,16 +118,18 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
 
   return (
     <aside
+      ref={panelRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="place-details-title"
-      className="absolute bottom-28 right-4 top-4 z-30 flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
+      className="absolute bottom-28 right-4 top-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
     >
       <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
         <h2 id="place-details-title" className="text-lg font-semibold text-gray-900">
           Place details
         </h2>
         <button
+          ref={closeButtonRef}
           type="button"
           onClick={onClose}
           className="rounded-full p-2 text-gray-500 hover:bg-gray-100"

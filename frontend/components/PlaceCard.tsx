@@ -31,6 +31,12 @@ export default function PlaceCard({
       }`}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
+      onFocus={() => onHover(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          onHover(false);
+        }
+      }}
     >
       <button type="button" onClick={onSelect} className="w-full cursor-pointer rounded-2xl p-3 text-left">
         <div className="flex gap-3 pr-8">

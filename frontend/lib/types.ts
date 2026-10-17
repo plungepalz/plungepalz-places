@@ -120,6 +120,21 @@ export interface FlyRequest {
   zoom?: number;
 }
 
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Format a viewport as `minLng,minLat,maxLng,maxLat` with values always in range. */
 export function formatBbox(bounds: MapBounds): string {
-  return `${bounds.minLng},${bounds.minLat},${bounds.maxLng},${bounds.maxLat}`;
+  const minLat = clamp(bounds.minLat, -90, 90);
+  const maxLat = clamp(bounds.maxLat, -90, 90);
+  const lngSpan = bounds.maxLng - bounds.minLng;
+  // Fully zoomed-out / wrapped worlds: Mapbox can report spans >= 360°.
+  if (!Number.isFinite(lngSpan) || lngSpan >= 360) {
+    return `-180,${minLat},180,${maxLat}`;
+  }
+  const minLng = clamp(bounds.minLng, -180, 180);
+  const maxLng = clamp(bounds.maxLng, -180, 180);
+  return `${minLng},${minLat},${maxLng},${maxLat}`;
 }
