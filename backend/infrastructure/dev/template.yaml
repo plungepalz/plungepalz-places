@@ -62,13 +62,13 @@ Parameters:
     Type: String
     Default: ''
     NoEcho: true
-    Description: Google Places API key (SubmitAIAutofill only; from --env-file)
+    Description: Google Places API key (SubmitAIAutofill only; optional, empty allowed)
 
   AnthropicApiKey:
     Type: String
     Default: ''
     NoEcho: true
-    Description: Anthropic API key (SubmitAIAutofill only; from --env-file)
+    Description: Anthropic API key (SubmitAIAutofill only; optional, empty allowed)
 
 Conditions:
   EnableAlgoliaSyncCondition: !Equals [!Ref EnableAlgoliaSync, 'true']
@@ -700,15 +700,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - dynamodb:GetItem
                   - dynamodb:UpdateItem
                 Resource:
                   - !GetAtt PlacesTable.Arn
-              - Effect: Allow
-                Action:
-                  - dynamodb:Query
-                Resource:
-                  - !Sub "${PlacesTable.Arn}/index/status-ts-index"
       Tags:
         - Key: project
           Value: plungepalz-places

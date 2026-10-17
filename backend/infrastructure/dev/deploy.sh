@@ -4,16 +4,17 @@
 #
 # Usage:
 #   ./deploy.sh --env-file /path/to/secrets.env [--guided] [--yes]
+#               [--skip-key GOOGLE_PLACES_API_KEY]
+#               [--skip-key ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY]
 #
-# --env-file must contain (parsed by name only; the file is never sourced):
-#   ALGOLIA_APP_ID
-#   ALGOLIA_SEARCH_API_KEY
-#   ALGOLIA_WRITE_API_KEY
+# --env-file is parsed by name only (never sourced). Required:
+#   ALGOLIA_APP_ID, ALGOLIA_SEARCH_API_KEY, ALGOLIA_WRITE_API_KEY
+# Optional (empty + warning if missing or --skip-key):
 #   GOOGLE_PLACES_API_KEY
 #   ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY
 #
 # Secrets are passed as NoEcho CloudFormation parameters via a mode-600
-# samconfig written under mktemp (outside the repo) and deleted on EXIT.
+# samconfig written under mktemp (outside the repo) and deleted on EXIT/INT/TERM/HUP.
 # They are never written to samconfig.toml in this directory, never echoed,
 # and never passed as argv to `sam deploy --parameter-overrides`.
 #
@@ -37,6 +38,12 @@ GUIDED_MODE=0
 ENV_FILE=""
 YES_MODE=0
 TMP_DEPLOY_DIR=""
+CLEANUP_DONE=0
+SKIP_KEYS=()
+OPTIONAL_SKIP_ALLOWLIST=(
+    GOOGLE_PLACES_API_KEY
+    ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY
+)
 
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >&2
@@ -47,13 +54,33 @@ error() {
     exit 1
 }
 
+is_allowlisted_skip_key() {
+    local name="$1"
+    local allowed
+    for allowed in "${OPTIONAL_SKIP_ALLOWLIST[@]}"; do
+        if [[ "$name" == "$allowed" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 cleanup() {
+    local rc=$?
+    if [[ "${CLEANUP_DONE}" -eq 1 ]]; then
+        return 0
+    fi
+    CLEANUP_DONE=1
     if [[ -n "${TMP_DEPLOY_DIR:-}" && -d "${TMP_DEPLOY_DIR}" ]]; then
         rm -rf "${TMP_DEPLOY_DIR}"
     fi
+    TMP_DEPLOY_DIR=""
+    if [[ "${rc}" -ne 0 ]]; then
+        exit "${rc}"
+    fi
 }
 
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -68,6 +95,16 @@ while [[ $# -gt 0 ]]; do
         --yes)
             YES_MODE=1
             shift
+            ;;
+        --skip-key)
+            if [[ -z "${2:-}" ]]; then
+                error "--skip-key requires a key name"
+            fi
+            if ! is_allowlisted_skip_key "$2"; then
+                error "--skip-key '$2' is not allowlisted (allowed: ${OPTIONAL_SKIP_ALLOWLIST[*]})"
+            fi
+            SKIP_KEYS+=("$2")
+            shift 2
             ;;
         *)
             error "Unknown option: $1"
@@ -166,7 +203,13 @@ write_temp_samconfig() {
 
     log "Writing temporary deploy config (secrets not logged)"
 
-    python3 - "$ENV_FILE" "$dest_dir/samconfig.toml" "$artifacts_bucket" <<'PY'
+    local skip_csv=""
+    if [[ ${#SKIP_KEYS[@]} -gt 0 ]]; then
+        local IFS=,
+        skip_csv="${SKIP_KEYS[*]}"
+    fi
+
+    python3 - "$ENV_FILE" "$dest_dir/samconfig.toml" "$artifacts_bucket" "$skip_csv" <<'PY'
 import json
 import pathlib
 import sys
@@ -174,11 +217,14 @@ import sys
 env_path = pathlib.Path(sys.argv[1])
 dest = pathlib.Path(sys.argv[2])
 bucket = sys.argv[3]
+skip_keys = {k for k in sys.argv[4].split(",") if k}
 
-wanted = {
+required = {
     "ALGOLIA_APP_ID": "AlgoliaAppId",
     "ALGOLIA_SEARCH_API_KEY": "AlgoliaSearchApiKey",
     "ALGOLIA_WRITE_API_KEY": "AlgoliaWriteApiKey",
+}
+optional = {
     "GOOGLE_PLACES_API_KEY": "GooglePlacesApiKey",
     "ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY": "AnthropicApiKey",
 }
@@ -198,18 +244,28 @@ for raw in env_path.read_text(encoding="utf-8").splitlines():
     parsed[key.strip()] = unquote(val)
 
 values: dict[str, str] = {}
-for env_key, param_name in wanted.items():
+for env_key, param_name in required.items():
     if parsed.get(env_key):
         values[param_name] = parsed[env_key]
+
+for env_key, param_name in optional.items():
+    if env_key in skip_keys:
+        print(f"WARNING: --skip-key {env_key}; passing empty value", file=sys.stderr)
+        values[param_name] = ""
+    elif parsed.get(env_key):
+        values[param_name] = parsed[env_key]
+    else:
+        print(f"WARNING: {env_key} missing; passing empty value", file=sys.stderr)
+        values[param_name] = ""
 
 # Non-secret model override: ANTHROPIC_MODEL, with legacy ANTHROPIC_MODEL_ID fallback
 model = parsed.get("ANTHROPIC_MODEL") or parsed.get("ANTHROPIC_MODEL_ID")
 if model:
     values["AnthropicModel"] = model
 
-missing = [name for name in wanted.values() if not values.get(name)]
+missing = [name for name in required.values() if not values.get(name)]
 if missing:
-    raise SystemExit("Missing required keys in env file (mapped params): " + ", ".join(missing))
+    raise SystemExit("Missing required Algolia keys in env file (mapped params): " + ", ".join(missing))
 
 overrides = " ".join(f"{key}={json.dumps(values[key])}" for key in values)
 text = (

@@ -57,7 +57,7 @@ Each function is packaged from `backend/lambda_functions/<Name>` (`sam build` in
 - **Search** — logs only
 - **GetByID** — `GetItem` on Places_Places
 - **Submit** — `PutItem`, `ConditionCheckItem`, `TransactWriteItems` on both tables
-- **AdminReview** — `GetItem` + `UpdateItem` on Places_Places; `Query` on `status-ts-index`
+- **AdminReview** — `UpdateItem` on Places_Places
 - **SubmitAIAutofill** — `GetItem` + `UpdateItem` on both tables
 - **AlgoliaSync** — stream read on Places_Places stream; `sqs:SendMessage` to its DLQ
 
@@ -97,15 +97,32 @@ Secret **values** are NoEcho CloudFormation parameters. They are not SSM paramet
 
 `deploy.sh --env-file PATH` parses **only** these names (never `source`s the file):
 
+**Required**
+
 ```
 ALGOLIA_APP_ID
 ALGOLIA_SEARCH_API_KEY
 ALGOLIA_WRITE_API_KEY
+```
+
+**Optional** (missing or `--skip-key` → empty NoEcho param; warning logs the key name only)
+
+```
 GOOGLE_PLACES_API_KEY
 ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY
 ```
 
-It writes a **mode-600** `samconfig.toml` under `mktemp -d /tmp/plungepalz-places-dev-XXXXXX` (outside the repo) and runs `sam deploy --config-file` against that file. A `trap` deletes the temp dir on exit.
+The MVP deploy skips provider keys:
+
+```bash
+./deploy.sh --env-file /path/to/uncommitted/secrets.env \
+  --skip-key GOOGLE_PLACES_API_KEY \
+  --skip-key ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY
+```
+
+With the Anthropic key empty, `POST /submit/ai_autofill` is expected to return **503** `not configured` (handled in backend code).
+
+It writes a **mode-600** `samconfig.toml` under `mktemp -d /tmp/plungepalz-places-dev-XXXXXX` (outside the repo) and runs `sam deploy --config-file` against that file. A `trap` on `EXIT INT TERM HUP` deletes the temp dir (idempotent; signals exit non-zero).
 
 Do **not** put secret values in:
 
@@ -121,10 +138,12 @@ Prerequisites: AWS CLI, SAM CLI, Python 3.13 (for layer/function builds), profil
 
 ```bash
 cd backend/infrastructure/dev
-./deploy.sh --env-file /path/to/uncommitted/secrets.env
+./deploy.sh --env-file /path/to/uncommitted/secrets.env \
+  --skip-key GOOGLE_PLACES_API_KEY \
+  --skip-key ANTHROPIC_PLUNGEPALZ_PLACES_AI_GENERATOR_API_KEY
 ```
 
-`--env-file` is required. `--yes` is accepted (non-interactive) but does not skip the env file. `--guided` is optional.
+`--env-file` is required (Algolia keys required). `--skip-key NAME` is repeatable and allowlisted to the two optional provider keys. `--yes` is accepted (non-interactive) but does not skip the env file. `--guided` is optional.
 
 ### Post-deploy
 
