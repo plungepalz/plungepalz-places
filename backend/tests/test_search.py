@@ -398,5 +398,63 @@ def test_algolia_settings_custom_ranking_newest_first():
     assert ranking.index("typo") < ranking.index("custom")
     assert ranking.index("words") < ranking.index("custom")
     assert "ts_created" in mod.SETTINGS["attributesToRetrieve"]
+    assert "postal_code" in mod.SETTINGS["attributesToRetrieve"]
     assert "created_ts" not in mod.SETTINGS["attributesToRetrieve"]
     assert "ts_created_unix" not in mod.SETTINGS["attributesToRetrieve"]
+    assert mod.SETTINGS["attributesToRetrieve"] == [
+        "place_id",
+        "place_slug",
+        "place_name",
+        "place_type",
+        "address",
+        "city",
+        "state_province",
+        "country",
+        "postal_code",
+        "activity_types",
+        "description",
+        "cover_image",
+        "lat",
+        "lng",
+        "is_approved",
+        "ts_created",
+        "_geoloc",
+    ]
+    assert mod.SETTINGS == {
+        "searchableAttributes": [
+            "place_name",
+            "description",
+            "address",
+            "city",
+            "state_province",
+            "country",
+            "unordered(tags)",
+        ],
+        "attributesForFaceting": [
+            "filterOnly(internal_status)",
+            "filterOnly(visibility)",
+            "filterOnly(place_type)",
+            "filterOnly(activity_types)",
+            "filterOnly(is_approved)",
+        ],
+        "unretrievableAttributes": [
+            "internal_status",
+            "internal_comments",
+        ],
+        "attributesToRetrieve": mod.SETTINGS["attributesToRetrieve"],
+        "customRanking": ["desc(ts_created_unix)"],
+        "ranking": [
+            "typo",
+            "geo",
+            "words",
+            "filters",
+            "proximity",
+            "attribute",
+            "exact",
+            "custom",
+        ],
+        "hitsPerPage": 100,
+        "maxValuesPerFacet": 20,
+        "ignorePlurals": True,
+        "removeStopWords": True,
+    }
