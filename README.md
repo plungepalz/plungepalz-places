@@ -4,4 +4,6 @@ Cold plunge and sauna location discovery for PlungePalz.
 
 ## Project Structure
 
-- **[plungepalz-places-backend](plungepalz-places-backend/)** — AWS serverless API (Lambda, DynamoDB, Anthropic API, Google Places)
+- **backend** — AWS serverless API (Lambda, DynamoDB, Google Places)
+- **backend-local-mockup** — A local mockup of the backend which will contain sample data
+- **frontend** — this will be the local first front end Next.js / React app
