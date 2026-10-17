@@ -8,8 +8,9 @@ import PlaceDetailsPanel from '@/components/PlaceDetailsPanel';
 import PlacesList from '@/components/PlacesList';
 import { client, isMockMode } from '@/lib/client';
 import { isPlacesApiError } from '@/lib/errors';
-import { listLocationName } from '@/lib/list-location-name';
+import { listLocationName, locationChipLabel } from '@/lib/list-location-name';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
+import { shouldCollapseList } from '@/lib/map-camera';
 import { mergeLocalPlaces } from '@/lib/merge-local-places';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
@@ -53,10 +54,13 @@ export default function HomePage() {
 
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
   const [mapZoom, setMapZoom] = useState<number | null>(null);
+  const [leftPreset, setLeftPreset] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(1280);
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const requestIdRef = useRef(0);
   const filterSlotRef = useRef<HTMLDivElement>(null);
   const [chromeTop, setChromeTop] = useState(96);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
@@ -149,6 +153,8 @@ export default function HomePage() {
   const handleLocationChange = (next: LocationPreset) => {
     setDetailsPlaceId(null);
     setAddPlaceOpen(false);
+    setSelectedPlaceId(null);
+    setLeftPreset(false);
     setLocation(next);
     setMapZoom(next.zoom);
     setFlyRequest({
@@ -184,8 +190,13 @@ export default function HomePage() {
     setFlyRequest(null);
   }, []);
 
+  const handleUserCameraMove = useCallback(() => {
+    setLeftPreset(true);
+  }, []);
+
   const handleCloseDetails = useCallback(() => {
     setDetailsPlaceId(null);
+    setSelectedPlaceId(null);
   }, []);
 
   const handleCloseAddPlace = useCallback(() => {
@@ -195,6 +206,7 @@ export default function HomePage() {
 
   const handleOpenAddPlace = () => {
     setDetailsPlaceId(null);
+    setSelectedPlaceId(null);
     setAddPlaceOpen(true);
   };
 
@@ -230,24 +242,36 @@ export default function HomePage() {
   };
 
   const locationName = useMemo(
-    () => listLocationName({ hasMap, zoom: mapZoom, places, location }),
-    [hasMap, mapZoom, places, location]
+    () => listLocationName({ hasMap, zoom: mapZoom, places, location, leftPreset }),
+    [hasMap, mapZoom, places, location, leftPreset]
   );
+  const chipLabel = locationChipLabel(location, leftPreset);
 
   const panelOpen = Boolean(detailsPlaceId) || addPlaceOpen;
+  const collapseList = shouldCollapseList(viewportWidth, panelOpen);
+
+  useLayoutEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useLayoutEffect(() => {
     const slot = filterSlotRef.current;
     if (!slot) return;
     const update = () => {
-      const chrome = slot.firstElementChild as HTMLElement | null;
-      const bottom = chrome?.getBoundingClientRect().bottom ?? 96;
+      const bar =
+        (slot.querySelector('[data-filter-chrome]') as HTMLElement | null) ??
+        (slot.firstElementChild as HTMLElement | null);
+      const bottom = bar?.getBoundingClientRect().bottom ?? 96;
       setChromeTop(Math.ceil(bottom + 8));
     };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(slot);
-    if (slot.firstElementChild) observer.observe(slot.firstElementChild);
+    const bar = slot.querySelector('[data-filter-chrome]') ?? slot.firstElementChild;
+    if (bar) observer.observe(bar);
     return () => observer.disconnect();
   }, []);
 
@@ -269,19 +293,26 @@ export default function HomePage() {
           onSelectPlace={handleSelectFromMap}
           onHoverPlace={setHoveredPlaceId}
           onViewportChange={handleViewportChange}
+          onUserCameraMove={handleUserCameraMove}
+          hintTop={chromeTop}
           mapboxToken={mapboxToken}
         />
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-20">
         <div
-          className="pointer-events-auto absolute bottom-4 left-4 w-[min(100%-2rem,380px)]"
-          style={{ top: chromeTop }}
+          data-places-list-slot
+          className={`absolute bottom-4 left-4 w-[min(100%-2rem,380px)] ${
+            collapseList ? 'hidden' : 'pointer-events-auto'
+          }`}
+          style={{ top: chromeTop, transition: 'top 200ms ease' }}
+          aria-hidden={collapseList}
         >
           <PlacesList
             places={places}
             total={displayTotal}
             selectedPlaceId={selectedPlaceId}
+            hoveredPlaceId={hoveredPlaceId}
             favorites={favorites}
             onSelectPlace={handleSelectFromList}
             onHoverPlace={setHoveredPlaceId}
@@ -291,6 +322,7 @@ export default function HomePage() {
             isLoading={isLoading}
             locationName={locationName}
             error={error}
+            filterHeaderInset={filtersOpen}
           />
         </div>
       </div>
@@ -299,6 +331,7 @@ export default function HomePage() {
       <div ref={filterSlotRef} className="pointer-events-none absolute inset-0 z-40 px-4 pt-4">
         <FilterBar
           location={location}
+          locationLabel={chipLabel}
           onLocationChange={handleLocationChange}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -318,6 +351,7 @@ export default function HomePage() {
           onApprovedOnlyToggle={() => setApprovedOnly((prev) => !prev)}
           mockMode={isMockMode}
           onAddPlace={handleOpenAddPlace}
+          onFiltersOpenChange={setFiltersOpen}
         />
       </div>
 

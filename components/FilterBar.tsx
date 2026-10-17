@@ -7,6 +7,7 @@ import type { ActivityType, PlaceType } from '@/lib/types';
 
 interface FilterBarProps {
   location: LocationPreset;
+  locationLabel?: string;
   onLocationChange: (location: LocationPreset) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
@@ -18,10 +19,12 @@ interface FilterBarProps {
   onApprovedOnlyToggle: () => void;
   mockMode: boolean;
   onAddPlace: () => void;
+  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 export default function FilterBar({
   location,
+  locationLabel,
   onLocationChange,
   searchQuery,
   onSearchChange,
@@ -33,9 +36,14 @@ export default function FilterBar({
   onApprovedOnlyToggle,
   mockMode,
   onAddPlace,
+  onFiltersOpenChange,
 }: FilterBarProps) {
   const [showFilters, setShowFilters] = useState(false);
   const [showLocations, setShowLocations] = useState(false);
+
+  useEffect(() => {
+    onFiltersOpenChange?.(showFilters);
+  }, [showFilters, onFiltersOpenChange]);
   const locationRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,9 +60,12 @@ export default function FilterBar({
 
   return (
     <div className="pointer-events-none relative z-40">
-      <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur">
+      <div
+        data-filter-chrome
+        className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur"
+      >
         <div className="flex items-center gap-2 pr-2 mr-1 border-r border-gray-200">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-500 text-white font-bold">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-white font-bold">
             P
           </div>
           <span className="hidden sm:inline text-sm font-semibold tracking-tight text-gray-900">PlungePalz</span>
@@ -70,7 +81,7 @@ export default function FilterBar({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-            {location.label}
+            {locationLabel ?? location.label}
             <svg className="h-3.5 w-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
@@ -81,8 +92,8 @@ export default function FilterBar({
                 <button
                   key={preset.id}
                   type="button"
-                  className={`block w-full px-3 py-2 text-left text-sm hover:bg-orange-50 ${
-                    preset.id === location.id ? 'font-semibold text-orange-600' : 'text-gray-800'
+                  className={`block w-full px-3 py-2 text-left text-sm hover:bg-brand-soft ${
+                    preset.id === location.id ? 'font-semibold text-brand-selected' : 'text-gray-800'
                   }`}
                   onClick={() => {
                     onLocationChange(preset);
@@ -110,7 +121,7 @@ export default function FilterBar({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h18M6 12h12M10 20h4" />
           </svg>
           {extraFilterCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-orange-500 text-[10px] font-bold text-white">
+            <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-brand text-[10px] font-bold text-white">
               {extraFilterCount}
             </span>
           )}
@@ -123,7 +134,7 @@ export default function FilterBar({
             onClick={() => onActivityToggle(activity)}
             className={`rounded-full px-3.5 py-2 text-sm font-medium transition-colors ${
               selectedActivities.includes(activity)
-                ? 'bg-orange-500 text-white'
+                ? 'bg-brand text-white'
                 : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
             }`}
             aria-pressed={selectedActivities.includes(activity)}
@@ -142,14 +153,14 @@ export default function FilterBar({
             placeholder="Search places, cities..."
             value={searchQuery}
             onChange={(event) => onSearchChange(event.target.value)}
-            className="w-full rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+            className="w-full rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-brand-hover focus:ring-2 focus:ring-brand-soft"
           />
         </div>
 
         <button
           type="button"
           onClick={onAddPlace}
-          className="rounded-full bg-orange-500 px-3.5 py-2 text-sm font-medium text-white hover:bg-orange-600"
+          className="rounded-full bg-brand px-3.5 py-2 text-sm font-medium text-white hover:bg-brand-selected"
           aria-haspopup="dialog"
         >
           Add a place
@@ -160,36 +171,42 @@ export default function FilterBar({
         )}
       </div>
 
-      {showFilters && (
-        <div className="pointer-events-auto relative z-50 mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-lg ring-1 ring-black/5">
-          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Place type</span>
-          {(Object.keys(PLACE_TYPE_LABELS) as PlaceType[]).map((type) => (
-            <button
-              key={type}
-              type="button"
-              onClick={() => onPlaceTypeToggle(type)}
-              className={`rounded-full px-3 py-1.5 text-xs font-medium ${
-                selectedPlaceTypes.includes(type)
-                  ? 'bg-gray-900 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-              aria-pressed={selectedPlaceTypes.includes(type)}
-            >
-              {PLACE_TYPE_LABELS[type]}
-            </button>
-          ))}
+      <div
+        data-place-type-filters
+        className={`pointer-events-auto absolute left-0 right-0 top-full z-50 mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-[0_12px_32px_rgba(0,0,0,0.16)] ring-1 ring-black/10 backdrop-blur-sm transition duration-200 ease-out ${
+          showFilters
+            ? 'translate-y-0 opacity-100'
+            : 'pointer-events-none invisible -translate-y-1 opacity-0'
+        }`}
+        aria-hidden={!showFilters}
+      >
+        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Place type</span>
+        {(Object.keys(PLACE_TYPE_LABELS) as PlaceType[]).map((type) => (
           <button
+            key={type}
             type="button"
-            onClick={onApprovedOnlyToggle}
+            onClick={() => onPlaceTypeToggle(type)}
             className={`rounded-full px-3 py-1.5 text-xs font-medium ${
-              approvedOnly ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              selectedPlaceTypes.includes(type)
+                ? 'bg-gray-900 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
-            aria-pressed={approvedOnly}
+            aria-pressed={selectedPlaceTypes.includes(type)}
           >
-            Approved only
+            {PLACE_TYPE_LABELS[type]}
           </button>
-        </div>
-      )}
+        ))}
+        <button
+          type="button"
+          onClick={onApprovedOnlyToggle}
+          className={`rounded-full px-3 py-1.5 text-xs font-medium ${
+            approvedOnly ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          }`}
+          aria-pressed={approvedOnly}
+        >
+          Approved only
+        </button>
+      </div>
     </div>
   );
 }

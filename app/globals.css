@@ -4,6 +4,19 @@
 :root {
   --background: #e8e4dc;
   --foreground: #171717;
+  --brand-orange: #f97316;
+  --brand-orange-hover: #fb923c;
+  --brand-orange-selected: #ea580c;
+  --brand-orange-soft: #ffedd5;
+  --brand-orange-deep: #c2410c;
+}
+
+@theme inline {
+  --color-brand: var(--brand-orange);
+  --color-brand-hover: var(--brand-orange-hover);
+  --color-brand-selected: var(--brand-orange-selected);
+  --color-brand-soft: var(--brand-orange-soft);
+  --color-brand-deep: var(--brand-orange-deep);
 }
 
 html,

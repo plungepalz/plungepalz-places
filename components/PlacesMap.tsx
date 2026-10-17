@@ -1,10 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import MapGL, { Layer, Marker, Source } from 'react-map-gl/mapbox';
-import type { MapMouseEvent, MapRef } from 'react-map-gl/mapbox';
+import type { MapMouseEvent, MapRef, ViewStateChangeEvent } from 'react-map-gl/mapbox';
 import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
-import { ZERO_PADDING, flyToThenOnMoveend, listPanelRightEdge, worldwideFraming } from '@/lib/map-camera';
+import { BRAND } from '@/lib/brand';
+import {
+  CAMERA_DURATION,
+  ZERO_PADDING,
+  easeOutCubic,
+  flyPadding,
+  flyToThenOnMoveend,
+  isUserMapMove,
+  mapControlsRightPx,
+  pinHintCenterX,
+  worldwideFraming,
+} from '@/lib/map-camera';
+import { clusterLeafHasPlace, placesMapLayerSpecs } from '@/lib/map-style';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -29,47 +41,16 @@ interface PlacesMapProps {
   onSelectPlace: (placeId: string) => void;
   onHoverPlace: (placeId: string | null) => void;
   onViewportChange: (bounds: MapBounds, zoom: number) => void;
+  onUserCameraMove?: () => void;
+  /** Pixels from the top so the pin-drop hint sits below the filter chrome. */
+  hintTop?: number;
   mapboxToken?: string;
 }
-
-/** Right-side details / add-place drawer: 28rem + right-4 + gap. */
-const PANEL_PADDING_RIGHT = 496;
 
 function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
   if (flyRequest.zoom == null) return currentZoom;
   if (flyRequest.exactZoom) return flyRequest.zoom;
   return Math.max(currentZoom, flyRequest.zoom);
-}
-
-function flyPadding(
-  panelOpen: boolean,
-  exactZoom: boolean | undefined,
-  size: { width: number; height: number }
-) {
-  const maxHorizontal = Math.max(0, size.width - 80);
-  const maxVertical = Math.max(0, size.height - 80);
-  // Line the padded viewport up with the list’s right edge (x≈396).
-  let left = listPanelRightEdge(size.width);
-  let right = panelOpen
-    ? Math.min(PANEL_PADDING_RIGHT, Math.floor(maxHorizontal * 0.45))
-    : exactZoom
-      ? 0
-      : Math.min(56, Math.floor(maxHorizontal * 0.45));
-  if (left + right > maxHorizontal && left + right > 0) {
-    const scale = maxHorizontal / (left + right);
-    left = Math.floor(left * scale);
-    right = Math.floor(right * scale);
-  }
-  if (exactZoom) {
-    // Worldwide / location chips ignore the drawer so the list gap stays stable.
-    return { top: 0, bottom: 0, left, right: 0 };
-  }
-  return {
-    top: Math.min(96, Math.floor(maxVertical * 0.25)),
-    bottom: Math.min(48, Math.floor(maxVertical * 0.15)),
-    left,
-    right,
-  };
 }
 
 function paddingIsZero(map: MapboxMap): boolean {
@@ -95,20 +76,22 @@ function clearPaddingKeepView(map: MapboxMap): void {
 
 function MapZoomControls({
   panelOpen,
+  canvasWidth,
   onZoomIn,
   onZoomOut,
   onLocate,
 }: {
   panelOpen: boolean;
+  canvasWidth: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onLocate: () => void;
 }) {
   return (
     <div
-      className={`pointer-events-auto absolute bottom-6 z-[25] flex flex-col gap-2 ${
-        panelOpen ? 'right-[min(calc(100%-3.5rem),calc(1.25rem+28rem))]' : 'right-4'
-      }`}
+      data-map-controls
+      className="pointer-events-auto absolute bottom-6 z-[25] flex flex-col gap-2"
+      style={{ right: mapControlsRightPx(canvasWidth, panelOpen) }}
     >
       <button
         type="button"
@@ -164,7 +147,7 @@ function addFallbackOrangePin(map: MapboxMap, id: string): void {
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  ctx.fillStyle = '#f97316';
+  ctx.fillStyle = BRAND.orange;
   ctx.beginPath();
   ctx.moveTo(32, 76);
   ctx.quadraticCurveTo(8, 44, 8, 28);
@@ -217,18 +200,43 @@ export default function PlacesMap({
   onSelectPlace,
   onHoverPlace,
   onViewportChange,
+  onUserCameraMove,
+  hintTop = 96,
   mapboxToken,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const flyEndHandlerRef = useRef<(() => void) | null>(null);
+  const flightTagRef = useRef<string | null>(null);
   const [imagesReady, setImagesReady] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
+  const [highlightedClusterId, setHighlightedClusterId] = useState<number | null>(null);
+  const [clusterQueryTick, setClusterQueryTick] = useState(0);
+  const featureStateRef = useRef<{ hover: string | null; selected: string | null }>({
+    hover: null,
+    selected: null,
+  });
+  const [canvasSize, setCanvasSize] = useState(() => ({
+    width: typeof window === 'undefined' ? 1280 : window.innerWidth,
+    height: typeof window === 'undefined' ? 800 : window.innerHeight,
+  }));
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => setCanvasSize({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const geojson = useMemo(
     () => ({
       type: 'FeatureCollection' as const,
       features: places.map((place) => ({
         type: 'Feature' as const,
+        id: place.place_id,
         properties: {
           place_id: place.place_id,
           place_name: place.place_name,
@@ -262,9 +270,8 @@ export default function PlacesMap({
     const map = mapRef.current?.getMap();
     if (!map) return;
     void Promise.all([
-      ensurePinImage(map, 'pin-cluster', pinSvg('#111111', false)),
-      ensurePinImage(map, 'pin-place', pinSvg('#f97316', true)),
-      ensurePinImage(map, 'pin-place-active', pinSvg('#ea580c', true)),
+      ensurePinImage(map, 'pin-place', pinSvg(BRAND.orange, true)),
+      ensurePinImage(map, 'pin-place-active', pinSvg(BRAND.orangeSelected, true)),
     ]).finally(() => setImagesReady(true));
     reportViewport();
   }, [reportViewport]);
@@ -282,6 +289,83 @@ export default function PlacesMap({
     if (!map) return;
     clearPaddingKeepView(map);
   }, [detailsOpen]);
+
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !imagesReady) return;
+    const prev = featureStateRef.current;
+    const clear = (id: string | null, key: 'hover' | 'selected') => {
+      if (!id) return;
+      try {
+        map.removeFeatureState({ source: 'places', id }, key);
+      } catch {
+        /* source or feature may not exist at this zoom */
+      }
+    };
+    const set = (id: string | null, key: 'hover' | 'selected') => {
+      if (!id) return;
+      try {
+        map.setFeatureState({ source: 'places', id }, { [key]: true });
+      } catch {
+        /* clustered-away points have no source feature */
+      }
+    };
+    if (prev.hover !== hoveredPlaceId) {
+      clear(prev.hover, 'hover');
+      set(hoveredPlaceId, 'hover');
+    }
+    if (prev.selected !== selectedPlaceId) {
+      clear(prev.selected, 'selected');
+      set(selectedPlaceId, 'selected');
+    }
+    featureStateRef.current = { hover: hoveredPlaceId, selected: selectedPlaceId };
+  }, [hoveredPlaceId, selectedPlaceId, imagesReady]);
+
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    const placeId = hoveredPlaceId || selectedPlaceId;
+    if (!map || !imagesReady || !placeId) {
+      setHighlightedClusterId(null);
+      return;
+    }
+    const source = map.getSource('places') as GeoJSONSource | undefined;
+    if (!source?.getClusterLeaves) {
+      setHighlightedClusterId(null);
+      return;
+    }
+    const clusters = map.queryRenderedFeatures({ layers: ['clusters'] }).slice(0, 12);
+    if (clusters.length === 0) {
+      setHighlightedClusterId(null);
+      return;
+    }
+    let cancelled = false;
+    let pending = clusters.length;
+    let found = false;
+    for (const feature of clusters) {
+      const clusterId = Number(
+        (feature as { properties?: { cluster_id?: number | string } }).properties?.cluster_id
+      );
+      if (!Number.isFinite(clusterId)) {
+        pending -= 1;
+        continue;
+      }
+      source.getClusterLeaves(clusterId, 80, 0, (error, leaves) => {
+        if (cancelled || found) return;
+        pending -= 1;
+        const rows = (leaves ?? []) as Array<{ properties?: { place_id?: string } }>;
+        if (!error && clusterLeafHasPlace(rows, placeId)) {
+          found = true;
+          setHighlightedClusterId(clusterId);
+          return;
+        }
+        if (pending <= 0) setHighlightedClusterId(null);
+      });
+    }
+    if (pending <= 0 && !found) setHighlightedClusterId(null);
+    return () => {
+      cancelled = true;
+    };
+  }, [hoveredPlaceId, selectedPlaceId, imagesReady, clusterQueryTick]);
 
   useEffect(() => {
     if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;
@@ -316,8 +400,10 @@ export default function PlacesMap({
       map.off('moveend', flyEndHandlerRef.current);
       flyEndHandlerRef.current = null;
     }
+    flightTagRef.current = flyRequest.exactZoom ? 'preset' : 'place';
     const onFlyEnd = () => {
       flyEndHandlerRef.current = null;
+      flightTagRef.current = null;
       if (detailsOpenRef.current) return;
       const live = mapRef.current?.getMap();
       if (!live) return;
@@ -337,7 +423,8 @@ export default function PlacesMap({
       {
         center: [longitude, latitude],
         zoom,
-        duration: 800,
+        duration: flyRequest.exactZoom ? CAMERA_DURATION.preset : CAMERA_DURATION.place,
+        easing: easeOutCubic,
         padding,
         retainPadding: flyRequest.exactZoom ? false : undefined,
       },
@@ -353,7 +440,8 @@ export default function PlacesMap({
     if (!detailsOpen) {
       clearPaddingKeepView(map);
     }
-    map.zoomTo(map.getZoom() + delta, { duration: 200 });
+    onUserCameraMove?.();
+    map.zoomTo(map.getZoom() + delta, { duration: CAMERA_DURATION.zoom, easing: easeOutCubic });
   };
 
   const locateMe = () => {
@@ -364,10 +452,12 @@ export default function PlacesMap({
     setLocateError(null);
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        onUserCameraMove?.();
         mapRef.current?.flyTo({
           center: [position.coords.longitude, position.coords.latitude],
           zoom: 11,
-          duration: 900,
+          duration: CAMERA_DURATION.locate,
+          easing: easeOutCubic,
         });
       },
       (err) => {
@@ -398,7 +488,13 @@ export default function PlacesMap({
         if (map && !detailsOpen) {
           clearPaddingKeepView(map);
         }
-        mapRef.current?.easeTo({ center: clusterCenter, zoom, duration: 500 });
+        onUserCameraMove?.();
+        mapRef.current?.easeTo({
+          center: clusterCenter,
+          zoom,
+          duration: CAMERA_DURATION.cluster,
+          easing: easeOutCubic,
+        });
       });
       return;
     }
@@ -420,17 +516,100 @@ export default function PlacesMap({
     const props = feature?.properties;
     if (locationPickMode) {
       map.getCanvas().style.cursor = props?.cluster ? 'pointer' : 'crosshair';
+    } else if (props?.cluster || props?.place_id) {
+      map.getCanvas().style.cursor = 'pointer';
     } else {
-      map.getCanvas().style.cursor = feature ? 'pointer' : '';
+      map.getCanvas().style.cursor = '';
     }
-    onHoverPlace(props?.place_id && !props.cluster ? props.place_id : null);
   };
+
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !imagesReady) return;
+    const pinLayers = ['unclustered-point', 'unclustered-point-hover', 'unclustered-point-selected'];
+    const placeIdFromFeatures = (features: unknown): string | null => {
+      const first = Array.isArray(features) ? features[0] : undefined;
+      const props = (first as { properties?: { place_id?: string } } | undefined)?.properties;
+      return props?.place_id ?? null;
+    };
+    const onEnter = (event: { features?: unknown; point?: { x: number; y: number } }) => {
+      const placeId = placeIdFromFeatures(event.features);
+      map.getCanvas().style.cursor = locationPickMode ? 'crosshair' : 'pointer';
+      if (placeId && !locationPickMode) onHoverPlace(placeId);
+    };
+    const onLeave = (event: { point?: { x: number; y: number } }) => {
+      const hits = event.point
+        ? map.queryRenderedFeatures([event.point.x, event.point.y], { layers: pinLayers })
+        : [];
+      const nextId = placeIdFromFeatures(hits);
+      if (nextId && !locationPickMode) {
+        onHoverPlace(nextId);
+        return;
+      }
+      map.getCanvas().style.cursor = locationPickMode ? 'crosshair' : '';
+      if (!locationPickMode) onHoverPlace(null);
+    };
+    let attached = false;
+    const attach = () => {
+      if (attached || !map.getLayer('unclustered-point')) return;
+      attached = true;
+      for (const layer of pinLayers) {
+        map.on('mouseenter', layer, onEnter);
+        map.on('mouseleave', layer, onLeave);
+      }
+    };
+    attach();
+    map.on('idle', attach);
+    return () => {
+      map.off('idle', attach);
+      if (!attached) return;
+      for (const layer of pinLayers) {
+        map.off('mouseenter', layer, onEnter);
+        map.off('mouseleave', layer, onLeave);
+      }
+    };
+  }, [imagesReady, locationPickMode, onHoverPlace]);
+
+  const handleMoveEnd = useCallback(
+    (event: ViewStateChangeEvent) => {
+      reportViewport();
+      setClusterQueryTick((tick) => tick + 1);
+      if (isUserMapMove(event as { originalEvent?: unknown }, flightTagRef.current)) {
+        onUserCameraMove?.();
+      }
+    },
+    [onUserCameraMove, reportViewport]
+  );
+
+  const pinHint = locationPickMode ? (
+    <div
+      data-pin-hint
+      className="pointer-events-none absolute z-20 -translate-x-1/2 rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white shadow-lg"
+      style={{ left: pinHintCenterX(canvasSize.width, panelOpen), top: hintTop }}
+    >
+      Click the map to drop a pin
+    </div>
+  ) : null;
+
+  const zoomControls = (
+    <MapZoomControls
+      panelOpen={panelOpen}
+      canvasWidth={canvasSize.width}
+      onZoomIn={() => zoomBy(1)}
+      onZoomOut={() => zoomBy(-1)}
+      onLocate={locateMe}
+    />
+  );
 
   const accessToken = resolveMapboxToken(mapboxToken);
 
   if (!accessToken) {
     return (
-      <div data-places-map className="relative flex h-full w-full items-center justify-center bg-[#e8e4dc]">
+      <div
+        ref={containerRef}
+        data-places-map
+        className="relative flex h-full w-full items-center justify-center bg-[#e8e4dc]"
+      >
         <div className="mx-6 max-w-md rounded-2xl bg-white p-8 text-center shadow-lg">
           <h3 className="text-lg font-semibold text-gray-900">Mapbox token required</h3>
           <p className="mt-2 text-sm leading-relaxed text-gray-600">
@@ -440,20 +619,14 @@ export default function PlacesMap({
             placeholder are treated as no token. The list and filters still work.
           </p>
         </div>
-        <MapZoomControls
-          panelOpen={panelOpen}
-          onZoomIn={() => zoomBy(1)}
-          onZoomOut={() => zoomBy(-1)}
-          onLocate={locateMe}
-        />
+        {pinHint}
+        {zoomControls}
       </div>
     );
   }
 
-  const highlightId = hoveredPlaceId || selectedPlaceId || '';
-
   return (
-    <div data-places-map className="relative h-full w-full">
+    <div ref={containerRef} data-places-map className="relative h-full w-full">
       <MapGL
         ref={mapRef}
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
@@ -462,10 +635,20 @@ export default function PlacesMap({
         mapboxAccessToken={accessToken}
         attributionControl
         style={{ width: '100%', height: '100%' }}
-        interactiveLayerIds={imagesReady ? ['clusters', 'cluster-count', 'unclustered-point'] : []}
+        interactiveLayerIds={
+          imagesReady
+            ? [
+                'clusters',
+                'cluster-count',
+                'unclustered-point',
+                'unclustered-point-hover',
+                'unclustered-point-selected',
+              ]
+            : []
+        }
         cursor="auto"
         onLoad={handleLoad}
-        onMoveEnd={reportViewport}
+        onMoveEnd={handleMoveEnd}
         onClick={handleMapClick}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => {
@@ -475,60 +658,29 @@ export default function PlacesMap({
         }}
       >
         {imagesReady && (
-          <Source id="places" type="geojson" data={geojson} cluster clusterMaxZoom={14} clusterRadius={60}>
-            <Layer
-              id="unclustered-point"
-              type="symbol"
-              filter={['!', ['has', 'point_count']]}
-              layout={{
-                'icon-image': [
-                  'case',
-                  ['==', ['get', 'place_id'], highlightId],
-                  'pin-place-active',
-                  'pin-place',
-                ],
-                'icon-anchor': 'bottom',
-                'icon-allow-overlap': true,
-                'icon-ignore-placement': true,
-                'icon-size': [
-                  'case',
-                  ['==', ['get', 'place_id'], selectedPlaceId ?? ''],
-                  1.25,
-                  ['==', ['get', 'place_id'], hoveredPlaceId ?? ''],
-                  1.15,
-                  1,
-                ],
-              }}
-            />
-            <Layer
-              id="clusters"
-              type="symbol"
-              filter={['has', 'point_count']}
-              layout={{
-                'icon-image': 'pin-cluster',
-                'icon-anchor': 'bottom',
-                'icon-allow-overlap': true,
-                'icon-ignore-placement': true,
-              }}
-            />
-            <Layer
-              id="cluster-count"
-              type="symbol"
-              filter={['has', 'point_count']}
-              layout={{
-                'text-field': ['get', 'point_count_abbreviated'],
-                'text-size': 12,
-                'text-offset': [0, -1.35],
-                'text-allow-overlap': true,
-                'text-ignore-placement': true,
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-              }}
-              paint={{
-                'text-color': '#ffffff',
-                'text-halo-color': '#111111',
-                'text-halo-width': 1.25,
-              }}
-            />
+          <Source
+            id="places"
+            type="geojson"
+            data={geojson}
+            cluster
+            clusterMaxZoom={14}
+            clusterRadius={60}
+            promoteId="place_id"
+          >
+            {placesMapLayerSpecs({
+              hoveredPlaceId,
+              selectedPlaceId,
+              highlightedClusterId,
+            }).map((layer) => (
+              <Layer
+                key={layer.id}
+                id={layer.id}
+                type={layer.type}
+                filter={layer.filter as never}
+                layout={(layer.layout ?? {}) as never}
+                paint={(layer.paint ?? {}) as never}
+              />
+            ))}
           </Source>
         )}
         {draftLocation && (
@@ -541,18 +693,8 @@ export default function PlacesMap({
         )}
       </MapGL>
 
-      {locationPickMode && (
-        <div className="pointer-events-none absolute left-1/2 top-24 z-10 -translate-x-1/2 rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white shadow-lg">
-          Click the map to drop a pin
-        </div>
-      )}
-
-      <MapZoomControls
-        panelOpen={panelOpen}
-        onZoomIn={() => zoomBy(1)}
-        onZoomOut={() => zoomBy(-1)}
-        onLocate={locateMe}
-      />
+      {pinHint}
+      {zoomControls}
       {locateError && (
         <div
           role="status"
