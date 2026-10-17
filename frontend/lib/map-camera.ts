@@ -35,20 +35,28 @@ export interface WorldwideFraming {
   lng: number;
   lat: number;
   panelRight: number;
+  rightPadding: number;
   worldPx: number;
   gap: number;
   overflow: boolean;
 }
 
+export const ZERO_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
+
 /**
  * Zoom and center for the Worldwide preset.
- * When the allowed world is wider than the gap right of the list (typical at
- * 1280×900), put the world edge at lng -170 on the panel’s right edge.
- * When the world fits in the gap (1440×900), keep lng -20.
+ * When the allowed world is wider than the visible gap (list on the left, and
+ * optionally the details drawer on the right), put the world edge at lng -170
+ * on the gap’s left edge. When the world fits, keep lng -20.
  */
-export function worldwideFraming(canvasWidth: number, canvasHeight: number): WorldwideFraming {
-  const panelRight = listPanelRightEdge(canvasWidth);
-  const gap = Math.max(canvasWidth - panelRight, 1);
+export function worldwideFraming(
+  canvasWidth: number,
+  canvasHeight: number,
+  insets?: { left?: number; right?: number }
+): WorldwideFraming {
+  const panelRight = insets?.left ?? listPanelRightEdge(canvasWidth);
+  const rightPadding = insets?.right ?? 0;
+  const gap = Math.max(canvasWidth - panelRight - rightPadding, 1);
   const heightMinZoom = mapboxHeightMinZoom(canvasHeight);
   const widthFitZoom = Math.log2(gap / MERCATOR_TILE_SIZE);
   const zoom = Math.max(heightMinZoom, Math.min(WORLD_FIT_ZOOM_MAX, widthFitZoom));
@@ -57,7 +65,25 @@ export function worldwideFraming(canvasWidth: number, canvasHeight: number): Wor
   const lng = overflow
     ? wrapLng(PACIFIC_SEAM_LNG + (gap / 2 / worldPx) * 360)
     : WORLDWIDE_COMFORT_LNG;
-  return { zoom, lng, lat: WORLDWIDE_LAT, panelRight, worldPx, gap, overflow };
+  return { zoom, lng, lat: WORLDWIDE_LAT, panelRight, rightPadding, worldPx, gap, overflow };
+}
+
+/**
+ * mapbox-gl 3.33 `flyTo()` calls `stop()` first. If a flight is already running,
+ * that fires `moveend` synchronously. A `once('moveend')` attached *before*
+ * `flyTo` is consumed by the interrupt and never sees the new flight end.
+ * Always call `flyTo` first, then attach the listener.
+ */
+export function flyToThenOnMoveend(
+  map: {
+    flyTo: (options: Record<string, unknown>) => unknown;
+    once: (event: string, handler: () => void) => unknown;
+  },
+  options: Record<string, unknown>,
+  onMoveend: () => void
+): void {
+  map.flyTo(options);
+  map.once('moveend', onMoveend);
 }
 
 /** Screen X of a longitude when `centerLng` sits in the middle of the visible gap. */
@@ -66,10 +92,12 @@ export function lngToVisibleX(
   centerLng: number,
   zoom: number,
   canvasWidth: number,
-  panelRight = listPanelRightEdge(canvasWidth)
+  panelRight = listPanelRightEdge(canvasWidth),
+  rightPadding = 0
 ): number {
   const worldPx = mercatorWorldPx(zoom);
-  const visibleCenterX = panelRight + (canvasWidth - panelRight) / 2;
+  const gap = Math.max(canvasWidth - panelRight - rightPadding, 1);
+  const visibleCenterX = panelRight + gap / 2;
   return visibleCenterX + ((lng - centerLng) / 360) * worldPx;
 }
 
@@ -79,9 +107,10 @@ export function lngScreenCopies(
   centerLng: number,
   zoom: number,
   canvasWidth: number,
-  panelRight = listPanelRightEdge(canvasWidth)
+  panelRight = listPanelRightEdge(canvasWidth),
+  rightPadding = 0
 ): number[] {
   const worldPx = mercatorWorldPx(zoom);
-  const base = lngToVisibleX(lng, centerLng, zoom, canvasWidth, panelRight);
+  const base = lngToVisibleX(lng, centerLng, zoom, canvasWidth, panelRight, rightPadding);
   return [base - worldPx, base, base + worldPx];
 }

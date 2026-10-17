@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MapGL, { Layer, Marker, Source } from 'react-map-gl/mapbox';
 import type { MapMouseEvent, MapRef } from 'react-map-gl/mapbox';
 import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
-import { listPanelRightEdge, worldwideFraming } from '@/lib/map-camera';
+import { ZERO_PADDING, flyToThenOnMoveend, listPanelRightEdge, worldwideFraming } from '@/lib/map-camera';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -34,7 +34,6 @@ interface PlacesMapProps {
 
 /** Right-side details / add-place drawer: 28rem + right-4 + gap. */
 const PANEL_PADDING_RIGHT = 496;
-const ZERO_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
 
 function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
   if (flyRequest.zoom == null) return currentZoom;
@@ -62,7 +61,8 @@ function flyPadding(
     right = Math.floor(right * scale);
   }
   if (exactZoom) {
-    return { top: 0, bottom: 0, left, right };
+    // Worldwide / location chips ignore the drawer so the list gap stays stable.
+    return { top: 0, bottom: 0, left, right: 0 };
   }
   return {
     top: Math.min(96, Math.floor(maxVertical * 0.25)),
@@ -228,7 +228,7 @@ export default function PlacesMap({
     if (detailsOpen) return;
     const map = mapRef.current?.getMap();
     if (!map) return;
-    map.setPadding(ZERO_PADDING);
+    clearPaddingKeepView(map);
   }, [detailsOpen]);
 
   useEffect(() => {
@@ -252,7 +252,10 @@ export default function PlacesMap({
     let longitude = flyRequest.longitude;
     let latitude = flyRequest.latitude;
     if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
-      const framing = worldwideFraming(size.width, size.height);
+      const framing = worldwideFraming(size.width, size.height, {
+        left: padding.left,
+        right: padding.right,
+      });
       zoom = framing.zoom;
       longitude = framing.lng;
       latitude = framing.lat;
@@ -273,16 +276,22 @@ export default function PlacesMap({
         padding: ZERO_PADDING,
       });
     };
-    // onFlyComplete nulls flyRequest and would rerun this effect; do not
-    // unregister here or leftover padding would never clear after presets.
+    // mapbox-gl 3.33 flyTo() stop()s any in-flight camera first and fires
+    // moveend synchronously. Attach the listener after flyTo so that interrupt
+    // does not consume this flight's cleanup. Preset flights also pass
+    // retainPadding: false (supported in 3.33) so global padding stays 0.
+    flyToThenOnMoveend(
+      map,
+      {
+        center: [longitude, latitude],
+        zoom,
+        duration: 800,
+        padding,
+        retainPadding: flyRequest.exactZoom ? false : undefined,
+      },
+      onFlyEnd
+    );
     flyEndHandlerRef.current = onFlyEnd;
-    map.once('moveend', onFlyEnd);
-    map.flyTo({
-      center: [longitude, latitude],
-      zoom,
-      duration: 800,
-      padding,
-    });
     onFlyComplete();
   }, [flyRequest, onFlyComplete, panelOpen]);
 

@@ -145,6 +145,8 @@ export default function HomePage() {
   }, [successMessage]);
 
   const handleLocationChange = (next: LocationPreset) => {
+    setDetailsPlaceId(null);
+    setAddPlaceOpen(false);
     setLocation(next);
     setMapZoom(next.zoom);
     setFlyRequest({

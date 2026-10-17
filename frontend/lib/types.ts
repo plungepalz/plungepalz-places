@@ -11,7 +11,10 @@ export interface PlaceSearchResult {
   city: string | null;
   state_province: string | null;
   country: string | null;
-  /** Optional on search and detail payloads; may be omitted or null. */
+  /**
+   * Optional if a payload includes it. Live GET /search and GET /place do not
+   * return postal_code for the MVP; mocks may set it so the drawer can show it.
+   */
   postal_code?: string | null;
   activity_types: ActivityType[];
   description: string | null;

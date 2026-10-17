@@ -10,7 +10,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test"
+    "test": "tsx --test 'lib/**/*.test.ts'"
   },
   "dependencies": {
     "mapbox-gl": "^3.33.0",
