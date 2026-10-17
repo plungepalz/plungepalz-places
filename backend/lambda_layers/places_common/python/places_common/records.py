@@ -231,12 +231,21 @@ def compute_h3(lat: float, lng: float) -> dict[str, str]:
         return {}
 
 
+def prepare_item(item: dict) -> dict:
+    """Python item for DynamoDB resource APIs / resource.meta.client transact writes.
+
+    Converts floats to Decimal and drops empty strings. Do not TypeSerialize
+    first — dynamodb.meta.client already runs boto3's attribute transformer.
+    """
+    return omit_empty_strings(floats_to_decimal(item))
+
+
 def serialize_item(item: dict) -> dict:
-    """Python dict → DynamoDB JSON attribute map (for TransactWriteItems)."""
+    """Python dict → DynamoDB JSON attribute map (low-level client only)."""
     from boto3.dynamodb.types import TypeSerializer
 
     serializer = TypeSerializer()
-    cleaned = omit_empty_strings(floats_to_decimal(item))
+    cleaned = prepare_item(item)
     return {key: serializer.serialize(value) for key, value in cleaned.items()}
 
 

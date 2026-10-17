@@ -18,7 +18,7 @@ from places_common import (
     omit_empty_strings,
     parse_address_parts,
     parse_json_body,
-    serialize_item,
+    prepare_item,
     success_response,
     utc_now,
     validate_submit_body,
@@ -124,14 +124,14 @@ def handler(event, context):
                 {
                     "Put": {
                         "TableName": TABLE_SUBMISSIONS,
-                        "Item": serialize_item(submission),
+                        "Item": prepare_item(submission),
                         "ConditionExpression": "attribute_not_exists(submission_id)",
                     }
                 },
                 {
                     "Put": {
                         "TableName": TABLE_PLACES,
-                        "Item": serialize_item(place),
+                        "Item": prepare_item(place),
                         "ConditionExpression": "attribute_not_exists(place_id)",
                     }
                 },

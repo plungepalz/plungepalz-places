@@ -8,8 +8,15 @@ import os
 import sys
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+
+# generate_place_with_ai.core imports anthropic at module load. Tests mock
+# HTTP/clients; they do not need the real SDK. test_h3_handling replaces this
+# via a monkeypatch fixture before re-importing core.
+if "anthropic" not in sys.modules:
+    sys.modules["anthropic"] = MagicMock()
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 COMMON_LAYER = BACKEND_ROOT / "lambda_layers" / "places_common" / "python"

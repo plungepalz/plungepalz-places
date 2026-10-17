@@ -27,9 +27,9 @@ def _seed(dynamodb_tables, *, verified=False, description="User written copy"):
                 "place_type": place["place_type"],
                 "activity_types": place["activity_types"],
                 "address": place["address"],
-                "lat": float(place["lat"]),
-                "lng": float(place["lng"]),
-                "description": description,
+                "lat": place["lat"],
+                "lng": place["lng"],
+                **({"description": description} if description else {}),
             },
         }
     )
