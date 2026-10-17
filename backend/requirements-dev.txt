@@ -1,0 +1,7 @@
+# Development dependencies for testing and local development
+
+# Testing framework
+pytest>=9.0.0
+
+# H3 geospatial indexing (matches Lambda layer requirement)
+h3>=4,<5

@@ -18,7 +18,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 os.chdir(REPO_ROOT)
-sys.path.insert(0, str(REPO_ROOT / "layers" / "generate_place_with_ai" / "python"))
+sys.path.insert(0, str(REPO_ROOT / "lambda_layers" / "generate_place_with_ai" / "python"))
 
 
 def _load_dotenv():

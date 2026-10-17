@@ -2,7 +2,17 @@
 
 Testing conventions are defined in [`.cursorrules`](../.cursorrules). Summary:
 
-## Structure
+## Automated Tests (pytest)
+
+Run the test suite:
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest tests
+```
+
+## Manual Test Structure
 
 - **Test folders:** `tests/{LambdaName}/Test_XXX/`
 - **Example:** `tests/Places_SubmitAIAutofill/Test_001/`
@@ -16,13 +26,13 @@ Each Test_XXX contains:
 ## Local Testing (No Deploy)
 
 ```bash
-cd plungepalz-places-backend
+cd backend
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001                    # Mocked
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live              # Real Google + Anthropic API
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live --agent-sdk   # Agent SDK (WebFetch/WebSearch)
 ```
 
-For `--agent-sdk`: install `pip install -r layers/generate_place_with_ai/requirements-agent-sdk.txt` first.
+For `--agent-sdk`: install `pip install -r lambda_layers/generate_place_with_ai/requirements-agent-sdk.txt` first.
 
 ## Workflow
 

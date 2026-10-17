@@ -25,7 +25,7 @@ os.chdir(REPO_ROOT)
 
 
 def _load_dotenv():
-    """Load .env from plungepalz-places-backend into os.environ (simple parser, no deps)."""
+    """Load .env from backend into os.environ (simple parser, no deps)."""
     env_path = REPO_ROOT / ".env"
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -39,8 +39,8 @@ def _load_dotenv():
 
 _load_dotenv()
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "layers" / "generate_place_with_ai" / "python"))
-sys.path.insert(0, str(REPO_ROOT / "functions" / "Places_SubmitAIAutofill"))
+sys.path.insert(0, str(REPO_ROOT / "lambda_layers" / "generate_place_with_ai" / "python"))
+sys.path.insert(0, str(REPO_ROOT / "lambda_functions" / "Places_SubmitAIAutofill"))
 
 
 def _load_json(path: Path) -> dict:

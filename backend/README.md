@@ -33,8 +33,8 @@ API Gateway (REST) → Lambda Functions → DynamoDB
 |--------|---------|
 | `docs/` | Architecture, API reference, data schemas, submission flow, roadmap |
 | `infrastructure/` | CloudFormation templates and IaC placeholders |
-| `functions/` | Lambda function handlers (one folder per function) |
-| `layers/` | Lambda layers (e.g. `generate_place_with_ai` for AI autofill logic) |
+| `lambda_functions/` | Lambda function handlers (one folder per function) |
+| `lambda_layers/` | Lambda layers (e.g. `generate_place_with_ai` for AI autofill logic) |
 | `tests/` | Test folders (`{LambdaName}/Test_XXX/`) with instructions, fixtures, and CloudWatch logs |
 | `scripts/` | Local invoke script for testing Lambdas without deploying |
 
@@ -75,11 +75,13 @@ For deployed Lambdas, configure via CloudFormation parameters or the AWS console
 
 ### 3. Upload the Lambda Layer
 
-Package and upload the `generate_place_with_ai` layer (includes `anthropic` SDK):
+Package and upload the `generate_place_with_ai` layer (includes `anthropic` SDK and `h3`):
 
 ```bash
-cd layers/generate_place_with_ai
-pip install -r requirements.txt -t python/
+cd lambda_layers/generate_place_with_ai
+pip install --platform manylinux2014_x86_64 --only-binary=:all: \
+  --implementation cp --python-version 3.14 \
+  -r requirements.txt -t python/
 zip -r generate_place_with_ai.zip python/
 aws lambda publish-layer-version \
   --layer-name generate_place_with_ai \

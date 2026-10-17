@@ -30,7 +30,7 @@ BASE_URL = "https://places.googleapis.com/v1"
 
 if not API_KEY:
     raise SystemExit(
-        "❌ GOOGLE_PLACES_API_KEY not found. Ensure .env exists in plungepalz-places-backend/ with GOOGLE_PLACES_API_KEY=..."
+        "❌ GOOGLE_PLACES_API_KEY not found. Ensure .env exists in backend/ with GOOGLE_PLACES_API_KEY=..."
     )
 
 
@@ -166,6 +166,9 @@ def get_business_images(google_response, max_height_px=400, max_width_px=400):
     """
     Builds direct photo media URLs for every photo in the response,
     preserving the original order. Mirrors the React Native getPhotoUrl() logic.
+    
+    NOTE: URLs are returned WITHOUT the API key. When making requests to these URLs,
+    add the API key via the X-Goog-Api-Key header instead of as a query parameter.
     """
     photos = google_response.get("photos", [])
     image_urls = []
@@ -177,7 +180,6 @@ def get_business_images(google_response, max_height_px=400, max_width_px=400):
                 f"{BASE_URL}/{photo_name}/media"
                 f"?maxHeightPx={max_height_px}"
                 f"&maxWidthPx={max_width_px}"
-                f"&key={API_KEY}"
             )
             image_urls.append(url)
 

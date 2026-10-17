@@ -104,7 +104,7 @@ When adding a new Lambda function, always add it to `docs/ROADMAP.md` under the 
 
 ### Workflow
 
-1. Lambda code in `functions/{LambdaName}/` is the single source of truth — it stays synced with what is deployed to AWS.
+1. Lambda code in `lambda_functions/{LambdaName}/` is the single source of truth — it stays synced with what is deployed to AWS.
 2. When testing a Lambda: create `tests/{LambdaName}/Test_XXX/` (e.g. `tests/Places_SubmitAIAutofill/Test_001/`).
 3. Each Test_XXX folder contains:
    - `testing_instructions.md` — steps, what to look for, datasets
@@ -117,7 +117,7 @@ When adding a new Lambda function, always add it to `docs/ROADMAP.md` under the 
 ### Local Invoke
 
 ```bash
-# From plungepalz-places-backend/
+# From backend/
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001         # Mocked (no API keys)
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live   # Real APIs
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live --agent-sdk   # Agent SDK (WebFetch/WebSearch)
