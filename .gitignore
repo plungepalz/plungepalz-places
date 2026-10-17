@@ -33,4 +33,4 @@ Thumbs.db
 
 # Lambda / AWS
 *.zip
-!layers/**/*.zip
+!backend/lambda_layers/**/*.zip

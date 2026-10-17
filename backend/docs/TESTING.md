@@ -16,7 +16,7 @@ Each Test_XXX contains:
 ## Local Testing (No Deploy)
 
 ```bash
-cd plungepalz-places-backend
+cd backend
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001                    # Mocked
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live              # Real Google + Anthropic API
 python scripts/local_invoke.py Places_SubmitAIAutofill Test_001 --live --agent-sdk   # Agent SDK (WebFetch/WebSearch)
