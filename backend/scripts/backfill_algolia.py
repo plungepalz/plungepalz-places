@@ -13,13 +13,15 @@ Usage (from backend/):
     python scripts/backfill_algolia.py
     python scripts/backfill_algolia.py --limit 50
     python scripts/backfill_algolia.py --prune
+    python scripts/backfill_algolia.py --dry-run --prune
+    python scripts/backfill_algolia.py --prune --confirm-index other_index
 
 Environment (values from env only — never hardcode secrets):
 
     TABLE_PLACES              default Places_Places
     AWS_REGION                default us-east-1
-    ALGOLIA_APP_ID            required unless --dry-run
-    ALGOLIA_WRITE_API_KEY     required unless --dry-run
+    ALGOLIA_APP_ID            required unless --dry-run (also for --dry-run --prune browse)
+    ALGOLIA_WRITE_API_KEY     required unless --dry-run (also for --dry-run --prune browse)
     ALGOLIA_INDEX_NAME        default places_dev
 
 IAM: dynamodb:Scan on Places_Places. AWS credentials use the standard boto3 chain.
@@ -62,6 +64,10 @@ def _region() -> str:
     return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or DEFAULT_REGION
 
 
+def _index_name() -> str:
+    return os.environ.get("ALGOLIA_INDEX_NAME") or DEFAULT_INDEX
+
+
 def _get_table(table_name: str | None = None, region: str | None = None):
     import boto3
 
@@ -74,12 +80,48 @@ def _get_index():
     """Same credential + client setup as Places_AlgoliaSync._get_index."""
     app_id = os.environ.get("ALGOLIA_APP_ID") or ""
     api_key = os.environ.get("ALGOLIA_WRITE_API_KEY") or ""
-    index_name = os.environ.get("ALGOLIA_INDEX_NAME") or DEFAULT_INDEX
+    index_name = _index_name()
     if not app_id or not api_key:
         raise RuntimeError("Algolia write is not configured")
     from algoliasearch.search_client import SearchClient
 
     return SearchClient.create(app_id, api_key).init_index(index_name)
+
+
+def _place_id_of(item: dict | None) -> str | None:
+    if not item:
+        return None
+    raw = item.get("place_id")
+    if raw is None or raw == "":
+        return None
+    return str(raw)
+
+
+def _positive_limit(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid --limit: {value}") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("--limit must be >= 1")
+    return parsed
+
+
+def validate_options(
+    *,
+    prune: bool,
+    limit: int | None,
+    index_name: str,
+    confirm_index: str | None,
+) -> None:
+    if limit is not None and limit < 1:
+        raise ValueError("--limit must be >= 1")
+    if prune and limit is not None:
+        raise ValueError("--prune cannot be combined with --limit")
+    if prune and index_name != DEFAULT_INDEX and confirm_index != index_name:
+        raise ValueError(
+            f"--prune on index {index_name!r} requires --confirm-index {index_name}"
+        )
 
 
 def classify_item(item: dict | None) -> tuple[str, dict[str, Any]]:
@@ -115,11 +157,22 @@ def classify_item(item: dict | None) -> tuple[str, dict[str, Any]]:
     }
 
 
-def iter_table_scan(table, *, limit: int | None = None, page_size: int | None = None) -> Iterator[dict]:
+def iter_table_scan(
+    table,
+    *,
+    limit: int | None = None,
+    page_size: int | None = None,
+    consistent_read: bool = False,
+) -> Iterator[dict]:
     """Paginated Scan using LastEvaluatedKey. Optional page_size forces small pages."""
+    if limit is not None and limit < 1:
+        raise ValueError("--limit must be >= 1")
+
     kwargs: dict[str, Any] = {}
     if page_size is not None:
         kwargs["Limit"] = page_size
+    if consistent_read:
+        kwargs["ConsistentRead"] = True
 
     yielded = 0
     while True:
@@ -183,6 +236,63 @@ def _flush_deletes(index, batch: list[str], summary: dict, *, dry_run: bool, fie
     batch.clear()
 
 
+def _stale_object_ids(index, keep_ids: set[str]) -> list[str]:
+    return [oid for oid in iter_index_object_ids(index) if oid not in keep_ids]
+
+
+def _apply_prune(
+    *,
+    dry_run: bool,
+    index,
+    keep_ids: set[str],
+    summary: dict,
+    upsert_batch_size: int,
+) -> None:
+    if summary["errors"]:
+        summary["prune_skipped"] = "scan_errors"
+        print("Skipping --prune: scan completed with errors", file=sys.stderr)
+        return
+    if summary["scanned"] == 0:
+        summary["prune_skipped"] = "empty_scan"
+        print("Skipping --prune: scan found no items", file=sys.stderr)
+        return
+    if dry_run and index is None:
+        summary["prune_skipped"] = "dry_run"
+        return
+    if index is None:
+        summary["errors"] += 1
+        summary["error_details"].append({"op": "prune", "error": "Algolia index is not configured"})
+        summary["prune_skipped"] = "scan_errors"
+        print("Skipping --prune: Algolia index is not configured", file=sys.stderr)
+        return
+
+    try:
+        stale = _stale_object_ids(index, keep_ids)
+    except Exception as exc:
+        summary["errors"] += 1
+        summary["error_details"].append({"op": "prune", "error": str(exc)})
+        summary["prune_skipped"] = "scan_errors"
+        print("Skipping --prune: failed to browse the index", file=sys.stderr)
+        return
+
+    if dry_run:
+        summary["would_prune"] = len(stale)
+        summary["would_prune_samples"] = stale[:DRY_RUN_SAMPLES]
+        summary["pruned"] = 0
+        return
+
+    prune_batch: list[str] = []
+    try:
+        for object_id in stale:
+            prune_batch.append(object_id)
+            if len(prune_batch) >= upsert_batch_size:
+                _flush_deletes(index, prune_batch, summary, dry_run=False, field="pruned")
+        _flush_deletes(index, prune_batch, summary, dry_run=False, field="pruned")
+    except Exception as exc:
+        summary["errors"] += 1
+        summary["error_details"].append({"op": "prune", "error": str(exc)})
+
+
 def run_backfill(
     *,
     dry_run: bool = False,
@@ -194,12 +304,22 @@ def run_backfill(
     index=None,
     table=None,
     upsert_batch_size: int = UPSERT_BATCH_SIZE,
+    confirm_index: str | None = None,
+    index_name: str | None = None,
 ) -> dict[str, Any]:
     """Scan Places_Places and upsert/delete Algolia objects.
 
     Idempotent: save_objects overwrites by objectID; deletes of missing IDs are ignored.
-    --dry-run never writes and never opens an Algolia client (no credentials needed).
+    --dry-run never writes. --dry-run --prune may browse the index read-only.
     """
+    resolved_index_name = index_name or _index_name()
+    validate_options(
+        prune=prune,
+        limit=limit,
+        index_name=resolved_index_name,
+        confirm_index=confirm_index,
+    )
+
     skipped_reasons: Counter[str] = Counter()
     deleted_reasons: Counter[str] = Counter()
     summary: dict[str, Any] = {
@@ -207,7 +327,7 @@ def run_backfill(
         "prune": prune,
         "table": table_name or _table_name(),
         "region": region or _region(),
-        "index": os.environ.get("ALGOLIA_INDEX_NAME") or DEFAULT_INDEX,
+        "index": resolved_index_name,
         "scanned": 0,
         "indexed": 0,
         "skipped": 0,
@@ -239,8 +359,16 @@ def run_backfill(
     delete_batch: list[str] = []
     ddb_ids: set[str] = set()
 
-    for item in iter_table_scan(counted, limit=limit, page_size=scan_page_size):
+    for item in iter_table_scan(
+        counted,
+        limit=limit,
+        page_size=scan_page_size,
+        consistent_read=prune,
+    ):
         summary["scanned"] += 1
+        keep_id = _place_id_of(item)
+        if keep_id:
+            ddb_ids.add(keep_id)
         try:
             action, details = classify_item(item)
         except Exception as exc:
@@ -248,9 +376,7 @@ def run_backfill(
             summary["error_details"].append({"op": "classify", "error": str(exc)})
             continue
 
-        place_id = details.get("place_id")
-        if place_id:
-            ddb_ids.add(place_id)
+        place_id = details.get("place_id") or keep_id
 
         if action == "skip":
             reason = details.get("reason") or "unknown"
@@ -287,20 +413,14 @@ def run_backfill(
         _flush_objects(index, upsert_batch, summary, dry_run=False)
         _flush_deletes(index, delete_batch, summary, dry_run=False, field="deleted")
 
-    if prune and not dry_run:
-        prune_batch: list[str] = []
-        try:
-            for object_id in iter_index_object_ids(index):
-                if object_id not in ddb_ids:
-                    prune_batch.append(object_id)
-                    if len(prune_batch) >= upsert_batch_size:
-                        _flush_deletes(index, prune_batch, summary, dry_run=False, field="pruned")
-            _flush_deletes(index, prune_batch, summary, dry_run=False, field="pruned")
-        except Exception as exc:
-            summary["errors"] += 1
-            summary["error_details"].append({"op": "prune", "error": str(exc)})
-    elif prune and dry_run:
-        summary["prune_skipped"] = "dry_run"
+    if prune:
+        _apply_prune(
+            dry_run=dry_run,
+            index=index,
+            keep_ids=ddb_ids,
+            summary=summary,
+            upsert_batch_size=upsert_batch_size,
+        )
 
     summary["skipped_reasons"] = dict(skipped_reasons)
     summary["deleted_reasons"] = dict(deleted_reasons)
@@ -318,15 +438,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Scan and map only: print counts and samples, no Algolia writes or credentials",
+        help="Scan and map only: print counts and samples, no Algolia writes",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Max DynamoDB items to process")
+    parser.add_argument(
+        "--limit",
+        type=_positive_limit,
+        default=None,
+        help="Max DynamoDB items to process (must be >= 1; cannot combine with --prune)",
+    )
     parser.add_argument(
         "--prune",
         action="store_true",
-        help="Delete Algolia objects whose objectID is not in the scanned DynamoDB items",
+        help="Delete Algolia objects whose objectID is not in DynamoDB (full scan only)",
+    )
+    parser.add_argument(
+        "--confirm-index",
+        default=None,
+        metavar="NAME",
+        help="Required to --prune an index other than places_dev (must match ALGOLIA_INDEX_NAME)",
     )
     args = parser.parse_args(argv)
+
+    index_name = _index_name()
+    try:
+        validate_options(
+            prune=args.prune,
+            limit=args.limit,
+            index_name=index_name,
+            confirm_index=args.confirm_index,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     index = None
     if not args.dry_run:
@@ -339,10 +481,21 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
+        print(f"Target Algolia index: {index_name}", file=sys.stderr)
+    elif args.prune:
+        try:
+            index = _get_index()
+        except RuntimeError:
+            index = None
 
     try:
         summary = run_backfill(
-            dry_run=args.dry_run, limit=args.limit, prune=args.prune, index=index
+            dry_run=args.dry_run,
+            limit=args.limit,
+            prune=args.prune,
+            index=index,
+            confirm_index=args.confirm_index,
+            index_name=index_name,
         )
     except Exception as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

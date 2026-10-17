@@ -103,15 +103,22 @@ python scripts/backfill_algolia.py --dry-run
 # Upsert/delete to match DynamoDB (idempotent by objectID)
 python scripts/backfill_algolia.py
 
-# Cap how many table items to process
+# Cap how many table items to process (--limit must be >= 1)
 python scripts/backfill_algolia.py --limit 50
 
-# Also delete Algolia objectIDs that are not in the scanned DynamoDB items
-# (off by default; with --limit, prune is relative to the scanned subset)
+# Also delete Algolia objectIDs that are not in DynamoDB (full scan only)
 python scripts/backfill_algolia.py --prune
+
+# Dry-run prune: browse the index read-only and report would_prune (creds required to browse)
+python scripts/backfill_algolia.py --dry-run --prune
+
+# Prune a non-dev index (ALGOLIA_INDEX_NAME must match --confirm-index)
+python scripts/backfill_algolia.py --prune --confirm-index "$ALGOLIA_INDEX_NAME"
 ```
 
-Prints a JSON summary: `scanned`, `indexed`, `skipped` (and `skipped_reasons`), `deleted` (and `deleted_reasons`), `pruned`, `errors`. `--dry-run` also includes a few mapped samples.
+`--prune` cannot be combined with `--limit`. It only runs after a complete scan with **zero errors** and **at least one item**; otherwise it is skipped (`prune_skipped`: `empty_scan` or `scan_errors`) and errors exit nonzero. Every scanned `place_id` is added to the keep set **before** mapping, so a classify/skip failure cannot prune that id. `--prune` uses `ConsistentRead=True` on the DynamoDB Scan. Live runs print the target index name to stderr before writing. Pruning any index other than `places_dev` requires `--confirm-index <name>`.
+
+Prints a JSON summary: `scanned`, `indexed`, `skipped` (and `skipped_reasons`), `deleted` (and `deleted_reasons`), `pruned`, `would_prune` (dry-run prune), `errors`. `--dry-run` also includes a few mapped samples.
 
 ### Environment (env vars only — never commit values)
 

@@ -6,6 +6,8 @@ import importlib.util
 import sys
 from decimal import Decimal
 
+import pytest
+
 from tests.conftest import BACKEND_ROOT, FakeAlgoliaIndex
 from tests.test_algolia_sync import _mod, _place, _stream_record
 
@@ -68,17 +70,22 @@ def test_dry_run_makes_no_writes_and_needs_no_algolia_creds(dynamodb_tables, mon
     fake = FakeAlgoliaIndex()
     fake.objects["stale"] = {"objectID": "stale"}
 
-    summary = mod.run_backfill(dry_run=True, prune=True, index=fake, table=table)
+    summary = mod.run_backfill(dry_run=True, table=table)
 
     assert summary["scanned"] == 2
     assert summary["indexed"] == 1
     assert summary["deleted"] == 1
     assert summary["deleted_reasons"] == {"rejected": 1}
     assert summary["pruned"] == 0
-    assert summary["prune_skipped"] == "dry_run"
     assert summary["samples"]
     assert fake.save_calls == []
     assert fake.delete_calls == []
+    assert fake.browse_calls == []
+    assert fake.objects == {"stale": {"objectID": "stale"}}
+
+    pruned = mod.run_backfill(dry_run=True, prune=True, table=table)
+    assert pruned["prune_skipped"] == "dry_run"
+    assert pruned["pruned"] == 0
     assert fake.browse_calls == []
     assert fake.objects == {"stale": {"objectID": "stale"}}
 
@@ -231,3 +238,169 @@ def test_classify_empty_and_hidden_rejected():
     assert action == "index"
     assert details["object"]["objectID"] == "p1"
     assert details["object"]["_geoloc"]["lat"] == 40.7608
+
+
+def test_prune_rejected_with_limit(dynamodb_tables, fake_algolia):
+    table = dynamodb_tables.Table("Places_Places")
+    _seed(table, _place(place_id="keep"))
+    fake_algolia.objects["keep"] = {"objectID": "keep"}
+    fake_algolia.objects["stale"] = {"objectID": "stale"}
+    mod = load_backfill()
+
+    with pytest.raises(ValueError, match="--prune cannot be combined with --limit"):
+        mod.run_backfill(index=fake_algolia, table=table, prune=True, limit=1)
+    assert "stale" in fake_algolia.objects
+    assert fake_algolia.delete_calls == []
+
+    with pytest.raises(SystemExit) as exc:
+        mod.main(["--prune", "--limit", "5"])
+    assert exc.value.code == 2
+
+
+def test_prune_skips_empty_scan(dynamodb_tables, fake_algolia):
+    table = dynamodb_tables.Table("Places_Places")
+    fake_algolia.objects["stale"] = {"objectID": "stale"}
+    fake_algolia.objects["also-stale"] = {"objectID": "also-stale"}
+    mod = load_backfill()
+    summary = mod.run_backfill(index=fake_algolia, table=table, prune=True)
+    assert summary["scanned"] == 0
+    assert summary["pruned"] == 0
+    assert summary["prune_skipped"] == "empty_scan"
+    assert summary["errors"] == 0
+    assert set(fake_algolia.objects) == {"stale", "also-stale"}
+    assert fake_algolia.delete_calls == []
+
+
+def test_prune_skips_after_classify_error_and_keeps_failed_id(
+    dynamodb_tables, fake_algolia, monkeypatch
+):
+    table = dynamodb_tables.Table("Places_Places")
+    _seed(table, _place(place_id="keep"), _place(place_id="ok"))
+    fake_algolia.objects["keep"] = {"objectID": "keep"}
+    fake_algolia.objects["ok"] = {"objectID": "ok"}
+    fake_algolia.objects["stale"] = {"objectID": "stale"}
+
+    mod = load_backfill()
+    real_classify = mod.classify_item
+
+    def exploding(item):
+        if (item or {}).get("place_id") == "keep":
+            raise RuntimeError("mapping failed")
+        return real_classify(item)
+
+    monkeypatch.setattr(mod, "classify_item", exploding)
+    summary = mod.run_backfill(index=fake_algolia, table=table, prune=True)
+
+    assert summary["errors"] >= 1
+    assert summary["prune_skipped"] == "scan_errors"
+    assert summary["pruned"] == 0
+    assert "stale" in fake_algolia.objects
+    assert "keep" in fake_algolia.objects
+    assert fake_algolia.delete_calls == []
+
+
+def test_limit_below_one_is_rejected(dynamodb_tables, fake_algolia):
+    table = dynamodb_tables.Table("Places_Places")
+    _seed(table, _place(place_id="p1"), _place(place_id="p2"))
+    mod = load_backfill()
+
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="--limit must be >= 1"):
+            mod.run_backfill(index=fake_algolia, table=table, limit=bad)
+        with pytest.raises(ValueError, match="--limit must be >= 1"):
+            list(mod.iter_table_scan(table, limit=bad))
+
+    assert fake_algolia.objects == {}
+    with pytest.raises(SystemExit) as exc0:
+        mod.main(["--limit", "0"])
+    assert exc0.value.code == 2
+    with pytest.raises(SystemExit) as exc_neg:
+        mod.main(["--limit", "-1"])
+    assert exc_neg.value.code == 2
+
+
+def test_dry_run_prune_reports_would_delete_without_writes(dynamodb_tables, fake_algolia):
+    table = dynamodb_tables.Table("Places_Places")
+    _seed(table, _place(place_id="keep"))
+    fake_algolia.objects["keep"] = {"objectID": "keep"}
+    fake_algolia.objects["stale"] = {"objectID": "stale"}
+    fake_algolia.objects["also-stale"] = {"objectID": "also-stale"}
+
+    mod = load_backfill()
+    summary = mod.run_backfill(dry_run=True, prune=True, index=fake_algolia, table=table)
+
+    assert summary["scanned"] == 1
+    assert summary["indexed"] == 1
+    assert summary["pruned"] == 0
+    assert summary.get("prune_skipped") is None
+    assert summary["would_prune"] == 2
+    assert set(summary["would_prune_samples"]) <= {"stale", "also-stale"}
+    assert fake_algolia.save_calls == []
+    assert fake_algolia.delete_calls == []
+    assert fake_algolia.browse_calls
+    assert set(fake_algolia.objects) == {"keep", "stale", "also-stale"}
+
+
+def test_confirm_index_required_to_prune_non_dev(dynamodb_tables, fake_algolia, monkeypatch):
+    table = dynamodb_tables.Table("Places_Places")
+    _seed(table, _place(place_id="keep"))
+    fake_algolia.objects["keep"] = {"objectID": "keep"}
+    fake_algolia.objects["stale"] = {"objectID": "stale"}
+    monkeypatch.setenv("ALGOLIA_INDEX_NAME", "places_prod")
+    mod = load_backfill()
+
+    with pytest.raises(ValueError, match="--confirm-index places_prod"):
+        mod.run_backfill(
+            index=fake_algolia, table=table, prune=True, index_name="places_prod"
+        )
+    assert "stale" in fake_algolia.objects
+
+    summary = mod.run_backfill(
+        index=fake_algolia,
+        table=table,
+        prune=True,
+        index_name="places_prod",
+        confirm_index="places_prod",
+    )
+    assert summary["pruned"] == 1
+    assert "stale" not in fake_algolia.objects
+
+    with pytest.raises(SystemExit) as exc:
+        mod.main(["--prune"])
+    assert exc.value.code == 2
+
+
+def test_prune_scan_uses_consistent_read(dynamodb_tables, fake_algolia):
+    table = dynamodb_tables.Table("Places_Places")
+    _seed(table, _place(place_id="keep"))
+    seen: list[dict] = []
+    original = table.scan
+
+    def wrapped(**kwargs):
+        seen.append(dict(kwargs))
+        return original(**kwargs)
+
+    table.scan = wrapped
+    mod = load_backfill()
+    mod.run_backfill(index=fake_algolia, table=table, prune=True)
+    assert any(call.get("ConsistentRead") is True for call in seen)
+
+    seen.clear()
+    mod.run_backfill(index=fake_algolia, table=table, prune=False)
+    assert seen
+    assert all(not call.get("ConsistentRead") for call in seen)
+
+
+def test_main_prints_target_index_before_live_write(
+    dynamodb_tables, fake_algolia, monkeypatch, capsys
+):
+    table = dynamodb_tables.Table("Places_Places")
+    _seed(table, _place(place_id="p1"))
+    monkeypatch.setenv("ALGOLIA_INDEX_NAME", "places_dev")
+    mod = load_backfill()
+    monkeypatch.setattr(mod, "_get_index", lambda: fake_algolia)
+    code = mod.main([])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "Target Algolia index: places_dev" in captured.err
+    assert "p1" in fake_algolia.objects
