@@ -211,16 +211,6 @@
       "source_url": "https://www.openstreetmap.org/way/107882988"
     },
     {
-      "name": "Cold Plunge Coffee",
-      "place_type": "business",
-      "activity_types": ["cold_plunge", "sauna"],
-      "address": "457 East 300 South, Salt Lake City, UT 84111, USA",
-      "lat": 40.7630802,
-      "lng": -111.8776502,
-      "website": "https://www.coldplungecoffee.com/",
-      "source_url": "https://www.openstreetmap.org/way/595951379"
-    },
-    {
       "name": "Bathhouse Williamsburg",
       "place_type": "business",
       "activity_types": ["sauna", "cold_plunge"],

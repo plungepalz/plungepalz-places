@@ -4,7 +4,7 @@ Run these from `backend/` unless noted.
 
 ## Seed places (`seed_places.py`)
 
-Loads verified real-world sauna and cold plunge venues from `seed_data/places_seed.json` and creates them through the public API (`POST /submit`). It does **not** call AI autofill and does not need provider API keys.
+Loads verified real-world sauna and cold plunge venues from `seed_data/places_seed.json` and creates them through the public API (`POST /submit`). It does **not** call AI autofill and does not need provider API keys. Cold Plunge Coffee (Salt Lake City) was removed from the seed file and rejected in dev — it is a coffee shop, not a cold plunge.
 
 The API base URL is required and is never hardcoded:
 
