@@ -423,8 +423,8 @@ def _call_claude_agent_sdk_populate(
         return None
 
 
-def _compute_h3(lat: float, lng: float) -> tuple[str, str, str]:
-    """Compute h3_r7, h3_r5, h3_r4. Returns ("", "", "") if h3 not available."""
+def _compute_h3(lat: float, lng: float) -> tuple[str | None, str | None, str | None]:
+    """Compute h3_r7, h3_r5, h3_r4. Returns (None, None, None) if h3 not available."""
     try:
         import h3
         h3_r7 = h3.latlng_to_cell(lat, lng, 7)
@@ -432,9 +432,9 @@ def _compute_h3(lat: float, lng: float) -> tuple[str, str, str]:
         h3_r4 = h3.latlng_to_cell(lat, lng, 4)
         return h3_r7, h3_r5, h3_r4
     except ImportError:
-        return "", "", ""
+        return None, None, None
     except Exception:
-        return "", "", ""
+        return None, None, None
 
 
 def _validate_and_sanitise(
@@ -546,9 +546,6 @@ def generate_place_record(
     record = {
         "place_id": place_id,
         "submission_id": submission_id,
-        "h3_r7": "",
-        "h3_r5": "",
-        "h3_r4": "",
         "lat": Decimal(str(lat)),
         "lng": Decimal(str(lng)),
         "place_name": place_name,
@@ -586,9 +583,12 @@ def generate_place_record(
     }
 
     h3_r7, h3_r5, h3_r4 = _compute_h3(float(lat), float(lng))
-    record["h3_r7"] = h3_r7
-    record["h3_r5"] = h3_r5
-    record["h3_r4"] = h3_r4
+    if h3_r7:
+        record["h3_r7"] = h3_r7
+    if h3_r5:
+        record["h3_r5"] = h3_r5
+    if h3_r4:
+        record["h3_r4"] = h3_r4
 
     record = _validate_and_sanitise(record, google_data, place_type, errors)
     record["has_plungepalz_discount"] = _has_discount(record["place_type_metadata"])
