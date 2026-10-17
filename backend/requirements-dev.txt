@@ -5,3 +5,10 @@ pytest>=9.0.0
 
 # H3 geospatial indexing (matches Lambda layer requirement)
 h3>=4,<5
+
+# AWS mocks
+boto3>=1.35.0
+moto[dynamodb]>=5.0.0
+
+# Algolia client (Search + AlgoliaSync runtime; tests mock the index)
+algoliasearch>=3.0.0,<4

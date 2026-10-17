@@ -40,6 +40,7 @@ def _load_dotenv():
 _load_dotenv()
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "lambda_layers" / "generate_place_with_ai" / "python"))
+sys.path.insert(0, str(REPO_ROOT / "lambda_layers" / "places_common" / "python"))
 sys.path.insert(0, str(REPO_ROOT / "lambda_functions" / "Places_SubmitAIAutofill"))
 
 
@@ -49,14 +50,45 @@ def _load_json(path: Path) -> dict:
 
 
 def _build_dynamodb_mock(fixture: dict | None):
-    """Build a mock DynamoDB resource that returns fixture for get_item."""
-    mock_table = MagicMock()
-    mock_table.get_item.return_value = {"Item": fixture} if fixture else {}
-    mock_table.put_item.return_value = None
-    mock_table.update_item.return_value = None
+    """Build a mock DynamoDB resource that returns fixture for get_item.
+
+    If the fixture is a submission, also synthesizes a Places_Places item so
+    the MVP autofill path (enrich existing place) can run locally.
+    """
+    submission = fixture if fixture and fixture.get("submission_id") else None
+    original = (submission or {}).get("original_submission_record_json") or {}
+    place = None
+    if submission:
+        place_id = submission.get("place_id_generated") or "mock-place-id-0001"
+        place = {
+            "place_id": place_id,
+            "submission_id": submission.get("submission_id"),
+            "place_name": original.get("place_name") or "Mock Place",
+            "place_type": original.get("place_type") or "business",
+            "place_slug": "mock-place",
+            "visibility": "public",
+            "internal_status": "in_review",
+            "activity_types": original.get("activity_types") or ["cold_plunge"],
+            "address": original.get("address"),
+            "lat": original.get("lat") or original.get("latitude"),
+            "lng": original.get("lng") or original.get("longitude"),
+            "description": original.get("description") or "",
+        }
+
+    def _table(name):
+        mock_table = MagicMock()
+        if name == os.environ.get("TABLE_SUBMISSIONS", "Places_Submissions"):
+            mock_table.get_item.return_value = {"Item": submission} if submission else {}
+        else:
+            mock_table.get_item.return_value = {"Item": place} if place else (
+                {"Item": fixture} if fixture else {}
+            )
+        mock_table.put_item.return_value = None
+        mock_table.update_item.return_value = None
+        return mock_table
 
     mock_dynamo = MagicMock()
-    mock_dynamo.Table.return_value = mock_table
+    mock_dynamo.Table.side_effect = _table
     return mock_dynamo
 
 
@@ -70,9 +102,9 @@ def _build_mock_generate_place_record():
             "place_id": "mock-place-id-0001",
             "place_slug": "cold-plunge-coffee-salt-lake-city",
             "submission_id": "sub_test_business_001",
-            "h3_r7": "",
-            "h3_r5": "",
-            "h3_r4": "",
+            "h3_r7": "8729abc",
+            "h3_r5": "8529abc",
+            "h3_r4": "8429abc",
             "lat": Decimal("40.7607"),
             "lng": Decimal("-111.8743"),
             "place_name": "Cold Plunge Coffee",

@@ -296,6 +296,7 @@ def _call_claude_api_populate(
     anthropic_api_key: str,
     model_id: str,
     errors: list,
+    max_tokens: int = 1024,
 ) -> dict | None:
     """Invoke Claude via Anthropic API with tool_use. Returns parsed tool output."""
     if not anthropic_api_key or not anthropic_api_key.strip():
@@ -336,7 +337,7 @@ def _call_claude_api_populate(
     try:
         response = client.messages.create(
             model=model_id,
-            max_tokens=1024,
+            max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
             tools=tools,
             tool_choice={"type": "tool", "name": "populate_place_listing"},
@@ -474,6 +475,7 @@ def generate_place_record(
     anthropic_api_key: str,
     model_id: str,
     submission_id: str,
+    max_tokens: int = 1024,
 ) -> dict:
     """
     Generate a fully populated Places_Places record using Google Places + Claude (Anthropic API).
@@ -487,6 +489,7 @@ def generate_place_record(
         anthropic_api_key: Anthropic API key for Claude
         model_id: Claude model (e.g. claude-3-5-haiku-latest)
         submission_id: For traceability
+        max_tokens: Anthropic max_tokens cap (default 1024; keep low for spend)
 
     Returns:
         { success: bool, record: dict|None, errors: list, partial: bool }
@@ -532,7 +535,14 @@ def generate_place_record(
         )
     else:
         ai_result = _call_claude_api_populate(
-            place_name, place_type, act, google_data, anthropic_api_key, model_id, errors
+            place_name,
+            place_type,
+            act,
+            google_data,
+            anthropic_api_key,
+            model_id,
+            errors,
+            max_tokens=max_tokens,
         )
 
     if not ai_result:
