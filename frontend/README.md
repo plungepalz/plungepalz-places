@@ -31,7 +31,7 @@ npm run lint
 npm start        # production server after build
 ```
 
-Dev and build use webpack (`--webpack`) because `react-map-gl` v8 does not resolve cleanly under Turbopack yet.
+Dev and build use webpack (`--webpack`) because `react-map-gl` v8 does not resolve cleanly under Turbopack yet. Tailwind v4 is wired through `postcss.config.mjs` (`@tailwindcss/postcss`).
 
 ## Env vars
 
