@@ -6,17 +6,20 @@ const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
 /**
- * Dialog a11y: focus the initial control on open, trap Tab inside the panel,
- * close on Escape, and restore focus to the previously focused element.
+ * Dialog a11y: focus the initial control on open, close on Escape, and restore
+ * focus to the previously focused element. Modal dialogs also trap Tab.
+ * Non-modal dialogs (add-a-place) skip the trap so the map behind stays usable.
  */
 export function useDialogA11y({
   onClose,
   initialFocusRef,
   containerRef,
+  modal = true,
 }: {
   onClose: () => void;
   initialFocusRef: RefObject<HTMLElement | null>;
   containerRef: RefObject<HTMLElement | null>;
+  modal?: boolean;
 }): void {
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -36,7 +39,7 @@ export function useDialogA11y({
         onClose();
         return;
       }
-      if (event.key !== 'Tab' || !containerRef.current) return;
+      if (!modal || event.key !== 'Tab' || !containerRef.current) return;
       const focusable = Array.from(containerRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
         (el) => !el.hasAttribute('disabled') && el.tabIndex !== -1
       );
@@ -56,5 +59,5 @@ export function useDialogA11y({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose, containerRef]);
+  }, [onClose, containerRef, modal]);
 }

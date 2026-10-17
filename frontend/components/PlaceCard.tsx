@@ -22,6 +22,7 @@ export default function PlaceCard({
   onHover,
   onToggleFavorite,
 }: PlaceCardProps) {
+  const locationLine = formatLocation(place.city, place.state_province);
   return (
     <div
       className={`relative rounded-2xl border bg-white transition-all ${
@@ -55,7 +56,7 @@ export default function PlaceCard({
               )}
             </div>
             <p className="mt-0.5 text-sm text-gray-600">{formatPlaceType(place.place_type)}</p>
-            <p className="text-xs text-gray-500">{formatLocation(place.city, place.state_province)}</p>
+            {locationLine ? <p className="text-xs text-gray-500">{locationLine}</p> : null}
           </div>
         </div>
       </button>

@@ -486,13 +486,31 @@ export const MOCK_PLACES: PlaceSearchResult[] = [
     is_approved: true,
     ts_created: '2025-02-19T11:00:00Z',
   },
+  {
+    place_id: '1a2b3c4d-e5f6-7890-abcd-000000000029',
+    place_slug: 'hidden-alpine-tarn',
+    place_name: 'Hidden Alpine Tarn',
+    place_type: 'nature',
+    address: null,
+    city: null,
+    state_province: null,
+    country: null,
+    activity_types: ['cold_plunge'],
+    description: 'High-elevation tarn with no street address on file.',
+    cover_image: NATURE_IMG,
+    lat: 40.6214,
+    lng: -111.5952,
+    is_approved: true,
+    ts_created: '2025-03-12T11:00:00Z',
+  },
 ];
 
 export const MOCK_PLACE_DETAILS: Record<string, PlaceDetail> = Object.fromEntries(
   MOCK_PLACES.map((place, index) => {
     const detail: PlaceDetail = { ...place };
     if (place.place_type === 'nature') {
-      detail.amenities = ['parking'];
+      detail.amenities = [];
+      detail.tags = [];
       detail.hours_of_operation = null;
       detail.place_type_metadata = { access_type: 'free', nature_type: 'lake' };
     } else if (place.place_type === 'temporary_pop_up') {

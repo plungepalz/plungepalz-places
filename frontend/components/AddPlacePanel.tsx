@@ -7,6 +7,9 @@ import { isPlacesApiError } from '@/lib/errors';
 import { ACTIVITY_LABELS, PLACE_TYPE_LABELS } from '@/lib/labels';
 import {
   ACTIVITY_TYPE_VALUES,
+  MAX_ADDRESS_LEN,
+  MAX_DESCRIPTION_LEN,
+  MAX_PLACE_NAME_LEN,
   PLACE_TYPE_VALUES,
   buildOptimisticPlace,
   validateSubmitPlace,
@@ -77,7 +80,7 @@ export default function AddPlacePanel({
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [appliedNonce, setAppliedNonce] = useState(0);
 
-  useDialogA11y({ onClose, initialFocusRef: closeButtonRef, containerRef: panelRef });
+  useDialogA11y({ onClose, initialFocusRef: closeButtonRef, containerRef: panelRef, modal: false });
 
   if (draftLocation && draftNonce !== appliedNonce) {
     setAppliedNonce(draftNonce);
@@ -199,7 +202,6 @@ export default function AddPlacePanel({
     <aside
       ref={panelRef}
       role="dialog"
-      aria-modal="true"
       aria-labelledby="add-place-title"
       className="absolute bottom-28 right-4 top-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
     >
@@ -238,6 +240,7 @@ export default function AddPlacePanel({
               type="text"
               autoComplete="off"
               required
+              maxLength={MAX_PLACE_NAME_LEN}
               value={placeName}
               onChange={(event) => {
                 setPlaceName(event.target.value);
@@ -409,6 +412,7 @@ export default function AddPlacePanel({
               type="text"
               autoComplete="street-address"
               required={addressRequired}
+              maxLength={MAX_ADDRESS_LEN}
               value={address}
               onChange={(event) => {
                 setAddress(event.target.value);
@@ -443,10 +447,21 @@ export default function AddPlacePanel({
               id={descriptionId}
               name="description"
               rows={3}
+              maxLength={MAX_DESCRIPTION_LEN}
               value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={(event) => {
+                setDescription(event.target.value);
+                setFieldErrors((prev) => {
+                  const next = { ...prev };
+                  delete next.description;
+                  return next;
+                });
+              }}
+              aria-invalid={Boolean(fieldErrors.description)}
+              aria-describedby={fieldErrors.description ? `${descriptionId}-error` : undefined}
               className="w-full resize-y rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
             />
+            <FieldError id={`${descriptionId}-error`} message={fieldErrors.description} />
           </div>
 
           <div>

@@ -78,6 +78,8 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
 
   useDialogA11y({ onClose, initialFocusRef: closeButtonRef, containerRef: panelRef });
 
+  const locationLine = place ? formatLocation(place.city, place.state_province, place.country) : '';
+
   return (
     <aside
       ref={panelRef}
@@ -124,19 +126,20 @@ export default function PlaceDetailsPanel({ placeId, onClose }: PlaceDetailsPane
               </div>
               <p className="mt-1 text-gray-600">{formatPlaceType(place.place_type)}</p>
             </div>
-            <div>
-              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Location</h4>
-              <p className="text-gray-900">
-                {place.address ? (
-                  <>
-                    {place.address}
-                    <br />
-                  </>
-                ) : null}
-                {formatLocation(place.city, place.state_province)}
-                {place.country ? ` · ${place.country}` : ''}
-              </p>
-            </div>
+            {place.address || locationLine ? (
+              <div>
+                <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Location</h4>
+                <p className="text-gray-900">
+                  {place.address ? (
+                    <>
+                      {place.address}
+                      <br />
+                    </>
+                  ) : null}
+                  {locationLine}
+                </p>
+              </div>
+            ) : null}
             {place.activity_types.length > 0 && (
               <div>
                 <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Activities</h4>

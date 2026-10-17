@@ -6,12 +6,13 @@ export interface PlaceSearchResult {
   place_slug: string;
   place_name: string;
   place_type: PlaceType;
-  address: string;
-  city: string;
-  state_province: string;
-  country: string;
+  /** Nature places from the API often have these location fields as null. */
+  address: string | null;
+  city: string | null;
+  state_province: string | null;
+  country: string | null;
   activity_types: ActivityType[];
-  description: string;
+  description: string | null;
   cover_image: string | null;
   lat: number;
   lng: number;

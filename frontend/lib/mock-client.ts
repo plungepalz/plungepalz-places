@@ -40,6 +40,16 @@ function slugify(value: string): string {
     .replace(/^-|-$/g, '');
 }
 
+function includesQuery(value: string | null | undefined, query: string): boolean {
+  return typeof value === 'string' && value.toLowerCase().includes(query);
+}
+
+function validationError(message: string, details: Record<string, string>): never {
+  throw new PlacesApiError(message, 'VALIDATION_ERROR', 400, {
+    error: { code: 'VALIDATION_ERROR', message, details },
+  });
+}
+
 class MockApiClient implements PlacesClient {
   async search(params: SearchParams): Promise<SearchResponse> {
     await new Promise((resolve) => setTimeout(resolve, 220));
@@ -50,19 +60,19 @@ class MockApiClient implements PlacesClient {
       const query = params.q.toLowerCase();
       places = places.filter(
         (p) =>
-          p.place_name.toLowerCase().includes(query) ||
-          p.city.toLowerCase().includes(query) ||
-          p.state_province.toLowerCase().includes(query) ||
-          p.country.toLowerCase().includes(query) ||
-          p.description.toLowerCase().includes(query)
+          includesQuery(p.place_name, query) ||
+          includesQuery(p.city, query) ||
+          includesQuery(p.state_province, query) ||
+          includesQuery(p.country, query) ||
+          includesQuery(p.description, query)
       );
     }
 
     if (params.bbox) {
       const parts = params.bbox.split(',').map(Number);
       if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) {
-        throw new PlacesApiError('Invalid bbox. Expected minLng,minLat,maxLng,maxLat.', 'INVALID_BBOX', 400, {
-          error: { code: 'INVALID_BBOX', message: 'Invalid bbox. Expected minLng,minLat,maxLng,maxLat.' },
+        validationError('Invalid request parameters', {
+          bbox: 'bbox must be minLng,minLat,maxLng,maxLat (four comma-separated numbers)',
         });
       }
       const [minLng, minLat, maxLng, maxLat] = parts;
@@ -141,13 +151,7 @@ class MockApiClient implements PlacesClient {
       email: data.email ?? '',
     });
     if (!payload) {
-      throw new PlacesApiError('Invalid request body', 'INVALID_BODY', 400, {
-        error: {
-          code: 'INVALID_BODY',
-          message: 'Invalid request body',
-          details,
-        },
-      });
+      validationError('Invalid request body', details);
     }
 
     const place_id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `place_${Date.now()}`;
@@ -158,12 +162,12 @@ class MockApiClient implements PlacesClient {
       place_slug,
       place_name: payload.place_name,
       place_type: payload.place_type,
-      address: payload.address ?? '',
+      address: payload.address ?? null,
       city: inferred.city,
       state_province: inferred.state_province,
       country: inferred.country,
       activity_types: payload.activity_types,
-      description: payload.description ?? '',
+      description: payload.description ?? null,
       cover_image: null,
       lat: payload.lat,
       lng: payload.lng,
