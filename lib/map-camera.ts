@@ -237,25 +237,31 @@ export interface WorldwideFraming {
 
 export const ZERO_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
 
-/** Camera timings for short hops (easeTo). Longer flights use CAMERA_FLY speed/curve. */
+/** Camera timings. flyTo always gets an explicit duration so long hops cannot run 6s. */
 export const CAMERA_DURATION = {
-  preset: 1400,
-  place: 1100,
-  cluster: 720,
-  zoom: 280,
-  locate: 1200,
+  preset: 2000,
+  place: 1500,
+  placeShort: 560,
+  cluster: 480,
+  zoom: 220,
+  locate: 1600,
+  drawer: 520,
 } as const;
 
-/**
- * flyTo average speed / zoom curve. Lower speed = longer, smoother flights.
- * Mapbox ignores `speed` when `duration` is also set — do not mix them.
- */
+export const CAMERA_DURATION_CAP = {
+  placeMin: 1200,
+  placeMax: 1800,
+  presetMin: 900,
+  presetMax: 2200,
+} as const;
+
+/** Gentle zoom curve. Duration is set separately so speed cannot stretch a US→Tempe hop. */
 export const CAMERA_FLY = {
-  speed: 0.85,
-  curve: 1.42,
+  curve: 1.2,
 } as const;
 
 export type CameraMethod = 'flyTo' | 'easeTo';
+export type CameraMoveKind = 'preset' | 'place' | 'drawer';
 
 /** Cubic ease-out: quick start, gentle settle. */
 export function easeOutCubic(t: number): number {
@@ -265,7 +271,6 @@ export function easeOutCubic(t: number): number {
 
 export function cameraFlyOptions(partial: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    speed: CAMERA_FLY.speed,
     curve: CAMERA_FLY.curve,
     easing: easeOutCubic,
     ...partial,
@@ -283,8 +288,54 @@ export function cameraEaseOptions(
   };
 }
 
-export function isShortCameraHop(kind: 'preset' | 'place' | 'cluster' | 'zoom' | 'locate'): boolean {
-  return kind === 'cluster' || kind === 'zoom';
+export function isShortCameraHop(kind: 'preset' | 'place' | 'cluster' | 'zoom' | 'locate' | 'drawer'): boolean {
+  return kind === 'cluster' || kind === 'zoom' || kind === 'drawer';
+}
+
+export function shortestLngDelta(from: number, to: number): number {
+  return Math.abs(wrapLng(to - from));
+}
+
+/** Degrees + zoom so a local hop stays short and a continent hop still hits the cap. */
+export function cameraSeparation(
+  from: { lng: number; lat: number; zoom?: number },
+  to: { lng: number; lat: number; zoom?: number }
+): number {
+  const zoomFrom = from.zoom ?? to.zoom ?? 0;
+  const zoomTo = to.zoom ?? from.zoom ?? 0;
+  return Math.hypot(shortestLngDelta(from.lng, to.lng), to.lat - from.lat) + Math.abs(zoomTo - zoomFrom) * 3;
+}
+
+export function isShortPlaceHop(separation: number): boolean {
+  return separation < 2.5;
+}
+
+export function cappedFlyDuration(kind: 'preset' | 'place', separation: number): number {
+  if (kind === 'preset') {
+    return Math.min(
+      CAMERA_DURATION_CAP.presetMax,
+      Math.max(CAMERA_DURATION_CAP.presetMin, 900 + separation * 20)
+    );
+  }
+  return Math.min(
+    CAMERA_DURATION_CAP.placeMax,
+    Math.max(CAMERA_DURATION_CAP.placeMin, 1200 + separation * 12)
+  );
+}
+
+export function pickCameraAnimation(
+  kind: CameraMoveKind,
+  from: { lng: number; lat: number; zoom?: number },
+  to: { lng: number; lat: number; zoom?: number }
+): { method: CameraMethod; duration: number } {
+  if (kind === 'drawer') {
+    return { method: 'easeTo', duration: CAMERA_DURATION.drawer };
+  }
+  const separation = cameraSeparation(from, to);
+  if (kind === 'place' && isShortPlaceHop(separation)) {
+    return { method: 'easeTo', duration: CAMERA_DURATION.placeShort };
+  }
+  return { method: 'flyTo', duration: cappedFlyDuration(kind, separation) };
 }
 
 /**

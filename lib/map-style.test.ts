@@ -32,8 +32,17 @@ import {
   placesMapLayerSpecs,
   placesSourceSignature,
   placesToGeoJSON,
+  MUTED_MOTORWAY,
+  MUTED_TRUNK,
+  isMotorwayOrTrunkLayer,
+  mutedRoadColor,
+  muteMotorwayLayers,
+  placesListMaxHeightPx,
+  scrollDeltaToRevealChild,
+  scrollPlaceCardIntoView,
   shouldScrollChildIntoView,
   stepByPointCount,
+  syncMapHoveredCard,
 } from './map-style';
 
 test('brand orange token is a single hex used by pins and accents', () => {
@@ -98,6 +107,8 @@ test('pin icon, halo, and image follow the visual state', () => {
   assert.ok(PIN_ICON_SIZE.hover > PIN_ICON_SIZE.default);
   assert.ok(PIN_ICON_SIZE.selected > PIN_ICON_SIZE.hover);
   assert.equal(pinHaloRadius('default'), 0);
+  assert.ok(PIN_HALO_RADIUS.hover <= 8);
+  assert.ok(PIN_HALO_RADIUS.selected <= 12);
   assert.equal(pinHaloRadius('selected'), PIN_HALO_RADIUS.selected);
   assert.equal(pinImageForState('selected'), 'pin-place-active');
   assert.equal(pinImageForState('hover'), 'pin-place');
@@ -194,9 +205,74 @@ test('cluster leaf lookup is a cheap place_id scan', () => {
   assert.equal(clusterLeafHasPlace(leaves, null), false);
 });
 
+test('list max-height is clamped to the viewport, not content height', () => {
+  assert.equal(placesListMaxHeightPx(900, 112), 772);
+  assert.ok(placesListMaxHeightPx(900, 112) < 1000);
+  assert.ok(placesListMaxHeightPx(768, 96) < 5320);
+  assert.equal(placesListMaxHeightPx(200, 180), 160);
+});
+
+test('list scroll and hover sync no-op without a list root', () => {
+  assert.equal(scrollPlaceCardIntoView(null, null), false);
+  assert.equal(scrollPlaceCardIntoView('abc', null), false);
+  syncMapHoveredCard(null, 'abc');
+  const hovered: string[] = [];
+  const cleared: string[] = [];
+  const card = {
+    removeAttribute: (name: string) => {
+      cleared.push(name);
+    },
+    setAttribute: (name: string, value: string) => {
+      hovered.push(`${name}=${value}`);
+    },
+  };
+  const root = {
+    querySelectorAll: () => [{ removeAttribute: (name: string) => cleared.push(`prev:${name}`) }],
+    querySelector: () => card,
+  };
+  syncMapHoveredCard(root as unknown as ParentNode, 'place-1');
+  assert.deepEqual(cleared, ['prev:data-map-hover']);
+  assert.deepEqual(hovered, ['data-map-hover=true']);
+});
+
 test('list scroll only when the card is off-screen', () => {
   const parent = { top: 100, bottom: 500 };
   assert.equal(shouldScrollChildIntoView({ top: 120, bottom: 200 }, parent), false);
+  assert.equal(scrollDeltaToRevealChild({ top: 120, bottom: 200 }, parent), 0);
+  assert.equal(shouldScrollChildIntoView({ top: 100, bottom: 200 }, parent), false);
+  assert.equal(shouldScrollChildIntoView({ top: 400, bottom: 500 }, parent), false);
   assert.equal(shouldScrollChildIntoView({ top: 80, bottom: 160 }, parent), true);
+  assert.equal(scrollDeltaToRevealChild({ top: 80, bottom: 160 }, parent), -20);
   assert.equal(shouldScrollChildIntoView({ top: 480, bottom: 560 }, parent), true);
+  assert.equal(scrollDeltaToRevealChild({ top: 480, bottom: 560 }, parent), 60);
+});
+
+test('motorway and trunk layers mute toward warm grey, not brand orange', () => {
+  assert.equal(isMotorwayOrTrunkLayer('road-motorway'), true);
+  assert.equal(isMotorwayOrTrunkLayer('bridge-motorway-case'), true);
+  assert.equal(isMotorwayOrTrunkLayer('road-trunk'), true);
+  assert.equal(isMotorwayOrTrunkLayer('road-primary'), false);
+  assert.equal(mutedRoadColor('road-motorway'), MUTED_MOTORWAY);
+  assert.equal(mutedRoadColor('road-trunk'), MUTED_TRUNK);
+  assert.notEqual(mutedRoadColor('road-motorway'), BRAND.orange);
+  const paint = new Map<string, unknown>([
+    ['road-motorway', '#f97316'],
+    ['road-primary', '#ffffff'],
+  ]);
+  const changed = muteMotorwayLayers({
+    getStyle: () => ({
+      layers: [
+        { id: 'road-motorway', type: 'line' },
+        { id: 'road-primary', type: 'line' },
+        { id: 'settlement-major-label', type: 'symbol' },
+      ],
+    }),
+    getPaintProperty: (id) => paint.get(id),
+    setPaintProperty: (id, _prop, value) => {
+      paint.set(id, value);
+    },
+  });
+  assert.equal(changed, 1);
+  assert.equal(paint.get('road-motorway'), MUTED_MOTORWAY);
+  assert.equal(paint.get('road-primary'), '#ffffff');
 });

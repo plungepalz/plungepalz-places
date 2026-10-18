@@ -9,7 +9,6 @@ import CoverImage from './CoverImage';
 interface PlaceCardProps {
   place: PlaceSearchResult;
   isSelected: boolean;
-  isHovered?: boolean;
   isFavorited: boolean;
   onSelectPlace: (placeId: string) => void;
   onHoverPlace: (placeId: string | null) => void;
@@ -19,7 +18,6 @@ interface PlaceCardProps {
 function PlaceCard({
   place,
   isSelected,
-  isHovered = false,
   isFavorited,
   onSelectPlace,
   onHoverPlace,
@@ -31,13 +29,8 @@ function PlaceCard({
       data-place-id={place.place_id}
       data-place-card
       data-selected={isSelected ? 'true' : 'false'}
-      data-hovered={isHovered ? 'true' : 'false'}
       className={`place-card relative rounded-2xl border bg-white ${
-        isSelected
-          ? 'place-card-selected border-brand shadow-md ring-2 ring-brand-soft'
-          : isHovered
-            ? 'place-card-hovered border-brand/50 bg-brand-soft/40 shadow-sm'
-            : 'border-transparent hover:border-gray-200 hover:shadow-sm'
+        isSelected ? 'place-card-selected border-brand shadow-md ring-2 ring-brand-soft' : 'border-transparent'
       }`}
       onMouseEnter={() => onHoverPlace(place.place_id)}
       onMouseLeave={() => onHoverPlace(null)}

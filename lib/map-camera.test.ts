@@ -11,13 +11,19 @@ import {
   PANEL_PADDING_RIGHT,
   WORLDWIDE_COMFORT_LNG,
   ZERO_PADDING,
+  CAMERA_DURATION,
+  CAMERA_DURATION_CAP,
   CAMERA_FLY,
   cameraEaseOptions,
   cameraFlyOptions,
+  cameraSeparation,
+  cappedFlyDuration,
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
   isShortCameraHop,
+  isShortPlaceHop,
+  pickCameraAnimation,
   startCameraAnimation,
   MERCATOR_TILE_SIZE,
   defaultCompactList,
@@ -146,6 +152,19 @@ for (const width of [768, 1280, 1440] as const) {
     assert.ok(open.controls.right <= open.drawer.left);
   });
 }
+
+test('pin-plus-drawer padding keeps the selected pin off the drawer edge', () => {
+  for (const width of [1280, 1440]) {
+    const padding = flyPadding(true, false, { width, height: 900 });
+    const drawerLeft = width - DRAWER_OCCUPIED;
+    const paddedRight = width - padding.right;
+    assert.ok(
+      drawerLeft - paddedRight >= 24,
+      `${width}: padded map should sit ≥24px left of the drawer (gap=${drawerLeft - paddedRight})`
+    );
+    assert.ok(padding.right >= DRAWER_OCCUPIED);
+  }
+});
 
 test('flyTo padding tracks collapsed list at 768 and full list at 1280/1440', () => {
   const narrow = flyPadding(true, false, { width: 768, height: 900 });
@@ -379,19 +398,44 @@ test('replacing an in-flight camera animation cancels the previous onEnd', () =>
   assert.equal(second, 1);
 });
 
-test('flyTo uses speed/curve; short hops use easeTo duration', () => {
-  const fly = cameraFlyOptions({ center: [1, 2], zoom: 4 });
-  assert.equal(fly.speed, CAMERA_FLY.speed);
+test('flyTo options use a gentle curve and an explicit duration cap', () => {
+  const fly = cameraFlyOptions({ center: [1, 2], zoom: 4, duration: 1500 });
+  assert.equal(fly.speed, undefined);
   assert.equal(fly.curve, CAMERA_FLY.curve);
-  assert.equal(fly.duration, undefined);
+  assert.equal(fly.duration, 1500);
   assert.equal(fly.easing, easeOutCubic);
-  const ease = cameraEaseOptions(720, { zoom: 8 });
-  assert.equal(ease.duration, 720);
+  const ease = cameraEaseOptions(560, { zoom: 8 });
+  assert.equal(ease.duration, 560);
   assert.equal(ease.speed, undefined);
   assert.equal(isShortCameraHop('cluster'), true);
   assert.equal(isShortCameraHop('zoom'), true);
+  assert.equal(isShortCameraHop('drawer'), true);
   assert.equal(isShortCameraHop('preset'), false);
   assert.equal(isShortCameraHop('place'), false);
+});
+
+test('place and preset flights stay inside the 1.2–1.8s / 2.2s caps', () => {
+  const us = { lng: -98.5795, lat: 39.8283, zoom: 3.4 };
+  const tempe = { lng: -111.94, lat: 33.425, zoom: 12 };
+  const worldwide = { lng: -20, lat: 20, zoom: 1.15 };
+  const far = cameraSeparation(us, tempe);
+  assert.ok(far > 10);
+  assert.ok(!isShortPlaceHop(far));
+  assert.ok(cappedFlyDuration('place', far) <= CAMERA_DURATION_CAP.placeMax);
+  assert.equal(cappedFlyDuration('place', 200), CAMERA_DURATION_CAP.placeMax);
+  assert.ok(cappedFlyDuration('preset', 200) <= CAMERA_DURATION_CAP.presetMax);
+  const place = pickCameraAnimation('place', us, tempe);
+  assert.equal(place.method, 'flyTo');
+  assert.ok(place.duration >= 1200 && place.duration <= 1800);
+  const preset = pickCameraAnimation('preset', us, worldwide);
+  assert.equal(preset.method, 'flyTo');
+  assert.ok(preset.duration <= 2200);
+  const near = pickCameraAnimation('place', tempe, { lng: -111.93, lat: 33.43, zoom: 12 });
+  assert.equal(near.method, 'easeTo');
+  assert.equal(near.duration, CAMERA_DURATION.placeShort);
+  const drawer = pickCameraAnimation('drawer', tempe, tempe);
+  assert.equal(drawer.method, 'easeTo');
+  assert.equal(drawer.duration, CAMERA_DURATION.drawer);
 });
 
 test('flyToThenOnMoveend still attaches after start', () => {

@@ -1,8 +1,8 @@
 'use client';
 
-import { memo, useEffect, useRef } from 'react';
+import { memo } from 'react';
 import { placesListHeading } from '@/lib/list-heading';
-import { FILTER_OVERLAY_HEADER_INSET, shouldScrollChildIntoView } from '@/lib/map-style';
+import { FILTER_OVERLAY_HEADER_INSET } from '@/lib/map-style';
 import type { PlaceSearchResult } from '@/lib/types';
 import PlaceCard from './PlaceCard';
 
@@ -10,7 +10,6 @@ interface PlacesListProps {
   places: PlaceSearchResult[];
   total: number;
   selectedPlaceId: string | null;
-  hoveredPlaceId: string | null;
   favorites: Set<string>;
   onSelectPlace: (placeId: string) => void;
   onHoverPlace: (placeId: string | null) => void;
@@ -33,7 +32,6 @@ function PlacesList({
   places,
   total,
   selectedPlaceId,
-  hoveredPlaceId,
   favorites,
   onSelectPlace,
   onHoverPlace,
@@ -49,26 +47,12 @@ function PlacesList({
   expanded = true,
   onToggleExpanded,
 }: PlacesListProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
   const compact = collapsible && !expanded;
   const title =
     heading ??
     (isLoading && places.length === 0
       ? 'Loading places…'
       : placesListHeading(places.length, total, locationName, { hasMore }));
-
-  useEffect(() => {
-    const placeId = hoveredPlaceId || selectedPlaceId;
-    const parent = scrollRef.current;
-    if (!placeId || !parent) return;
-    const child = parent.querySelector<HTMLElement>(`[data-place-id="${placeId}"]`);
-    if (!child) return;
-    const parentRect = parent.getBoundingClientRect();
-    const childRect = child.getBoundingClientRect();
-    if (shouldScrollChildIntoView(childRect, parentRect)) {
-      child.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, [hoveredPlaceId, selectedPlaceId]);
 
   const headerInner = (
     <>
@@ -97,6 +81,7 @@ function PlacesList({
     <div
       data-places-list
       data-list-expanded={expanded ? 'true' : 'false'}
+      data-collapsible={collapsible ? 'true' : 'false'}
       className={`places-list flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5 ${
         compact ? 'h-auto' : 'h-full'
       }`}
@@ -128,11 +113,7 @@ function PlacesList({
         aria-hidden={compact}
         inert={compact ? true : undefined}
       >
-        <div
-          id="places-list-body"
-          ref={scrollRef}
-          className="places-list-body flex-1 space-y-1 overflow-y-auto px-2 py-2"
-        >
+        <div id="places-list-body" className="places-list-body flex-1 space-y-1 overflow-y-auto px-2 py-2">
           {error && (
             <div className="m-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
           )}
@@ -151,7 +132,6 @@ function PlacesList({
                 key={place.place_id}
                 place={place}
                 isSelected={selectedPlaceId === place.place_id}
-                isHovered={hoveredPlaceId === place.place_id}
                 isFavorited={favorites.has(place.place_id)}
                 onSelectPlace={onSelectPlace}
                 onHoverPlace={onHoverPlace}

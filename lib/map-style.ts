@@ -5,7 +5,7 @@ export const CLUSTER_COUNT_LARGE = 50;
 
 export const CLUSTER_RADIUS = { small: 16, medium: 22, large: 30 } as const;
 export const PIN_ICON_SIZE = { default: 1, hover: 1.16, selected: 1.28 } as const;
-export const PIN_HALO_RADIUS = { default: 0, hover: 14, selected: 18 } as const;
+export const PIN_HALO_RADIUS = { default: 0, hover: 8, selected: 12 } as const;
 /** Extra list-header padding so the overlay filter row does not cover the title. */
 export const FILTER_OVERLAY_HEADER_INSET = 52;
 
@@ -127,7 +127,40 @@ export const PIN_HALO_RADIUS_EXPRESSION = featureStateCase(
   PIN_HALO_RADIUS.default
 );
 
-export const PIN_HALO_OPACITY_EXPRESSION = featureStateCase(0.28, 0.36, 0);
+export const PIN_HALO_OPACITY_EXPRESSION = featureStateCase(0.16, 0.22, 0);
+
+export const MUTED_MOTORWAY = '#c4b7a4';
+export const MUTED_TRUNK = '#d2c6ae';
+export const MUTED_ROAD_CASE = '#b3a894';
+
+export function isMotorwayOrTrunkLayer(layerId: string): boolean {
+  return /motorway|trunk/i.test(layerId);
+}
+
+export function mutedRoadColor(layerId: string): string {
+  if (/case|casing/i.test(layerId)) return MUTED_ROAD_CASE;
+  if (/trunk/i.test(layerId)) return MUTED_TRUNK;
+  return MUTED_MOTORWAY;
+}
+
+export function muteMotorwayLayers(map: {
+  getStyle: () => { layers?: Array<{ id: string; type?: string }> };
+  getPaintProperty: (id: string, prop: 'line-color') => unknown;
+  setPaintProperty: (id: string, prop: 'line-color', value: string) => unknown;
+}): number {
+  let changed = 0;
+  for (const layer of map.getStyle().layers ?? []) {
+    if (layer.type !== 'line' || !isMotorwayOrTrunkLayer(layer.id)) continue;
+    try {
+      if (map.getPaintProperty(layer.id, 'line-color') == null) continue;
+      map.setPaintProperty(layer.id, 'line-color', mutedRoadColor(layer.id));
+      changed += 1;
+    } catch {
+      /* layer may not accept line-color */
+    }
+  }
+  return changed;
+}
 
 export function unclusteredBaseFilter(excludeIds: string[] = []): unknown[] {
   if (excludeIds.length === 0) return ['!', ['has', 'point_count']];
@@ -388,5 +421,44 @@ export function shouldScrollChildIntoView(
   child: { top: number; bottom: number },
   parent: { top: number; bottom: number }
 ): boolean {
-  return child.top < parent.top || child.bottom > parent.bottom;
+  return scrollDeltaToRevealChild(child, parent) !== 0;
+}
+
+/** Pixels to scroll the list so `child` is fully inside `parent`. 0 if already fully visible. */
+export function scrollDeltaToRevealChild(
+  child: { top: number; bottom: number },
+  parent: { top: number; bottom: number }
+): number {
+  if (child.top >= parent.top && child.bottom <= parent.bottom) return 0;
+  if (child.top < parent.top) return child.top - parent.top;
+  return child.bottom - parent.bottom;
+}
+
+/** Viewport-clamped list body height so Show/Hide never animates to content (~5k px). */
+export function placesListMaxHeightPx(viewportHeight: number, chromeTop: number, gap = 16): number {
+  return Math.max(viewportHeight - chromeTop - gap, 160);
+}
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+  return value.replace(/["\\]/g, '\\$&');
+}
+
+export function scrollPlaceCardIntoView(placeId: string | null | undefined, parent: HTMLElement | null): boolean {
+  if (!placeId || !parent) return false;
+  const child = parent.querySelector<HTMLElement>(`[data-place-id="${cssEscape(placeId)}"]`);
+  if (!child) return false;
+  const delta = scrollDeltaToRevealChild(child.getBoundingClientRect(), parent.getBoundingClientRect());
+  if (delta === 0) return false;
+  parent.scrollBy({ top: delta, behavior: 'smooth' });
+  return true;
+}
+
+export function syncMapHoveredCard(root: ParentNode | null, placeId: string | null): void {
+  if (!root) return;
+  root.querySelectorAll('[data-place-card][data-map-hover="true"]').forEach((node) => {
+    node.removeAttribute('data-map-hover');
+  });
+  if (!placeId) return;
+  root.querySelector(`[data-place-id="${cssEscape(placeId)}"]`)?.setAttribute('data-map-hover', 'true');
 }

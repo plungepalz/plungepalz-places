@@ -24,6 +24,7 @@ import {
   worldwideMapHeightCap,
 } from '@/lib/map-camera';
 import { mergeLocalPlaces } from '@/lib/merge-local-places';
+import { placesListMaxHeightPx, scrollPlaceCardIntoView, syncMapHoveredCard } from '@/lib/map-style';
 import { searchAfterViewportChange, searchDebounceMs } from '@/lib/search-debounce';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
@@ -245,11 +246,21 @@ export default function HomePage() {
     }
   }, [places]);
 
-  const handleSelectFromMap = (placeId: string) => {
+  const handleSelectFromMap = useCallback((placeId: string) => {
+    const place = places.find((item) => item.place_id === placeId);
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
     setAddPlaceOpen(false);
-  };
+    if (place) {
+      setFlyRequest({
+        nonce: Date.now(),
+        longitude: place.lng,
+        latitude: place.lat,
+        ease: true,
+        keepZoom: true,
+      });
+    }
+  }, [places]);
 
   const handleFlyComplete = useCallback(() => {
     setFlyRequest(null);
@@ -306,6 +317,18 @@ export default function HomePage() {
       return next;
     });
   }, []);
+
+  const handleHoverPlace = useCallback((placeId: string | null) => {
+    setHoveredPlaceId(placeId);
+  }, []);
+
+  useEffect(() => {
+    syncMapHoveredCard(listSlotRef.current, hoveredPlaceId);
+    const id = hoveredPlaceId || selectedPlaceId;
+    if (!id) return;
+    const parent = listSlotRef.current?.querySelector<HTMLElement>('#places-list-body') ?? null;
+    scrollPlaceCardIntoView(id, parent);
+  }, [hoveredPlaceId, selectedPlaceId]);
 
   const headingText = listHeadingText(heading, extraCount);
   const chipLabel = heading?.chipLabel ?? location.label;
@@ -401,17 +424,19 @@ export default function HomePage() {
           className={`places-list-slot absolute left-4 w-[min(100%-2rem,380px)] ${
             hideListForDrawer ? 'hidden' : 'pointer-events-auto'
           } ${listCollapsed ? '' : 'bottom-4'}`}
-          style={{ top: chromeTop }}
+          style={{
+            top: chromeTop,
+            ['--places-list-max' as string]: `${placesListMaxHeightPx(viewportHeight, chromeTop)}px`,
+          }}
           aria-hidden={hideListForDrawer}
         >
           <PlacesList
             places={places}
             total={displayTotal}
             selectedPlaceId={selectedPlaceId}
-            hoveredPlaceId={hoveredPlaceId}
             favorites={favorites}
             onSelectPlace={handleSelectFromList}
-            onHoverPlace={setHoveredPlaceId}
+            onHoverPlace={handleHoverPlace}
             onToggleFavorite={handleToggleFavorite}
             onLoadMore={() =>
               performSearch(page + 1, true, leftPreset ? mapBoundsRef.current : null)

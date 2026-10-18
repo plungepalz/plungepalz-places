@@ -13,6 +13,7 @@ import {
   flyPadding,
   isUserMapMove,
   mapControlsRightPx,
+  pickCameraAnimation,
   pinHintCenterX,
   presetCamera,
   startCameraAnimation,
@@ -23,6 +24,7 @@ import {
   MAP_FADE_DURATION_MS,
   PIN_STROKE,
   clusterLeafHasPlace,
+  muteMotorwayLayers,
   placesMapLayerSpecs,
   placesToGeoJSON,
 } from '@/lib/map-style';
@@ -279,6 +281,7 @@ export default function PlacesMap({
     const map = mapRef.current?.getMap();
     if (!map) return;
     map.setMinZoom(0);
+    muteMotorwayLayers(map);
     void Promise.all([
       ensurePinImage(map, 'pin-place', pinSvg(BRAND.orange, true)),
       ensurePinImage(map, 'pin-place-active', pinSvg(BRAND.orangeSelected, true)),
@@ -394,10 +397,10 @@ export default function PlacesMap({
     const container = map.getContainer();
     const size = { width: container.clientWidth, height: container.clientHeight };
     const padding = flyPadding(panelOpen, flyRequest.exactZoom, size, collapseList);
-    let zoom = resolveFlyZoom(currentZoom, flyRequest);
+    let zoom = flyRequest.keepZoom ? currentZoom : resolveFlyZoom(currentZoom, flyRequest);
     let longitude = flyRequest.longitude;
     let latitude = flyRequest.latitude;
-    if (!flyRequest.exactZoom) {
+    if (!flyRequest.exactZoom && !flyRequest.ease) {
       onUserCameraMove?.();
     }
     if (flyRequest.exactZoom && location) {
@@ -425,7 +428,7 @@ export default function PlacesMap({
       longitude = camera.lng;
       latitude = camera.lat;
     }
-    flightTagRef.current = flyRequest.exactZoom ? 'preset' : 'place';
+    flightTagRef.current = flyRequest.exactZoom ? 'preset' : flyRequest.ease ? 'drawer' : 'place';
     const onFlyEnd = () => {
       flightTagRef.current = null;
       if (detailsOpenRef.current) return;
@@ -438,20 +441,31 @@ export default function PlacesMap({
         padding: ZERO_PADDING,
       });
     };
+    const current = map.getCenter();
+    const move = flyRequest.ease
+      ? pickCameraAnimation('drawer', current, { lng: longitude, lat: latitude, zoom })
+      : pickCameraAnimation(
+          flyRequest.exactZoom ? 'preset' : 'place',
+          { lng: current.lng, lat: current.lat, zoom: currentZoom },
+          { lng: longitude, lat: latitude, zoom }
+        );
+    const cameraOptions = {
+      center: [longitude, latitude],
+      zoom,
+      padding,
+      retainPadding: flyRequest.exactZoom ? false : undefined,
+    };
     // mapbox-gl 3.33 flyTo() stop()s any in-flight camera first and fires
     // moveend synchronously. startCameraAnimation attaches after start so the
-    // interrupt does not consume this flight's cleanup. Preset flights also
-    // pass retainPadding: false (supported in 3.33) so global padding stays 0.
+    // interrupt does not consume this flight's cleanup. Duration is always
+    // explicit so a continent hop cannot run for 6s.
     startCameraAnimation(
       map,
       flyEndHandlerRef,
-      'flyTo',
-      cameraFlyOptions({
-        center: [longitude, latitude],
-        zoom,
-        padding,
-        retainPadding: flyRequest.exactZoom ? false : undefined,
-      }),
+      move.method,
+      move.method === 'easeTo'
+        ? cameraEaseOptions(move.duration, cameraOptions)
+        : cameraFlyOptions({ ...cameraOptions, duration: move.duration }),
       onFlyEnd
     );
     onFlyComplete();
@@ -490,6 +504,7 @@ export default function PlacesMap({
           cameraFlyOptions({
             center: [position.coords.longitude, position.coords.latitude],
             zoom: 11,
+            duration: CAMERA_DURATION.locate,
           })
         );
       },

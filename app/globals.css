@@ -43,34 +43,52 @@ body {
     background-color 180ms ease;
 }
 
+.place-card:hover:not([data-selected='true']),
+.place-card[data-map-hover='true']:not([data-selected='true']) {
+  border-color: color-mix(in srgb, var(--brand-orange) 50%, transparent);
+  background-color: color-mix(in srgb, var(--brand-orange-soft) 40%, white);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+}
+
 .places-list-chevron {
   transition: transform 200ms ease;
 }
 
 .places-list-body-wrap {
-  display: grid;
-  grid-template-rows: 1fr;
-  min-height: 0;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
   opacity: 1;
+  max-height: var(--places-list-max, 100%);
+}
+
+.places-list[data-collapsible='true'] .places-list-body-wrap {
   transition:
-    grid-template-rows 280ms ease,
+    max-height 280ms ease,
     opacity 200ms ease;
 }
 
 .places-list-body-wrap-collapsed {
-  grid-template-rows: 0fr;
+  max-height: 0;
   opacity: 0;
   pointer-events: none;
 }
 
+.places-list-body-wrap-expanded {
+  max-height: var(--places-list-max, 100%);
+}
+
 .places-list-body-wrap > .places-list-body {
   min-height: 0;
-  overflow: hidden;
+  height: 100%;
 }
 
 .places-list-body-wrap-expanded > .places-list-body {
   overflow-y: auto;
+}
+
+.places-list-body-wrap-collapsed > .places-list-body {
+  overflow: hidden;
 }
 
 .places-loading-bar {
