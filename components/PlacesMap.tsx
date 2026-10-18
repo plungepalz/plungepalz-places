@@ -10,6 +10,7 @@ import {
   STREETS_LOW_ZOOM_OCEAN,
   cameraEaseOptions,
   cameraFlyOptions,
+  cameraMoveendEffects,
   canvasFillStyle,
   canvasHostStyle,
   canvasReadyForFlight,
@@ -18,7 +19,6 @@ import {
   flyPadding,
   isNarrowViewport,
   isProgrammaticFlightTag,
-  isUserMapMove,
   presetFlyCamera,
   readMeasuredViewport,
   createCanvasMachine,
@@ -32,7 +32,6 @@ import {
   scheduleMapResize,
   shouldApplyNarrowWorldwideAfterResize,
   shouldReapplyNarrowWorldwide,
-  shouldReportViewport,
   startCameraAnimation,
   type FlightTag,
   type MapResizeState,
@@ -310,6 +309,13 @@ export default function PlacesMap({
     [flyRequest, location, slotSize.height, slotSize.width]
   );
 
+  const clearPaddingProgrammatic = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return false;
+    flightTagRef.current = 'resize';
+    return clearPaddingKeepView(map);
+  }, []);
+
   const applyNarrowWorldwideAfterResize = useCallback(() => {
     if (!pendingNarrowWorldwideRef.current) return;
     const { leftPreset: left, location: loc, slotSize: slot } = jumpContextRef.current;
@@ -481,8 +487,8 @@ export default function PlacesMap({
     if (detailsOpen) return;
     const map = mapRef.current?.getMap();
     if (!map) return;
-    clearPaddingKeepView(map);
-  }, [detailsOpen]);
+    clearPaddingProgrammatic();
+  }, [clearPaddingProgrammatic, detailsOpen]);
 
   useEffect(() => {
     const map = mapRef.current?.getMap();
@@ -564,12 +570,12 @@ export default function PlacesMap({
   useEffect(() => {
     if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;
     const map = mapRef.current.getMap();
-    clearPaddingKeepView(map);
+    clearPaddingProgrammatic();
     // Visual canvas center, not Mapbox's padded getCenter() leftover from flyTo.
     const canvas = map.getCanvas();
     const point = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
     onMapCenter({ lat: point.lat, lng: point.lng });
-  }, [mapCenterRequest, onMapCenter]);
+  }, [clearPaddingProgrammatic, mapCenterRequest, onMapCenter]);
 
   useEffect(() => {
     if (!flyRequest || !mapRef.current) return;
@@ -642,8 +648,8 @@ export default function PlacesMap({
       const live = mapRef.current?.getMap();
       const endedZoom = live?.getZoom() ?? zoom;
       commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
-      if (live && !detailsOpenRef.current && !keepFitPadding) {
-        clearPaddingKeepView(live);
+      if (!detailsOpenRef.current && !keepFitPadding) {
+        clearPaddingProgrammatic();
       }
       reportViewport();
       flightTagRef.current = null;
@@ -676,9 +682,9 @@ export default function PlacesMap({
     // Instant flights (duration 0 / reduced motion) finish inside flyTo/easeTo
     // and startCameraAnimation runs onFlyEnd now. Animated flights attach after
     // start so stop() from an interrupt does not consume this cleanup.
-    // Shrink-first already resized the short canvas. One capped move — padding
-    // clear is silent (no jumpTo). onFlyComplete waits for the real moveend
-    // so mid-flight stop()/resize cannot search.
+    // Shrink-first already resized the short canvas. One capped unpadded
+    // preset fly; a leftover padded flight may add one jumpTo so the visual
+    // centre stays put and moveend reports bounds.
     startCameraAnimation(
       map,
       flyEndHandlerRef,
@@ -695,6 +701,7 @@ export default function PlacesMap({
     flyFitTop,
     flyRequest,
     location,
+    clearPaddingProgrammatic,
     onCameraBusy,
     onFlyComplete,
     onUserCameraMove,
@@ -707,7 +714,7 @@ export default function PlacesMap({
     const map = mapRef.current?.getMap();
     if (!map) return;
     if (!detailsOpen) {
-      clearPaddingKeepView(map);
+      clearPaddingProgrammatic();
     }
     onCameraBusy?.(true);
     onUserCameraMove?.();
@@ -780,7 +787,7 @@ export default function PlacesMap({
         if (error || zoom == null) return;
         const map = mapRef.current?.getMap();
         if (map && !detailsOpen) {
-          clearPaddingKeepView(map);
+          clearPaddingProgrammatic();
         }
         const live = mapRef.current?.getMap();
         if (!live) return;
@@ -914,11 +921,12 @@ export default function PlacesMap({
     (event: ViewStateChangeEvent) => {
       handleMove(event);
       const tag = flightTagRef.current;
-      if (shouldReportViewport(tag)) {
+      const effects = cameraMoveendEffects(event as { originalEvent?: unknown }, tag);
+      if (effects.reportBounds) {
         reportViewport();
         setClusterQueryTick((tick) => tick + 1);
       }
-      if (isUserMapMove(event as { originalEvent?: unknown }, tag)) {
+      if (effects.leavePreset) {
         onUserCameraMove?.();
       }
       if (tag === 'resize') {

@@ -833,8 +833,22 @@ export function isProgrammaticFlightTag(tag: string | null | undefined): boolean
   );
 }
 
+/**
+ * Padding-clear jumpTo is tagged `resize`: chip stays, bounds/search/header
+ * still refresh. In-flight preset/place/cluster tags stay silent until end.
+ */
 export function shouldReportViewport(tag: string | null | undefined): boolean {
   return !isProgrammaticFlightTag(tag);
+}
+
+export function cameraMoveendEffects(
+  event: { originalEvent?: unknown } | null | undefined,
+  flightTag?: string | null
+): { leavePreset: boolean; reportBounds: boolean } {
+  return {
+    leavePreset: isUserMapMove(event, flightTag),
+    reportBounds: shouldReportViewport(flightTag),
+  };
 }
 
 export type CameraPadding = {
@@ -856,24 +870,25 @@ export function paddingIsZero(padding: CameraPadding | null | undefined): boolea
 
 export interface PaddingClearMap {
   getPadding: () => CameraPadding;
-  getCanvas?: () => { clientWidth: number; clientHeight: number };
-  unproject?: (point: [number, number]) => { lng: number; lat: number };
-  setCenter?: (center: [number, number]) => unknown;
-  triggerRepaint?: () => void;
-  jumpTo?: (options: Record<string, unknown>) => unknown;
-  transform?: { padding?: CameraPadding };
+  getCanvas: () => { clientWidth: number; clientHeight: number };
+  unproject: (point: [number, number]) => { lng: number; lat: number };
+  jumpTo: (options: { center: [number, number]; padding: CameraPadding }) => unknown;
 }
 
 /**
- * Drop leftover flyTo padding without a camera call. `setCenter` / `jumpTo`
- * are camera methods (Mapbox `setCenter` runs `jumpTo` internally).
+ * Drop leftover flyTo padding without shifting what is on screen.
+ * Unproject the canvas centre, then jumpTo that point with zero padding.
+ * Never write Mapbox's private `transform.padding` — that shifts the view
+ * by half the padding and fires no moveend.
  */
 export function clearPaddingKeepView(map: PaddingClearMap): boolean {
   if (paddingIsZero(map.getPadding())) return false;
-  if (map.transform) {
-    map.transform.padding = { ...ZERO_PADDING };
-  }
-  map.triggerRepaint?.();
+  const canvas = map.getCanvas();
+  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+  map.jumpTo({
+    center: [visual.lng, visual.lat],
+    padding: ZERO_PADDING,
+  });
   return true;
 }
 
@@ -899,9 +914,9 @@ export function mercatorLatFromY(y: number): number {
 }
 
 /**
- * Mapbox padding puts `center` in the padded gap. Fly with zero padding to
- * the matching unpadded center so the visual stays and no follow-up jumpTo
- * / setCenter is required.
+ * Mapbox padding puts `center` in the padded gap. Preset flights use this
+ * unpadded center so one flyTo is enough. A leftover padded flight may add
+ * one jumpTo to clear padding without shifting the visual centre.
  */
 export function unpaddedCenter(
   center: { lng: number; lat: number },

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  createListHeadingMachine,
+  listHeadingText,
+  settleListHeadingRequest,
+  shouldApplySettledSearch,
+  startListHeadingRequest,
+} from './list-heading-state';
+import { LOCATION_PRESETS } from './locations';
+import {
   DRAWER_OCCUPIED,
   DRAWER_WIDTH,
   LIST_PANEL_RIGHT,
@@ -21,11 +29,13 @@ import {
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
+  cameraMoveendEffects,
   isProgrammaticFlightTag,
   isShortCameraHop,
   isShortPlaceHop,
   paddingIsZero,
   pickCameraAnimation,
+  shouldReportViewport,
   startCameraAnimation,
   MERCATOR_TILE_SIZE,
   LIST_EXPAND_MS,
@@ -70,7 +80,6 @@ import {
   shouldCollapseList,
   shouldApplyNarrowWorldwideAfterResize,
   shouldJumpToNarrowWorldwideFit,
-  shouldReportViewport,
   shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
   worldwideFraming,
@@ -879,7 +888,11 @@ test('Worldwide framing subtracts drawer right padding from the visible gap', ()
  */
 class InterruptibleMap {
   padding = { ...ZERO_PADDING };
-  transform = { padding: { ...ZERO_PADDING } };
+  center = { lng: -20, lat: 20 };
+  width = 1440;
+  height = 900;
+  /** Degrees per CSS pixel — enough to see a half-padding shift. */
+  degPerPx = 0.01;
   methods: string[] = [];
   /** When true, flyTo finishes synchronously like prefers-reduced-motion → jumpTo. */
   reducedMotion = false;
@@ -888,6 +901,25 @@ class InterruptibleMap {
 
   getPadding() {
     return { ...this.padding };
+  }
+
+  getCanvas() {
+    return { clientWidth: this.width, clientHeight: this.height };
+  }
+
+  paddedCenter() {
+    return {
+      x: (this.width + (this.padding.left ?? 0) - (this.padding.right ?? 0)) / 2,
+      y: (this.height + (this.padding.top ?? 0) - (this.padding.bottom ?? 0)) / 2,
+    };
+  }
+
+  unproject([x, y]: [number, number]) {
+    const c = this.paddedCenter();
+    return {
+      lng: this.center.lng + (x - c.x) * this.degPerPx,
+      lat: this.center.lat - (y - c.y) * this.degPerPx,
+    };
   }
 
   once(_event: string, handler: () => void) {
@@ -903,14 +935,20 @@ class InterruptibleMap {
     for (const handler of handlers) handler();
   }
 
-  private applyCamera(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
+  private applyCamera(options: {
+    padding?: Partial<typeof ZERO_PADDING>;
+    duration?: number;
+    center?: [number, number];
+  }) {
     if (this.flying) {
       this.flying = false;
       this.emitMoveend();
     }
+    if (options.center) {
+      this.center = { lng: options.center[0], lat: options.center[1] };
+    }
     if (options.padding) {
       this.padding = { ...ZERO_PADDING, ...options.padding };
-      this.transform.padding = { ...this.padding };
     }
     // mapbox-gl 3.33: duration 0 (and reduced-motion jumpTo) fires moveend
     // inside flyTo(), before a listener attached afterward can see it.
@@ -922,18 +960,24 @@ class InterruptibleMap {
     this.flying = true;
   }
 
-  flyTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
+  flyTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number; center?: [number, number] }) {
     this.methods.push('flyTo');
     this.applyCamera(options);
   }
 
-  easeTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
+  easeTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number; center?: [number, number] }) {
     this.methods.push('easeTo');
     this.applyCamera(options);
   }
 
-  jumpTo() {
+  jumpTo(options?: { center?: [number, number]; padding?: Partial<typeof ZERO_PADDING> }) {
     this.methods.push('jumpTo');
+    if (options?.center) {
+      this.center = { lng: options.center[0], lat: options.center[1] };
+    }
+    if (options?.padding) {
+      this.padding = { ...ZERO_PADDING, ...options.padding };
+    }
   }
 
   setCenter() {
@@ -961,8 +1005,7 @@ function startPlacesMapFlight(
     'flyTo',
     { padding: { ...ZERO_PADDING, left: 396 } },
     () => {
-      map.padding = { ...ZERO_PADDING };
-      map.transform.padding = { ...ZERO_PADDING };
+      clearPaddingKeepView(map);
     }
   );
 }
@@ -1016,7 +1059,7 @@ test('flyTo options use a gentle curve and an explicit duration cap', () => {
   assert.equal(isShortCameraHop('place'), false);
 });
 
-test('clearPaddingKeepView does not issue jumpTo/flyTo/easeTo', () => {
+test('clearPaddingKeepView is a no-op when padding is already zero', () => {
   const calls = { jumpTo: 0, flyTo: 0, easeTo: 0, setCenter: 0 };
   const zeroMap = {
     getPadding: () => ({ ...ZERO_PADDING }),
@@ -1034,23 +1077,10 @@ test('clearPaddingKeepView does not issue jumpTo/flyTo/easeTo', () => {
     setCenter: () => {
       calls.setCenter += 1;
     },
-    transform: { padding: { ...ZERO_PADDING } },
   };
   assert.equal(paddingIsZero(ZERO_PADDING), true);
   assert.equal(clearPaddingKeepView(zeroMap), false);
   assert.deepEqual(calls, { jumpTo: 0, flyTo: 0, easeTo: 0, setCenter: 0 });
-
-  const padded = {
-    ...zeroMap,
-    getPadding: () => ({ ...ZERO_PADDING, left: 396 }),
-    transform: { padding: { ...ZERO_PADDING, left: 396 } },
-  };
-  assert.equal(clearPaddingKeepView(padded), true);
-  assert.equal(calls.jumpTo, 0);
-  assert.equal(calls.flyTo, 0);
-  assert.equal(calls.easeTo, 0);
-  assert.equal(calls.setCenter, 0);
-  assert.deepEqual(padded.transform.padding, ZERO_PADDING);
 });
 
 test('in-flight tags suppress viewport reports until the final moveend', () => {
@@ -1083,11 +1113,10 @@ test('a preset produces exactly one camera method call including setCenter/jumpT
     },
     once: () => undefined,
     off: () => undefined,
-    getPadding: () => ({ ...ZERO_PADDING, left: 396 }),
+    isMoving: () => false,
+    getPadding: () => ({ ...ZERO_PADDING }),
     getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
     unproject: () => ({ lng: -20, lat: 20 }),
-    triggerRepaint: () => undefined,
-    transform: { padding: { ...ZERO_PADDING, left: 396 } },
   };
   const handlerRef: { current: (() => void) | null } = { current: null };
   const started: { current: number | null } = { current: null };
@@ -1122,11 +1151,10 @@ test('a preset produces exactly one camera method call including setCenter/jumpT
   assert.equal(claimFlyNonce(started, nonce + 1), true);
 });
 
-test('preset cleanup does not add a jumpTo after the single flyTo', () => {
+test('unpadded preset fly has no extra jumpTo; padded flight may add one', () => {
   const flyToCalls: Array<Record<string, unknown>> = [];
   const jumpToCalls: Array<Record<string, unknown>> = [];
-  const map = {
-    padding: { ...ZERO_PADDING, left: 396 },
+  const unpadded = {
     flyTo: (options: Record<string, unknown>) => {
       flyToCalls.push(options);
     },
@@ -1136,17 +1164,17 @@ test('preset cleanup does not add a jumpTo after the single flyTo', () => {
     },
     once: () => undefined,
     off: () => undefined,
-    getPadding: () => ({ ...ZERO_PADDING, left: 396 }),
+    isMoving: () => false,
+    getPadding: () => ({ ...ZERO_PADDING }),
     getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
     unproject: () => ({ lng: -20, lat: 20 }),
     setCenter: () => {
       jumpToCalls.push({ setCenter: true });
     },
-    transform: { padding: { ...ZERO_PADDING, left: 396 } },
   };
   const handlerRef: { current: (() => void) | null } = { current: null };
   startCameraAnimation(
-    map,
+    unpadded,
     handlerRef,
     'flyTo',
     cameraFlyOptions({
@@ -1157,11 +1185,32 @@ test('preset cleanup does not add a jumpTo after the single flyTo', () => {
       retainPadding: false,
     }),
     () => {
-      clearPaddingKeepView(map);
+      clearPaddingKeepView(unpadded);
     }
   );
   assert.equal(flyToCalls.length, 1);
   assert.equal(jumpToCalls.length, 0);
+
+  const padded = new InterruptibleMap();
+  padded.padding = { ...ZERO_PADDING, right: 496 };
+  startCameraAnimation(
+    padded,
+    handlerRef,
+    'flyTo',
+    { duration: 0, center: [-111.94, 33.425], padding: { ...ZERO_PADDING, right: 496 } },
+    () => {
+      clearPaddingKeepView(padded);
+    }
+  );
+  const cameraCalls = padded.methods.filter(
+    (name) => name === 'flyTo' || name === 'easeTo' || name === 'jumpTo' || name === 'setCenter'
+  );
+  assert.equal(cameraCalls[0], 'flyTo');
+  assert.ok(
+    cameraCalls.length === 1 || (cameraCalls.length === 2 && cameraCalls[1] === 'jumpTo'),
+    'a padded flight may add one jumpTo to clear padding'
+  );
+  assert.deepEqual(padded.getPadding(), ZERO_PADDING);
 });
 
 test('place and preset flights stay inside the 1.2–1.8s / 2.2s caps', () => {
@@ -1283,7 +1332,6 @@ test('reduced motion + 768 Worldwide: short canvas, width-fit zoom, one camera c
   const map = new InterruptibleMap();
   map.reducedMotion = true;
   map.padding = { ...ZERO_PADDING, left: 396 };
-  map.transform.padding = { ...map.padding };
   const handlerRef: { current: (() => void) | null } = { current: null };
   let ends = 0;
   startCameraAnimation(
@@ -1294,7 +1342,7 @@ test('reduced motion + 768 Worldwide: short canvas, width-fit zoom, one camera c
       duration: 900,
       center: [camera.lng, camera.lat],
       zoom: camera.zoom,
-      padding: ZERO_PADDING,
+      padding: { ...ZERO_PADDING, left: 396 },
     },
     () => {
       ends += 1;
@@ -1304,10 +1352,81 @@ test('reduced motion + 768 Worldwide: short canvas, width-fit zoom, one camera c
   const cameraCalls = map.methods.filter((name) =>
     name === 'flyTo' || name === 'easeTo' || name === 'jumpTo' || name === 'setCenter'
   );
-  assert.deepEqual(cameraCalls, ['flyTo']);
+  assert.equal(cameraCalls[0], 'flyTo');
+  assert.ok(
+    cameraCalls.length === 1 || (cameraCalls.length === 2 && cameraCalls[1] === 'jumpTo'),
+    'a padded flight may add one jumpTo to clear padding'
+  );
   assert.equal(ends, 1);
   assert.equal(map.isMoving(), false);
   map.endFlight();
   assert.equal(ends, 1);
-  assert.deepEqual(map.methods.filter((name) => name === 'jumpTo' || name === 'setCenter'), []);
+});
+
+function visualCenter(map: InterruptibleMap) {
+  const canvas = map.getCanvas();
+  return map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+}
+
+test('clearPaddingKeepView keeps the visual centre via jumpTo', () => {
+  const map = new InterruptibleMap();
+  map.padding = { ...ZERO_PADDING, right: 400 };
+  map.center = { lng: -111.94, lat: 33.425 };
+  const before = visualCenter(map);
+  const shiftedIfUncentered = {
+    lng: map.center.lng,
+    lat: map.center.lat,
+  };
+  assert.notEqual(before.lng, shiftedIfUncentered.lng);
+  assert.equal(clearPaddingKeepView(map), true);
+  assert.deepEqual(visualCenter(map), before);
+  assert.deepEqual(map.getPadding(), ZERO_PADDING);
+  assert.ok(map.methods.includes('jumpTo'));
+  assert.equal(clearPaddingKeepView(map), false);
+});
+
+test('padding-clear jumpTo updates bounds and search without flipping the chip', () => {
+  const effects = cameraMoveendEffects({}, 'resize');
+  assert.equal(effects.leavePreset, false);
+  assert.equal(effects.reportBounds, true);
+  assert.equal(shouldReportViewport('resize'), true);
+  assert.equal(isUserMapMove({}, 'resize'), false);
+
+  const unitedStates = LOCATION_PRESETS.find((item) => item.id === 'united-states')!;
+  let heading = createListHeadingMachine();
+  heading = startListHeadingRequest(heading);
+  heading = settleListHeadingRequest(
+    heading,
+    1,
+    { shown: 1, total: 1, hasMore: false, places: [{ city: 'Tempe' }] },
+    { hasMap: true, zoom: 12, location: unitedStates, leftPreset: true }
+  );
+  assert.equal(heading.heading?.chipLabel, 'Map area');
+
+  heading = startListHeadingRequest(heading);
+  heading = settleListHeadingRequest(
+    heading,
+    2,
+    { shown: 4, total: 4, hasMore: false, places: [{ city: 'Tempe' }] },
+    { hasMap: true, zoom: 12, location: unitedStates, leftPreset: true }
+  );
+  assert.equal(shouldApplySettledSearch(2, heading), true);
+  assert.equal(shouldApplySettledSearch(1, heading), false);
+  assert.equal(listHeadingText(heading.heading), '4 places in this area');
+  assert.equal(heading.heading?.chipLabel, 'Map area');
+});
+
+test('drawer close after a card fly does not shift the view', () => {
+  const size = { width: 1280, height: 900 };
+  const padding = flyPadding(true, false, size);
+  assert.ok((padding.right ?? 0) > 0);
+  const map = new InterruptibleMap();
+  map.width = size.width;
+  map.height = size.height;
+  map.padding = { ...ZERO_PADDING, ...padding };
+  map.center = { lng: -111.94, lat: 33.425 };
+  const before = visualCenter(map);
+  assert.equal(clearPaddingKeepView(map), true);
+  assert.deepEqual(visualCenter(map), before);
+  assert.deepEqual(map.getPadding(), ZERO_PADDING);
 });
