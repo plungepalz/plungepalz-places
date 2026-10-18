@@ -37,7 +37,10 @@ import {
   isMotorwayOrTrunkLayer,
   mutedRoadColor,
   muteMotorwayLayers,
+  LIST_HEADER_ESTIMATE_PX,
+  PLACE_CARD_MIN_HEIGHT_PX,
   placesListMaxHeightPx,
+  placesListSlotMaxHeightPx,
   scrollDeltaToRevealChild,
   scrollPlaceCardIntoView,
   shouldScrollChildIntoView,
@@ -206,10 +209,14 @@ test('cluster leaf lookup is a cheap place_id scan', () => {
 });
 
 test('list max-height is clamped to the viewport, not content height', () => {
-  assert.equal(placesListMaxHeightPx(900, 112), 772);
-  assert.ok(placesListMaxHeightPx(900, 112) < 1000);
+  const body = placesListMaxHeightPx(900, 112);
+  assert.equal(body, 900 - 112 - 16 - LIST_HEADER_ESTIMATE_PX);
+  assert.ok(112 + LIST_HEADER_ESTIMATE_PX + body <= 900);
   assert.ok(placesListMaxHeightPx(768, 96) < 5320);
   assert.equal(placesListMaxHeightPx(200, 180), 160);
+  const slot = placesListSlotMaxHeightPx(900, 122);
+  assert.ok(122 + slot <= 900);
+  assert.ok(PLACE_CARD_MIN_HEIGHT_PX >= 96);
 });
 
 test('list scroll and hover sync no-op without a list root', () => {
@@ -245,6 +252,10 @@ test('list scroll only when the card is off-screen', () => {
   assert.equal(scrollDeltaToRevealChild({ top: 80, bottom: 160 }, parent), -20);
   assert.equal(shouldScrollChildIntoView({ top: 480, bottom: 560 }, parent), true);
   assert.equal(scrollDeltaToRevealChild({ top: 480, bottom: 560 }, parent), 60);
+  const tallContent = { top: 100, bottom: 5000, clientHeight: 400 };
+  assert.equal(scrollDeltaToRevealChild({ top: 267, bottom: 365 }, tallContent), 0);
+  assert.equal(scrollDeltaToRevealChild({ top: 110, bottom: 190 }, tallContent, 56), 110 - 156);
+  assert.equal(scrollDeltaToRevealChild({ top: 160, bottom: 240 }, tallContent, 56), 0);
 });
 
 test('motorway and trunk layers mute toward warm grey, not brand orange', () => {

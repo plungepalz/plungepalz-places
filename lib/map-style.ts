@@ -417,25 +417,50 @@ export function clusterLeafHasPlace(
   return leaves.some((leaf) => (leaf.properties?.place_id ?? leaf.place_id) === placeId);
 }
 
+export const LIST_HEADER_ESTIMATE_PX = 56;
+export const PLACE_CARD_MIN_HEIGHT_PX = 98;
+
 export function shouldScrollChildIntoView(
   child: { top: number; bottom: number },
-  parent: { top: number; bottom: number }
+  parent: { top: number; bottom: number; clientHeight?: number },
+  headerInset = 0
 ): boolean {
-  return scrollDeltaToRevealChild(child, parent) !== 0;
+  return scrollDeltaToRevealChild(child, parent, headerInset) !== 0;
 }
 
-/** Pixels to scroll the list so `child` is fully inside `parent`. 0 if already fully visible. */
+/**
+ * Pixels to scroll the list so `child` is fully inside the visible client
+ * of `parent` (not its content box). 0 if already fully visible.
+ * `headerInset` covers a sticky / overlapping list header.
+ */
 export function scrollDeltaToRevealChild(
   child: { top: number; bottom: number },
-  parent: { top: number; bottom: number }
+  parent: { top: number; bottom: number; clientHeight?: number },
+  headerInset = 0
 ): number {
-  if (child.top >= parent.top && child.bottom <= parent.bottom) return 0;
-  if (child.top < parent.top) return child.top - parent.top;
-  return child.bottom - parent.bottom;
+  const viewTop = parent.top + Math.max(0, headerInset);
+  const viewBottom = parent.clientHeight != null ? parent.top + parent.clientHeight : parent.bottom;
+  if (child.top >= viewTop - 0.5 && child.bottom <= viewBottom + 0.5) return 0;
+  if (child.top < viewTop) return child.top - viewTop;
+  if (child.bottom > viewBottom) return child.bottom - viewBottom;
+  return 0;
 }
 
-/** Viewport-clamped list body height so Show/Hide never animates to content (~5k px). */
-export function placesListMaxHeightPx(viewportHeight: number, chromeTop: number, gap = 16): number {
+/**
+ * Viewport-clamped list *body* height. Subtracts the list header so
+ * header + wrap + chrome never exceed the window (768 Hide overshoot).
+ */
+export function placesListMaxHeightPx(
+  viewportHeight: number,
+  chromeTop: number,
+  gap = 16,
+  headerPx = LIST_HEADER_ESTIMATE_PX
+): number {
+  return Math.max(viewportHeight - chromeTop - gap - headerPx, 160);
+}
+
+/** Hard cap for the list slot so collapse animation cannot paint past the window. */
+export function placesListSlotMaxHeightPx(viewportHeight: number, chromeTop: number, gap = 16): number {
   return Math.max(viewportHeight - chromeTop - gap, 160);
 }
 
@@ -444,11 +469,25 @@ function cssEscape(value: string): string {
   return value.replace(/["\\]/g, '\\$&');
 }
 
-export function scrollPlaceCardIntoView(placeId: string | null | undefined, parent: HTMLElement | null): boolean {
+export function scrollPlaceCardIntoView(
+  placeId: string | null | undefined,
+  parent: HTMLElement | null,
+  header?: HTMLElement | null
+): boolean {
   if (!placeId || !parent) return false;
   const child = parent.querySelector<HTMLElement>(`[data-place-id="${cssEscape(placeId)}"]`);
   if (!child) return false;
-  const delta = scrollDeltaToRevealChild(child.getBoundingClientRect(), parent.getBoundingClientRect());
+  const parentRect = parent.getBoundingClientRect();
+  const childRect = child.getBoundingClientRect();
+  let headerInset = 0;
+  if (header) {
+    headerInset = Math.max(0, header.getBoundingClientRect().bottom - parentRect.top);
+  }
+  const delta = scrollDeltaToRevealChild(
+    childRect,
+    { top: parentRect.top, bottom: parentRect.bottom, clientHeight: parent.clientHeight },
+    headerInset
+  );
   if (delta === 0) return false;
   parent.scrollBy({ top: delta, behavior: 'smooth' });
   return true;

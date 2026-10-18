@@ -43,7 +43,7 @@ interface DraftLocation {
 interface PlacesMapProps {
   places: PlaceSearchResult[];
   selectedPlaceId: string | null;
-  hoveredPlaceId: string | null;
+  bindHover?: (apply: (placeId: string | null) => void) => () => void;
   flyRequest: FlyRequest | null;
   onFlyComplete: () => void;
   panelOpen: boolean;
@@ -212,7 +212,7 @@ async function ensurePinImage(map: MapboxMap, id: string, svg: string): Promise<
 export default function PlacesMap({
   places,
   selectedPlaceId,
-  hoveredPlaceId,
+  bindHover,
   flyRequest,
   onFlyComplete,
   panelOpen,
@@ -341,37 +341,37 @@ export default function PlacesMap({
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map || !imagesReady) return;
-    const prev = featureStateRef.current;
-    const clear = (id: string | null, key: 'hover' | 'selected') => {
-      if (!id) return;
+    const applyHover = (placeId: string | null) => {
+      const prev = featureStateRef.current.hover;
+      if (prev === placeId) return;
       try {
-        map.removeFeatureState({ source: 'places', id }, key);
+        if (prev) map.removeFeatureState({ source: 'places', id: prev }, 'hover');
+        if (placeId) map.setFeatureState({ source: 'places', id: placeId }, { hover: true });
       } catch {
         /* source or feature may not exist at this zoom */
       }
+      featureStateRef.current.hover = placeId;
     };
-    const set = (id: string | null, key: 'hover' | 'selected') => {
-      if (!id) return;
-      try {
-        map.setFeatureState({ source: 'places', id }, { [key]: true });
-      } catch {
-        /* clustered-away points have no source feature */
-      }
-    };
-    if (prev.hover !== hoveredPlaceId) {
-      clear(prev.hover, 'hover');
-      set(hoveredPlaceId, 'hover');
-    }
-    if (prev.selected !== selectedPlaceId) {
-      clear(prev.selected, 'selected');
-      set(selectedPlaceId, 'selected');
-    }
-    featureStateRef.current = { hover: hoveredPlaceId, selected: selectedPlaceId };
-  }, [hoveredPlaceId, selectedPlaceId, imagesReady]);
+    return bindHover?.(applyHover);
+  }, [bindHover, imagesReady]);
 
   useEffect(() => {
     const map = mapRef.current?.getMap();
-    const placeId = hoveredPlaceId || selectedPlaceId;
+    if (!map || !imagesReady) return;
+    const prev = featureStateRef.current.selected;
+    if (prev === selectedPlaceId) return;
+    try {
+      if (prev) map.removeFeatureState({ source: 'places', id: prev }, 'selected');
+      if (selectedPlaceId) map.setFeatureState({ source: 'places', id: selectedPlaceId }, { selected: true });
+    } catch {
+      /* clustered-away points have no source feature */
+    }
+    featureStateRef.current.selected = selectedPlaceId;
+  }, [selectedPlaceId, imagesReady]);
+
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    const placeId = selectedPlaceId;
     if (!map || !imagesReady || !placeId) {
       setHighlightedClusterId(null);
       return;
@@ -413,7 +413,7 @@ export default function PlacesMap({
     return () => {
       cancelled = true;
     };
-  }, [hoveredPlaceId, selectedPlaceId, imagesReady, clusterQueryTick]);
+  }, [selectedPlaceId, imagesReady, clusterQueryTick]);
 
   useEffect(() => {
     if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;

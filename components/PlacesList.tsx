@@ -90,6 +90,7 @@ function PlacesList({
         {isLoading ? <div className="places-loading-bar" /> : null}
       </div>
       <div
+        data-list-header
         className="border-b border-gray-100"
         style={filterHeaderInset ? { paddingTop: FILTER_OVERLAY_HEADER_INSET } : undefined}
       >
@@ -118,27 +119,29 @@ function PlacesList({
             <div className="m-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
           )}
 
+          {places.map((place) => (
+            <PlaceCard
+              key={place.place_id}
+              place={place}
+              isSelected={selectedPlaceId === place.place_id}
+              isFavorited={favorites.has(place.place_id)}
+              onSelectPlace={onSelectPlace}
+              onHoverPlace={onHoverPlace}
+              onToggleFavorite={onToggleFavorite}
+            />
+          ))}
+
           {isLoading && places.length === 0 ? (
             <div className="flex h-32 items-center justify-center">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
             </div>
-          ) : places.length === 0 ? (
+          ) : null}
+
+          {!isLoading && places.length === 0 ? (
             <div className="px-4 py-10 text-center text-sm text-gray-500">
               No places in this view. Try zooming out or clearing filters.
             </div>
-          ) : (
-            places.map((place) => (
-              <PlaceCard
-                key={place.place_id}
-                place={place}
-                isSelected={selectedPlaceId === place.place_id}
-                isFavorited={favorites.has(place.place_id)}
-                onSelectPlace={onSelectPlace}
-                onHoverPlace={onHoverPlace}
-                onToggleFavorite={onToggleFavorite}
-              />
-            ))
-          )}
+          ) : null}
 
           {hasMore && !isLoading && (
             <div className="p-2">

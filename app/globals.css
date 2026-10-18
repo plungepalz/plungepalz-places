@@ -37,10 +37,23 @@ body {
 }
 
 .place-card {
+  min-height: 98px;
+  contain-intrinsic-size: auto 98px;
+  opacity: 1;
+  transform: translateY(0);
   transition:
+    opacity 180ms ease,
+    transform 180ms ease,
     border-color 180ms ease,
     box-shadow 180ms ease,
     background-color 180ms ease;
+}
+
+@starting-style {
+  .place-card {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 .place-card:hover:not([data-selected='true']),
@@ -59,7 +72,11 @@ body {
   min-height: 0;
   overflow: hidden;
   opacity: 1;
-  max-height: var(--places-list-max, 100%);
+  max-height: min(var(--places-list-max, 100%), 100%);
+}
+
+.places-list-body {
+  overflow-anchor: none;
 }
 
 .places-list[data-collapsible='true'] .places-list-body-wrap {
@@ -75,7 +92,7 @@ body {
 }
 
 .places-list-body-wrap-expanded {
-  max-height: var(--places-list-max, 100%);
+  max-height: min(var(--places-list-max, 100%), 100%);
 }
 
 .places-list-body-wrap > .places-list-body {
@@ -132,5 +149,12 @@ body {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+
+  @starting-style {
+    .place-card {
+      opacity: 1;
+      transform: none;
+    }
   }
 }

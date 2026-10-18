@@ -29,7 +29,7 @@ function PlaceCard({
       data-place-id={place.place_id}
       data-place-card
       data-selected={isSelected ? 'true' : 'false'}
-      className={`place-card relative rounded-2xl border bg-white ${
+      className={`place-card relative min-h-[98px] rounded-2xl border bg-white ${
         isSelected ? 'place-card-selected border-brand shadow-md ring-2 ring-brand-soft' : 'border-transparent'
       }`}
       onMouseEnter={() => onHoverPlace(place.place_id)}

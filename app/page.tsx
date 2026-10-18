@@ -24,8 +24,14 @@ import {
   shouldReapplyPresetOnSizeChange,
   type SizeBox,
 } from '@/lib/map-camera';
-import { mergeLocalPlaces } from '@/lib/merge-local-places';
-import { placesListMaxHeightPx, scrollPlaceCardIntoView, syncMapHoveredCard } from '@/lib/map-style';
+import { mergeLocalPlaces, reconcilePlacesById } from '@/lib/merge-local-places';
+import {
+  placesListMaxHeightPx,
+  placesListSlotMaxHeightPx,
+  scrollPlaceCardIntoView,
+  syncMapHoveredCard,
+} from '@/lib/map-style';
+import { createPlaceHoverController } from '@/lib/place-hover';
 import { searchAfterViewportChange, searchDebounceMs } from '@/lib/search-debounce';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
@@ -57,7 +63,6 @@ export default function HomePage() {
   const [location, setLocation] = useState<LocationPreset>(DEFAULT_LOCATION);
 
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
-  const [hoveredPlaceId, setHoveredPlaceId] = useState<string | null>(null);
   const [detailsPlaceId, setDetailsPlaceId] = useState<string | null>(null);
   const [addPlaceOpen, setAddPlaceOpen] = useState(false);
   const [draftLocation, setDraftLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -117,11 +122,15 @@ export default function HomePage() {
     [serverPlaces, localPlaces, localFilters]
   );
   const extraCount = merged.extraCount;
-  const placesKey = merged.places.map((place) => place.place_id).join('\0');
-  // Membership key only — keep the previous array so hover / filter typing
-  // does not rebuild 82 card elements.
-  const places = useMemo(() => merged.places, [placesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [placeStore, setPlaceStore] = useState({ src: merged, places: merged.places });
+  if (placeStore.src !== merged) {
+    setPlaceStore({ src: merged, places: reconcilePlacesById(placeStore.places, merged.places) });
+  }
+  const places = placeStore.src === merged ? placeStore.places : reconcilePlacesById(placeStore.places, merged.places);
   const displayTotal = total + extraCount;
+  const [hoverCtrl] = useState(createPlaceHoverController);
+
+  useEffect(() => () => hoverCtrl.dispose(), [hoverCtrl]);
 
   const buildParams = useCallback(
     (pageNum: number, bounds: MapBounds | null): SearchParams => {
@@ -324,17 +333,46 @@ export default function HomePage() {
     });
   }, []);
 
-  const handleHoverPlace = useCallback((placeId: string | null) => {
-    setHoveredPlaceId(placeId);
-  }, []);
+  const handleCardHover = useCallback((placeId: string | null) => {
+    hoverCtrl.setHover(placeId, 'card');
+  }, [hoverCtrl]);
+
+  const handlePinHover = useCallback((placeId: string | null) => {
+    hoverCtrl.setHover(placeId, 'pin');
+  }, [hoverCtrl]);
+
+  const bindMapHover = useCallback(
+    (apply: (placeId: string | null) => void) => hoverCtrl.bindFeatureState(apply),
+    [hoverCtrl]
+  );
 
   useEffect(() => {
-    syncMapHoveredCard(listSlotRef.current, hoveredPlaceId);
-    const id = hoveredPlaceId || selectedPlaceId;
-    if (!id) return;
-    const parent = listSlotRef.current?.querySelector<HTMLElement>('#places-list-body') ?? null;
-    scrollPlaceCardIntoView(id, parent);
-  }, [hoveredPlaceId, selectedPlaceId]);
+    const unHighlight = hoverCtrl.bindCardHighlight((placeId) => {
+      syncMapHoveredCard(listSlotRef.current, placeId);
+    });
+    const unScroll = hoverCtrl.bindPinScroll((placeId) => {
+      const root = listSlotRef.current;
+      scrollPlaceCardIntoView(
+        placeId,
+        root?.querySelector<HTMLElement>('#places-list-body') ?? null,
+        root?.querySelector<HTMLElement>('[data-list-header]') ?? null
+      );
+    });
+    return () => {
+      unHighlight();
+      unScroll();
+    };
+  }, [hoverCtrl]);
+
+  useEffect(() => {
+    if (!selectedPlaceId) return;
+    const root = listSlotRef.current;
+    scrollPlaceCardIntoView(
+      selectedPlaceId,
+      root?.querySelector<HTMLElement>('#places-list-body') ?? null,
+      root?.querySelector<HTMLElement>('[data-list-header]') ?? null
+    );
+  }, [selectedPlaceId]);
 
   const headingText = listHeadingText(heading, extraCount);
   const chipLabel = heading?.chipLabel ?? location.label;
@@ -406,7 +444,7 @@ export default function HomePage() {
         <PlacesMap
           places={places}
           selectedPlaceId={selectedPlaceId}
-          hoveredPlaceId={hoveredPlaceId}
+          bindHover={bindMapHover}
           flyRequest={flyRequest}
           onFlyComplete={handleFlyComplete}
           panelOpen={panelOpen}
@@ -416,7 +454,7 @@ export default function HomePage() {
           mapCenterRequest={mapCenterRequest}
           onMapCenter={applyMapLocation}
           onSelectPlace={handleSelectFromMap}
-          onHoverPlace={setHoveredPlaceId}
+          onHoverPlace={handlePinHover}
           onViewportChange={handleViewportChange}
           onUserCameraMove={handleUserCameraMove}
           hintTop={pinHintTop}
@@ -432,11 +470,12 @@ export default function HomePage() {
         <div
           ref={listSlotRef}
           data-places-list-slot
-          className={`places-list-slot absolute left-4 w-[min(100%-2rem,380px)] ${
+          className={`places-list-slot absolute left-4 w-[min(100%-2rem,380px)] overflow-hidden ${
             hideListForDrawer ? 'hidden' : 'pointer-events-auto'
           } ${listCollapsed ? '' : 'bottom-4'}`}
           style={{
             top: chromeTop,
+            maxHeight: placesListSlotMaxHeightPx(viewportHeight, chromeTop),
             ['--places-list-max' as string]: `${placesListMaxHeightPx(viewportHeight, chromeTop)}px`,
           }}
           aria-hidden={hideListForDrawer}
@@ -447,7 +486,7 @@ export default function HomePage() {
             selectedPlaceId={selectedPlaceId}
             favorites={favorites}
             onSelectPlace={handleSelectFromList}
-            onHoverPlace={handleHoverPlace}
+            onHoverPlace={handleCardHover}
             onToggleFavorite={handleToggleFavorite}
             onLoadMore={() =>
               performSearch(page + 1, true, leftPreset ? mapBoundsRef.current : null)
