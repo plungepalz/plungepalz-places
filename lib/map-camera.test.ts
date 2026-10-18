@@ -16,6 +16,7 @@ import {
   flyToThenOnMoveend,
   MERCATOR_TILE_SIZE,
   LIST_EXPAND_RESIZE_MS,
+  cssColorFromPaint,
   defaultCompactList,
   hideListForWorldwidePreset,
   isUserMapMove,
@@ -26,9 +27,12 @@ import {
   mapboxHeightMinZoom,
   pinHintCenterX,
   presetCamera,
+  readMapWaterColor,
   scheduleMapResize,
+  shouldCapWorldwideCanvas,
   shouldCollapseList,
   shouldReapplyPresetOnSizeChange,
+  worldwideCanvasLayout,
   worldwideFraming,
   worldwideMapHeightCap,
   zoomToFitRadiusKm,
@@ -322,6 +326,89 @@ test('defaultCompactList is every preset at ≤768', () => {
   assert.equal(defaultCompactList(768), true);
   assert.equal(defaultCompactList(1280), false);
   assert.equal(defaultCompactList(1440), false);
+});
+
+test('at 768x900 Worldwide camera zoom is <= log2(768/512) and populated longitudes fit', () => {
+  const viewport = { width: 768, height: 900 };
+  const fitTop = 179;
+  assert.equal(shouldCapWorldwideCanvas(768, 900, true, false), true);
+  assert.equal(shouldCapWorldwideCanvas(1280, 900, true, false), false);
+  assert.equal(shouldCapWorldwideCanvas(768, 900, true, true), false);
+  assert.equal(shouldCapWorldwideCanvas(768, 900, false, false), false);
+
+  const layout = worldwideCanvasLayout(viewport, {
+    isWorldwide: true,
+    leftPreset: false,
+    fitTop,
+  });
+  assert.equal(layout.top, fitTop);
+  assert.ok(layout.height <= 768);
+  const widthFitZoom = Math.log2(768 / MERCATOR_TILE_SIZE);
+  assert.ok(mapboxHeightMinZoom(layout.height) <= widthFitZoom + 1e-9);
+
+  const loc = { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 };
+  const camera = presetCamera(loc, 768, layout.height, { left: 0, right: 0 });
+  assert.ok(camera.zoom <= widthFitZoom + 1e-9);
+  assertPlacesInGap(768, layout.height, { left: 0, right: 0 });
+
+  const framing = worldwideFraming(768, layout.height, { left: 0, right: 0 });
+  assert.equal(framing.overflow, false);
+  const populated = [
+    ['Hawaii', -157.8],
+    ['Japan', 139.69],
+    ['Sydney', 151.21],
+    ['Melbourne', 144.96],
+    ['Fiji', 178.0],
+    ['NZ', 174.78],
+  ] as const;
+  for (const [name, lng] of populated) {
+    const copies = lngScreenCopies(lng, camera.lng, camera.zoom, 768, 0, 0);
+    const onScreen = copies.some((x) => x > 12 && x < 768 - 12);
+    assert.ok(
+      onScreen,
+      `${name} (${lng}) copies [${copies.map((x) => x.toFixed(1)).join(', ')}] ` +
+        `must sit in 0..768 at zoom=${camera.zoom.toFixed(3)} lng=${camera.lng.toFixed(2)}`
+    );
+  }
+
+  const desktop = worldwideCanvasLayout(
+    { width: 1280, height: 900 },
+    { isWorldwide: true, leftPreset: false, fitTop: 0 }
+  );
+  assert.deepEqual(desktop, { top: 0, height: 900 });
+  const framing1280 = worldwideFraming(1280, 900);
+  assert.ok(Math.abs(framing1280.zoom - mapboxHeightMinZoom(900)) < 1e-9);
+  const framing1440 = worldwideFraming(1440, 900);
+  assert.ok(Math.abs(framing1440.zoom - Math.log2((1440 - LIST_PANEL_RIGHT) / 512)) < 1e-9);
+
+  const afterLeave = worldwideCanvasLayout(viewport, {
+    isWorldwide: true,
+    leftPreset: true,
+    fitTop,
+  });
+  assert.deepEqual(afterLeave, { top: 0, height: 900 });
+});
+
+test('readMapWaterColor prefers the water layer over beige', () => {
+  assert.equal(cssColorFromPaint('#cad2d3'), '#cad2d3');
+  assert.equal(
+    cssColorFromPaint(['interpolate', ['linear'], ['zoom'], 0, '#a8d5e5', 8, '#7eb6c9']),
+    '#7eb6c9'
+  );
+  const paint: Record<string, Record<string, unknown>> = {
+    water: { 'fill-color': '#cad2d3' },
+    background: { 'background-color': '#f8f4f0' },
+  };
+  assert.equal(
+    readMapWaterColor((layer, prop) => paint[layer]?.[prop]),
+    '#cad2d3'
+  );
+  delete paint.water;
+  assert.equal(
+    readMapWaterColor((layer, prop) => paint[layer]?.[prop]),
+    '#f8f4f0'
+  );
+  assert.notEqual(readMapWaterColor((layer, prop) => paint[layer]?.[prop]), '#e8e4dc');
 });
 
 test('768x1024 Worldwide zoom fits 360° of longitude in the canvas width', () => {

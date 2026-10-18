@@ -397,6 +397,7 @@ export default function HomePage() {
           mapboxToken={mapboxToken}
           collapseList={collapseList}
           fitTop={fitTop}
+          leftPreset={leftPreset}
           location={location}
         />
       </div>
