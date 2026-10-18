@@ -21,6 +21,7 @@ import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
 import {
   defaultCompactList,
   shouldCollapseList,
+  shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
   type SizeBox,
 } from '@/lib/map-camera';
@@ -69,6 +70,7 @@ export default function HomePage() {
   const [mapZoom, setMapZoom] = useState<number | null>(null);
   const [leftPreset, setLeftPreset] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(1280);
+  const [viewportHeight, setViewportHeight] = useState(900);
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const lastPresetBoundsKeyRef = useRef('');
   const headingMachineRef = useRef(createListHeadingMachine());
@@ -328,8 +330,13 @@ export default function HomePage() {
     const onResize = () => {
       const next = { width: window.innerWidth, height: window.innerHeight };
       setViewportWidth(next.width);
-      if (shouldReapplyPresetOnSizeChange(leftPresetRef.current, prevViewportRef.current, next)) {
-        const loc = locationRef.current;
+      setViewportHeight(next.height);
+      const loc = locationRef.current;
+      const left = leftPresetRef.current;
+      if (
+        shouldReapplyPresetOnSizeChange(left, prevViewportRef.current, next) ||
+        shouldReapplyNarrowWorldwide(left, loc.id, prevViewportRef.current, next)
+      ) {
         setFlyRequest({
           nonce: Date.now(),
           longitude: loc.lng,
@@ -397,7 +404,8 @@ export default function HomePage() {
           mapboxToken={mapboxToken}
           collapseList={collapseList}
           fitTop={fitTop}
-          leftPreset={leftPreset}
+          viewportWidth={viewportWidth}
+          viewportHeight={viewportHeight}
           location={location}
         />
       </div>

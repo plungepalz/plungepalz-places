@@ -16,6 +16,9 @@ import {
   flyToThenOnMoveend,
   MERCATOR_TILE_SIZE,
   LIST_EXPAND_RESIZE_MS,
+  WORLD_FIT_EDGE_PAD,
+  canvasLayoutAfterPan,
+  canvasLayoutIgnoresList,
   cssColorFromPaint,
   defaultCompactList,
   hideListForWorldwidePreset,
@@ -23,16 +26,19 @@ import {
   layoutInsets,
   lngScreenCopies,
   listPanelRightEdge,
+  lowZoomCanvasLayout,
   mapControlsRightPx,
   mapboxHeightMinZoom,
+  mercatorWorldPx,
+  narrowWidthFitZoom,
+  needsLowZoomCanvas,
   pinHintCenterX,
   presetCamera,
   readMapWaterColor,
   scheduleMapResize,
-  shouldCapWorldwideCanvas,
   shouldCollapseList,
+  shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
-  worldwideCanvasLayout,
   worldwideFraming,
   worldwideMapHeightCap,
   zoomToFitRadiusKm,
@@ -257,7 +263,8 @@ test('presetCamera re-frames Worldwide when the breakpoint changes', () => {
   const loc = { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 };
   const at768 = presetCamera(loc, 768, 900, { left: 0, right: 0 });
   const at1280 = presetCamera(loc, 1280, 900);
-  assert.ok(Math.abs(at768.zoom - Math.log2(768 / 512)) < 1e-9);
+  assert.ok(at768.zoom <= Math.log2(768 / 512) + 1e-9);
+  assert.ok(Math.abs(at768.zoom - narrowWidthFitZoom(768)) < 1e-9);
   assert.equal(at768.lng, WORLDWIDE_COMFORT_LNG);
   assert.ok(at1280.zoom > at768.zoom);
   assert.notEqual(at1280.lng, at768.lng);
@@ -330,29 +337,20 @@ test('defaultCompactList is every preset at ≤768', () => {
 
 test('at 768x900 Worldwide camera zoom is <= log2(768/512) and populated longitudes fit', () => {
   const viewport = { width: 768, height: 900 };
-  const fitTop = 179;
-  assert.equal(shouldCapWorldwideCanvas(768, 900, true, false), true);
-  assert.equal(shouldCapWorldwideCanvas(1280, 900, true, false), false);
-  assert.equal(shouldCapWorldwideCanvas(768, 900, true, true), false);
-  assert.equal(shouldCapWorldwideCanvas(768, 900, false, false), false);
-
-  const layout = worldwideCanvasLayout(viewport, {
-    isWorldwide: true,
-    leftPreset: false,
-    fitTop,
-  });
-  assert.equal(layout.top, fitTop);
-  assert.ok(layout.height <= 768);
   const widthFitZoom = Math.log2(768 / MERCATOR_TILE_SIZE);
-  assert.ok(mapboxHeightMinZoom(layout.height) <= widthFitZoom + 1e-9);
-
   const loc = { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 };
-  const camera = presetCamera(loc, 768, layout.height, { left: 0, right: 0 });
+  const camera = presetCamera(loc, 768, 900, { left: 0, right: 0 });
   assert.ok(camera.zoom <= widthFitZoom + 1e-9);
+  assert.ok(camera.zoom <= narrowWidthFitZoom(768) + 1e-9);
+
+  const layout = lowZoomCanvasLayout(viewport, camera.zoom);
+  assert.ok(layout.height <= 768);
+  assert.ok(mapboxHeightMinZoom(layout.height) <= camera.zoom + 1e-9);
   assertPlacesInGap(768, layout.height, { left: 0, right: 0 });
 
-  const framing = worldwideFraming(768, layout.height, { left: 0, right: 0 });
+  const framing = worldwideFraming(768, 900, { left: 0, right: 0 });
   assert.equal(framing.overflow, false);
+  assert.ok(framing.worldPx <= 768 - 2 * WORLD_FIT_EDGE_PAD + 1);
   const populated = [
     ['Hawaii', -157.8],
     ['Japan', 139.69],
@@ -363,30 +361,77 @@ test('at 768x900 Worldwide camera zoom is <= log2(768/512) and populated longitu
   ] as const;
   for (const [name, lng] of populated) {
     const copies = lngScreenCopies(lng, camera.lng, camera.zoom, 768, 0, 0);
-    const onScreen = copies.some((x) => x > 12 && x < 768 - 12);
+    const onScreen = copies.some((x) => x > WORLD_FIT_EDGE_PAD && x < 768 - WORLD_FIT_EDGE_PAD);
     assert.ok(
       onScreen,
       `${name} (${lng}) copies [${copies.map((x) => x.toFixed(1)).join(', ')}] ` +
-        `must sit in 0..768 at zoom=${camera.zoom.toFixed(3)} lng=${camera.lng.toFixed(2)}`
+        `must sit in ${WORLD_FIT_EDGE_PAD}..${768 - WORLD_FIT_EDGE_PAD} at zoom=${camera.zoom.toFixed(3)}`
     );
   }
 
-  const desktop = worldwideCanvasLayout(
-    { width: 1280, height: 900 },
-    { isWorldwide: true, leftPreset: false, fitTop: 0 }
-  );
+  const desktop = lowZoomCanvasLayout({ width: 1280, height: 900 }, 0.814);
   assert.deepEqual(desktop, { top: 0, height: 900 });
   const framing1280 = worldwideFraming(1280, 900);
   assert.ok(Math.abs(framing1280.zoom - mapboxHeightMinZoom(900)) < 1e-9);
   const framing1440 = worldwideFraming(1440, 900);
   assert.ok(Math.abs(framing1440.zoom - Math.log2((1440 - LIST_PANEL_RIGHT) / 512)) < 1e-9);
+});
 
-  const afterLeave = worldwideCanvasLayout(viewport, {
-    isWorldwide: true,
-    leftPreset: true,
-    fitTop,
-  });
-  assert.deepEqual(afterLeave, { top: 0, height: 900 });
+test('1280→768 re-applies narrow Worldwide framing while the chip is still Worldwide', () => {
+  const desktop = { width: 1280, height: 900 };
+  const compact = { width: 768, height: 900 };
+  assert.equal(needsLowZoomCanvas(1280, 900), false);
+  assert.equal(needsLowZoomCanvas(768, 900), true);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', desktop, compact), true);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', compact, desktop), false);
+  assert.equal(shouldReapplyNarrowWorldwide(true, 'worldwide', desktop, compact), false);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'tokyo', desktop, compact), false);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', null, compact), false);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, desktop, compact), true);
+
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    compact.width,
+    compact.height,
+    { left: 0, right: 0 }
+  );
+  assert.ok(camera.zoom <= narrowWidthFitZoom(768) + 1e-9);
+  assert.ok(camera.zoom < mapboxHeightMinZoom(900));
+});
+
+test('shortened canvas follows zoom, not the Worldwide chip, and a pan keeps zoom', () => {
+  const viewport = { width: 768, height: 900 };
+  const lowZoom = narrowWidthFitZoom(768);
+  const atChip = lowZoomCanvasLayout(viewport, lowZoom);
+  const afterLeaveChip = lowZoomCanvasLayout(viewport, lowZoom);
+  assert.deepEqual(atChip, afterLeaveChip);
+  assert.ok(atChip.height < 900);
+  assert.ok(mapboxHeightMinZoom(atChip.height) <= lowZoom + 1e-9);
+
+  const panned = canvasLayoutAfterPan(viewport, lowZoom);
+  assert.equal(panned.zoom, lowZoom);
+  assert.deepEqual(panned.layout, atChip);
+
+  const midZoom = 0.7;
+  const mid = lowZoomCanvasLayout(viewport, midZoom);
+  assert.ok(Math.abs(mid.height - mercatorWorldPx(midZoom)) < 1e-6);
+  assert.equal(mid.top + mid.height, 900);
+  assert.ok(mid.height > atChip.height);
+  assert.ok(mid.height < 900);
+
+  const pastClamp = lowZoomCanvasLayout(viewport, mapboxHeightMinZoom(900));
+  assert.deepEqual(pastClamp, { top: 0, height: 900 });
+});
+
+test('Show list does not remesasure or shrink the 768 Worldwide canvas', () => {
+  const viewport = { width: 768, height: 900 };
+  const zoom = narrowWidthFitZoom(768);
+  const hidden = canvasLayoutIgnoresList(viewport, zoom);
+  const shown = lowZoomCanvasLayout(viewport, zoom);
+  assert.deepEqual(hidden, shown);
+  assert.equal(shown.top + shown.height, 900);
+  assert.ok(shown.height < 900);
+  assert.ok(shown.height !== 768 || shown.top !== 0);
 });
 
 test('readMapWaterColor prefers the water layer over beige', () => {

@@ -7,18 +7,19 @@ import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
 import { BRAND } from '@/lib/brand';
 import {
   CAMERA_DURATION,
-  LIST_EXPAND_RESIZE_MS,
   ZERO_PADDING,
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
   isUserMapMove,
+  NARROW_VIEWPORT,
+  lowZoomCanvasLayout,
   mapControlsRightPx,
   pinHintCenterX,
   presetCamera,
   readMapWaterColor,
   scheduleMapResize,
-  worldwideCanvasLayout,
+  worldwideFraming,
   type MapResizeState,
 } from '@/lib/map-camera';
 import type { LocationPreset } from '@/lib/locations';
@@ -55,10 +56,9 @@ interface PlacesMapProps {
   collapseList?: boolean;
   /** Top chrome (filter + compact list) to keep out of an exactZoom fit. */
   fitTop?: number;
-  /** Bump after list expand/collapse so the canvas is re-measured. */
-  layoutEpoch?: number;
-  /** False while a location chip is active; true after a user camera move. */
-  leftPreset?: boolean;
+  /** Window size from the page so canvas layout and preset flies stay in sync. */
+  viewportWidth?: number;
+  viewportHeight?: number;
   location?: LocationPreset;
 }
 
@@ -220,8 +220,8 @@ export default function PlacesMap({
   mapboxToken,
   collapseList = false,
   fitTop = 0,
-  layoutEpoch = 0,
-  leftPreset = false,
+  viewportWidth,
+  viewportHeight,
   location,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
@@ -245,13 +245,26 @@ export default function PlacesMap({
     width: typeof window === 'undefined' ? 1280 : window.innerWidth,
     height: typeof window === 'undefined' ? 800 : window.innerHeight,
   }));
+  const [liveZoom, setLiveZoom] = useState<number | null>(null);
   const [waterColor, setWaterColor] = useState<string | undefined>(undefined);
   const resizeStateRef = useRef<MapResizeState>({ rafId: null });
-  const canvasLayout = worldwideCanvasLayout(outerSize, {
-    isWorldwide: location?.id === 'worldwide',
-    leftPreset,
-    fitTop,
-  });
+  const slotSize = useMemo(
+    () => ({
+      width: viewportWidth ?? outerSize.width,
+      height: viewportHeight ?? outerSize.height,
+    }),
+    [outerSize.height, outerSize.width, viewportHeight, viewportWidth]
+  );
+  const pendingPresetZoom =
+    flyRequest?.exactZoom && location
+      ? presetCamera(location, slotSize.width, slotSize.height, { left: 0, right: 0 }).zoom
+      : null;
+  const fallbackZoom =
+    location?.id === 'worldwide'
+      ? worldwideFraming(slotSize.width, slotSize.height, { left: 0 }).zoom
+      : (location?.zoom ?? 3.4);
+  const layoutZoom = pendingPresetZoom ?? liveZoom ?? fallbackZoom;
+  const canvasLayout = lowZoomCanvasLayout(slotSize, layoutZoom);
   const flyFitTop = canvasLayout.top > 0 ? 0 : fitTop;
 
   const requestMapResize = useCallback(() => {
@@ -302,9 +315,7 @@ export default function PlacesMap({
 
   useEffect(() => {
     requestMapResize();
-    const handle = window.setTimeout(requestMapResize, LIST_EXPAND_RESIZE_MS);
-    return () => window.clearTimeout(handle);
-  }, [collapseList, fitTop, layoutEpoch, leftPreset, location?.id, requestMapResize]);
+  }, [canvasLayout.top, canvasLayout.height, requestMapResize]);
 
   const geojson = useMemo(
     () => ({
@@ -461,18 +472,27 @@ export default function PlacesMap({
     if (!flyRequest || !mapRef.current) return;
     const map = mapRef.current.getMap();
     const currentZoom = map.getZoom();
-    const container = map.getContainer();
-    const size = { width: container.clientWidth, height: container.clientHeight };
-    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size, collapseList, flyFitTop);
+    const planned = lowZoomCanvasLayout(slotSize, layoutZoom);
+    const size = { width: slotSize.width, height: planned.height };
+    const narrowWorldFly =
+      Boolean(flyRequest.exactZoom) &&
+      slotSize.width <= NARROW_VIEWPORT &&
+      (location?.id === 'worldwide' || (flyRequest.zoom ?? currentZoom) <= 1.3);
+    const padding = flyPadding(
+      panelOpen,
+      flyRequest.exactZoom,
+      size,
+      collapseList || narrowWorldFly,
+      flyFitTop
+    );
     let zoom = resolveFlyZoom(currentZoom, flyRequest);
     let longitude = flyRequest.longitude;
     let latitude = flyRequest.latitude;
     if (!flyRequest.exactZoom && !flyRequest.programmatic) {
       onUserCameraMove?.();
     }
-    const cameraHeight = Math.max(size.height - (flyRequest.exactZoom ? flyFitTop : 0), 1);
     if (flyRequest.exactZoom && location) {
-      const camera = presetCamera(location, size.width, cameraHeight, {
+      const camera = presetCamera(location, slotSize.width, slotSize.height, {
         left: padding.left,
         right: padding.right,
       });
@@ -488,14 +508,15 @@ export default function PlacesMap({
           zoom: flyRequest.zoom ?? 1.15,
           radiusKm: 20000,
         },
-        size.width,
-        cameraHeight,
+        slotSize.width,
+        slotSize.height,
         { left: padding.left, right: padding.right }
       );
       zoom = camera.zoom;
       longitude = camera.lng;
       latitude = camera.lat;
     }
+    setLiveZoom(zoom);
     if (flyEndHandlerRef.current) {
       map.off('moveend', flyEndHandlerRef.current);
       flyEndHandlerRef.current = null;
@@ -539,7 +560,17 @@ export default function PlacesMap({
     );
     flyEndHandlerRef.current = onFlyEnd;
     onFlyComplete();
-  }, [collapseList, flyFitTop, flyRequest, location, onFlyComplete, onUserCameraMove, panelOpen]);
+  }, [
+    collapseList,
+    flyFitTop,
+    flyRequest,
+    layoutZoom,
+    location,
+    onFlyComplete,
+    onUserCameraMove,
+    panelOpen,
+    slotSize,
+  ]);
 
   const zoomBy = (delta: number) => {
     const map = mapRef.current?.getMap();
@@ -677,8 +708,14 @@ export default function PlacesMap({
     };
   }, [imagesReady, locationPickMode, onHoverPlace]);
 
+  const handleMove = useCallback((event: ViewStateChangeEvent) => {
+    const nextZoom = event.viewState.zoom;
+    setLiveZoom((prev) => (prev != null && Math.abs(prev - nextZoom) < 1e-6 ? prev : nextZoom));
+  }, []);
+
   const handleMoveEnd = useCallback(
     (event: ViewStateChangeEvent) => {
+      handleMove(event);
       reportViewport();
       setClusterQueryTick((tick) => tick + 1);
       const tag = flightTagRef.current;
@@ -689,7 +726,7 @@ export default function PlacesMap({
         flightTagRef.current = null;
       }
     },
-    [onUserCameraMove, reportViewport]
+    [handleMove, onUserCameraMove, reportViewport]
   );
 
   const pinHint = locationPickMode ? (
@@ -771,6 +808,7 @@ export default function PlacesMap({
         }
         cursor="auto"
         onLoad={handleLoad}
+        onMove={handleMove}
         onMoveEnd={handleMoveEnd}
         onClick={handleMapClick}
         onMouseMove={handleMouseMove}
