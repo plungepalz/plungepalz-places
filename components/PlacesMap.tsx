@@ -7,23 +7,21 @@ import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
 import { BRAND } from '@/lib/brand';
 import {
   CAMERA_DURATION,
-  ZERO_PADDING,
+  canvasReadyForFlight,
+  clearPaddingKeepView,
+  createCanvasMachine,
   easeOutCubic,
   flyPadding,
-  flyToThenOnMoveend,
   isUserMapMove,
   NARROW_VIEWPORT,
-  createCanvasMachine,
   mapControlsRightPx,
   pinHintCenterX,
   presetCamera,
   readMapWaterColor,
   reduceCanvasMachine,
   scheduleMapResize,
-  shouldApplyNarrowWorldwideAfterResize,
-  shouldReapplyNarrowWorldwide,
+  startCameraAnimation,
   type MapResizeState,
-  type SizeBox,
 } from '@/lib/map-camera';
 import type { LocationPreset } from '@/lib/locations';
 import { clusterLeafHasPlace, placesMapLayerSpecs } from '@/lib/map-style';
@@ -71,27 +69,6 @@ function resolveFlyZoom(currentZoom: number, flyRequest: FlyRequest): number {
   if (flyRequest.zoom == null) return currentZoom;
   if (flyRequest.exactZoom) return flyRequest.zoom;
   return Math.max(currentZoom, flyRequest.zoom);
-}
-
-function paddingIsZero(map: MapboxMap): boolean {
-  const padding = map.getPadding();
-  return (
-    (padding.top ?? 0) === 0 &&
-    (padding.right ?? 0) === 0 &&
-    (padding.bottom ?? 0) === 0 &&
-    (padding.left ?? 0) === 0
-  );
-}
-
-/** Drop leftover flyTo padding without shifting what is on screen. */
-function clearPaddingKeepView(map: MapboxMap): void {
-  if (paddingIsZero(map)) return;
-  const canvas = map.getCanvas();
-  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
-  map.jumpTo({
-    center: [visual.lng, visual.lat],
-    padding: ZERO_PADDING,
-  });
 }
 
 function MapZoomControls({
@@ -228,7 +205,6 @@ export default function PlacesMap({
   viewportWidth,
   viewportHeight,
   location,
-  leftPreset = false,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -266,9 +242,6 @@ export default function PlacesMap({
     top: 0,
     height: typeof window === 'undefined' ? 800 : window.innerHeight,
   }));
-  const pendingNarrowWorldwideRef = useRef(false);
-  const prevSlotForJumpRef = useRef<SizeBox | null>(null);
-  const jumpContextRef = useRef({ leftPreset, location, slotSize });
   const flyFitTop = canvasLayout.top > 0 ? 0 : fitTop;
 
   const commitCanvas = useCallback((next: ReturnType<typeof reduceCanvasMachine>) => {
@@ -303,53 +276,12 @@ export default function PlacesMap({
     [flyRequest, location, slotSize.height, slotSize.width]
   );
 
-  const applyNarrowWorldwideAfterResize = useCallback(() => {
-    if (!pendingNarrowWorldwideRef.current) return;
-    const { leftPreset: left, location: loc, slotSize: slot } = jumpContextRef.current;
-    if (!loc || left || loc.id !== 'worldwide') {
-      pendingNarrowWorldwideRef.current = false;
-      return;
-    }
-    const el = mapBoxRef.current;
-    const map = mapRef.current?.getMap();
-    const liveZoom = map?.getZoom() ?? liveZoomRef.current ?? 0;
-    const canvasHeight = el?.clientHeight ?? slot.height;
-    if (canvasHeight >= slot.height - 1) return;
-    if (
-      !shouldApplyNarrowWorldwideAfterResize({
-        pending: true,
-        leftPreset: left,
-        locationId: loc.id,
-        viewport: slot,
-        canvasHeight,
-        liveZoom,
-      })
-    ) {
-      pendingNarrowWorldwideRef.current = false;
-      return;
-    }
-    if (!map) return;
-    pendingNarrowWorldwideRef.current = false;
-    const camera = presetCamera(loc, slot.width, slot.height, { left: 0, right: 0 });
-    flightTagRef.current = 'resize';
-    map.jumpTo({ center: [camera.lng, camera.lat], zoom: camera.zoom });
-    liveZoomRef.current = camera.zoom;
-    commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: camera.zoom }));
-    flightTagRef.current = null;
-  }, [commitCanvas]);
-
   const requestMapResize = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
     flightTagRef.current = 'resize';
-    scheduleMapResize(
-      map,
-      resizeStateRef.current,
-      requestAnimationFrame,
-      cancelAnimationFrame,
-      applyNarrowWorldwideAfterResize
-    );
-  }, [applyNarrowWorldwideAfterResize]);
+    scheduleMapResize(map, resizeStateRef.current, requestAnimationFrame, cancelAnimationFrame);
+  }, []);
 
   const applyWaterColor = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -391,12 +323,6 @@ export default function PlacesMap({
   }, [requestMapResize, canvasLayout.top, canvasLayout.height]);
 
   useLayoutEffect(() => {
-    jumpContextRef.current = { leftPreset, location, slotSize };
-    const prev = prevSlotForJumpRef.current;
-    if (shouldReapplyNarrowWorldwide(leftPreset, location?.id ?? '', prev, slotSize)) {
-      pendingNarrowWorldwideRef.current = true;
-    }
-    prevSlotForJumpRef.current = slotSize;
     let next = reduceCanvasMachine(canvasMachineRef.current, { type: 'viewport', viewport: slotSize });
     if (flyRequest) {
       const currentZoom = mapRef.current?.getMap()?.getZoom() ?? liveZoomRef.current ?? 3.4;
@@ -407,7 +333,7 @@ export default function PlacesMap({
       });
     }
     commitCanvas(next);
-  }, [commitCanvas, flyRequest, leftPreset, location, slotSize, targetZoomForFly]);
+  }, [commitCanvas, flyRequest, slotSize, targetZoomForFly]);
 
   const geojson = useMemo(
     () => ({
@@ -562,9 +488,15 @@ export default function PlacesMap({
 
   useEffect(() => {
     if (!flyRequest || !mapRef.current) return;
+    const prepared = canvasMachineRef.current.box;
+    if (!canvasReadyForFlight(canvasLayout, prepared)) return;
     const map = mapRef.current.getMap();
+    if (resizeStateRef.current.rafId != null) {
+      cancelAnimationFrame(resizeStateRef.current.rafId);
+      resizeStateRef.current.rafId = null;
+    }
     const currentZoom = map.getZoom();
-    const size = { width: slotSize.width, height: canvasMachineRef.current.box.height };
+    const size = { width: slotSize.width, height: prepared.height };
     const narrowWorldFly =
       Boolean(flyRequest.exactZoom) &&
       slotSize.width <= NARROW_VIEWPORT &&
@@ -608,36 +540,25 @@ export default function PlacesMap({
       latitude = camera.lat;
     }
     liveZoomRef.current = zoom;
-    flightTagRef.current = 'resize';
-    map.resize();
-    if (flyEndHandlerRef.current) {
-      map.off('moveend', flyEndHandlerRef.current);
-      flyEndHandlerRef.current = null;
-    }
     const programmatic = Boolean(flyRequest.programmatic);
     const keepFitPadding = Boolean(flyRequest.exactZoom && flyFitTop > 0);
     flightTagRef.current = programmatic ? 'resize' : flyRequest.exactZoom ? 'preset' : 'place';
+    // Shrink-first box is on screen. Resize, then one camera call — same path
+    // for animated and prefers-reduced-motion. Padding clear is silent (no jumpTo).
+    map.resize();
     const onFlyEnd = () => {
-      flyEndHandlerRef.current = null;
       const endedZoom = mapRef.current?.getMap()?.getZoom() ?? zoom;
       commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
       flightTagRef.current = null;
-      if (detailsOpenRef.current || keepFitPadding) return;
       const live = mapRef.current?.getMap();
-      if (!live) return;
-      const canvas = live.getCanvas();
-      const visual = live.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
-      live.jumpTo({
-        center: [visual.lng, visual.lat],
-        padding: ZERO_PADDING,
-      });
+      if (live && !detailsOpenRef.current && !keepFitPadding) {
+        clearPaddingKeepView(live);
+      }
     };
-    // Instant flights (duration 0 / reduced motion) finish inside flyTo and
-    // must run onFlyEnd now. Animated flights attach after flyTo so stop()
-    // from an interrupt does not consume this cleanup.
-    flyEndHandlerRef.current = onFlyEnd;
-    flyToThenOnMoveend(
+    startCameraAnimation(
       map,
+      flyEndHandlerRef,
+      programmatic ? 'easeTo' : 'flyTo',
       {
         center: [longitude, latitude],
         zoom,
@@ -654,6 +575,7 @@ export default function PlacesMap({
     );
     onFlyComplete();
   }, [
+    canvasLayout,
     collapseList,
     commitCanvas,
     flyFitTop,
@@ -672,7 +594,12 @@ export default function PlacesMap({
       clearPaddingKeepView(map);
     }
     onUserCameraMove?.();
-    map.zoomTo(map.getZoom() + delta, { duration: CAMERA_DURATION.zoom, easing: easeOutCubic });
+    startCameraAnimation(
+      map,
+      flyEndHandlerRef,
+      'easeTo',
+      { zoom: map.getZoom() + delta, duration: CAMERA_DURATION.zoom, easing: easeOutCubic }
+    );
   };
 
   const locateMe = () => {
@@ -684,12 +611,19 @@ export default function PlacesMap({
     navigator.geolocation.getCurrentPosition(
       (position) => {
         onUserCameraMove?.();
-        mapRef.current?.flyTo({
-          center: [position.coords.longitude, position.coords.latitude],
-          zoom: 11,
-          duration: CAMERA_DURATION.locate,
-          easing: easeOutCubic,
-        });
+        const live = mapRef.current?.getMap();
+        if (!live) return;
+        startCameraAnimation(
+          live,
+          flyEndHandlerRef,
+          'flyTo',
+          {
+            center: [position.coords.longitude, position.coords.latitude],
+            zoom: 11,
+            duration: CAMERA_DURATION.locate,
+            easing: easeOutCubic,
+          }
+        );
       },
       (err) => {
         setLocateError(
@@ -720,12 +654,19 @@ export default function PlacesMap({
           clearPaddingKeepView(map);
         }
         onUserCameraMove?.();
-        mapRef.current?.easeTo({
-          center: clusterCenter,
-          zoom,
-          duration: CAMERA_DURATION.cluster,
-          easing: easeOutCubic,
-        });
+        const live = mapRef.current?.getMap();
+        if (!live) return;
+        startCameraAnimation(
+          live,
+          flyEndHandlerRef,
+          'easeTo',
+          {
+            center: clusterCenter,
+            zoom,
+            duration: CAMERA_DURATION.cluster,
+            easing: easeOutCubic,
+          }
+        );
       });
       return;
     }

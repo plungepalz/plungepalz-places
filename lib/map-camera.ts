@@ -171,6 +171,15 @@ export function fullCanvasBox(viewport: SizeBox): CanvasBox {
   return { top: 0, height: Math.max(viewport.height, 1) };
 }
 
+export function canvasBoxEquals(a: CanvasBox, b: CanvasBox): boolean {
+  return a.top === b.top && a.height === b.height;
+}
+
+/** True once the shrink-first box is committed — only then start the camera. */
+export function canvasReadyForFlight(applied: CanvasBox, prepared: CanvasBox): boolean {
+  return canvasBoxEquals(applied, prepared);
+}
+
 export function createCanvasMachine(viewport: SizeBox): CanvasMachineState {
   return {
     viewport,
@@ -627,6 +636,18 @@ export function worldwideFraming(
 }
 
 /**
+ * Instant / reduced-motion cameras fire `moveend` inside flyTo/easeTo.
+ * Prefer `isMoving()`; fall back to `duration === 0` when the map stub
+ * does not expose it.
+ */
+function cameraMoveAlreadyIdle(
+  map: { isMoving?: () => boolean },
+  options: Record<string, unknown>
+): boolean {
+  return map.isMoving ? !map.isMoving() : options.duration === 0;
+}
+
+/**
  * mapbox-gl 3.33 `flyTo()` calls `stop()` first. If a flight is already running,
  * that fires `moveend` synchronously. A `once('moveend')` attached *before*
  * `flyTo` is consumed by the interrupt and never sees the new flight end.
@@ -644,12 +665,97 @@ export function flyToThenOnMoveend(
   onMoveend: () => void
 ): void {
   map.flyTo(options);
-  const alreadyIdle = map.isMoving ? !map.isMoving() : options.duration === 0;
-  if (alreadyIdle) {
+  if (cameraMoveAlreadyIdle(map, options)) {
     onMoveend();
     return;
   }
   map.once('moveend', onMoveend);
+}
+
+export type CameraMethod = 'flyTo' | 'easeTo';
+
+export interface CameraHandlerRef {
+  current: (() => void) | null;
+}
+
+export interface CameraControllerMap {
+  flyTo: (options: Record<string, unknown>) => unknown;
+  easeTo: (options: Record<string, unknown>) => unknown;
+  once: (event: string, handler: () => void) => unknown;
+  off: (event: string, handler: () => void) => unknown;
+  isMoving?: () => boolean;
+}
+
+/**
+ * Cancel the previous moveend handler, start flyTo or easeTo, then attach
+ * the new listener. Same interrupt rule as flyToThenOnMoveend: attach after
+ * start so mapbox-gl's synchronous stop()/moveend does not consume it.
+ * Duration 0 / reduced-motion already fired moveend inside the camera call,
+ * so run onEnd now and do not leave a second listener.
+ */
+export function startCameraAnimation(
+  map: CameraControllerMap,
+  handlerRef: CameraHandlerRef,
+  method: CameraMethod,
+  options: Record<string, unknown>,
+  onEnd: () => void = () => undefined
+): void {
+  if (handlerRef.current) {
+    map.off('moveend', handlerRef.current);
+    handlerRef.current = null;
+  }
+  const onMoveEnd = () => {
+    if (handlerRef.current !== onMoveEnd) return;
+    handlerRef.current = null;
+    onEnd();
+  };
+  if (method === 'flyTo') {
+    map.flyTo(options);
+  } else {
+    map.easeTo(options);
+  }
+  handlerRef.current = onMoveEnd;
+  if (cameraMoveAlreadyIdle(map, options)) {
+    onMoveEnd();
+    return;
+  }
+  map.once('moveend', onMoveEnd);
+}
+
+export interface CameraPadding {
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+}
+
+export function paddingIsZero(padding: CameraPadding | null | undefined): boolean {
+  if (!padding) return true;
+  return (
+    (padding.top ?? 0) === 0 &&
+    (padding.right ?? 0) === 0 &&
+    (padding.bottom ?? 0) === 0 &&
+    (padding.left ?? 0) === 0
+  );
+}
+
+export interface PaddingClearMap {
+  getPadding: () => CameraPadding;
+  triggerRepaint?: () => void;
+  transform?: { padding?: CameraPadding };
+}
+
+/**
+ * Drop leftover flyTo padding without a camera call. `setCenter` / `jumpTo`
+ * are camera methods (Mapbox `setCenter` runs `jumpTo` internally).
+ */
+export function clearPaddingKeepView(map: PaddingClearMap): boolean {
+  if (paddingIsZero(map.getPadding())) return false;
+  if (map.transform) {
+    map.transform.padding = { ...ZERO_PADDING };
+  }
+  map.triggerRepaint?.();
+  return true;
 }
 
 /** Screen X of a longitude when `centerLng` sits in the middle of the visible gap. */

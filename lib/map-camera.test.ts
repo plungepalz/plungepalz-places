@@ -14,6 +14,9 @@ import {
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
+  canvasReadyForFlight,
+  clearPaddingKeepView,
+  startCameraAnimation,
   MERCATOR_TILE_SIZE,
   LIST_EXPAND_RESIZE_MS,
   WORLD_FIT_EDGE_PAD,
@@ -697,6 +700,8 @@ test('Worldwide framing subtracts drawer right padding from the visible gap', ()
  */
 class InterruptibleMap {
   padding = { ...ZERO_PADDING };
+  transform = { padding: { ...ZERO_PADDING } };
+  methods: string[] = [];
   /** When true, flyTo finishes synchronously like prefers-reduced-motion → jumpTo. */
   reducedMotion = false;
   private flying = false;
@@ -719,13 +724,14 @@ class InterruptibleMap {
     for (const handler of handlers) handler();
   }
 
-  flyTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
+  private applyCamera(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
     if (this.flying) {
       this.flying = false;
       this.emitMoveend();
     }
     if (options.padding) {
       this.padding = { ...ZERO_PADDING, ...options.padding };
+      this.transform.padding = { ...this.padding };
     }
     // mapbox-gl 3.33: duration 0 (and reduced-motion jumpTo) fires moveend
     // inside flyTo(), before a listener attached afterward can see it.
@@ -735,6 +741,24 @@ class InterruptibleMap {
       return;
     }
     this.flying = true;
+  }
+
+  flyTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
+    this.methods.push('flyTo');
+    this.applyCamera(options);
+  }
+
+  easeTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
+    this.methods.push('easeTo');
+    this.applyCamera(options);
+  }
+
+  jumpTo() {
+    this.methods.push('jumpTo');
+  }
+
+  setCenter() {
+    this.methods.push('setCenter');
   }
 
   isMoving() {
@@ -747,21 +771,21 @@ class InterruptibleMap {
   }
 }
 
-/** Mirrors PlacesMap: off the previous handler, then flyToThenOnMoveend, then store the new one. */
+/** Mirrors PlacesMap: replace in-flight cameras through startCameraAnimation. */
 function startPlacesMapFlight(
   map: InterruptibleMap,
   handlerRef: { current: (() => void) | null }
 ) {
-  if (handlerRef.current) {
-    map.off('moveend', handlerRef.current);
-    handlerRef.current = null;
-  }
-  const onFlyEnd = () => {
-    handlerRef.current = null;
-    map.padding = { ...ZERO_PADDING };
-  };
-  handlerRef.current = onFlyEnd;
-  flyToThenOnMoveend(map, { padding: { ...ZERO_PADDING, left: 396 } }, onFlyEnd);
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    { padding: { ...ZERO_PADDING, left: 396 } },
+    () => {
+      map.padding = { ...ZERO_PADDING };
+      map.transform.padding = { ...ZERO_PADDING };
+    }
+  );
 }
 
 test('easeOutCubic is 0 at start, 1 at end, and faster early', () => {
@@ -806,4 +830,90 @@ test('prefers-reduced-motion flyTo (sync moveend, duration > 0) still runs the e
   assert.equal(map.isMoving(), false);
   map.endFlight();
   assert.equal(ended, 1);
+});
+
+test('camera end handler fires exactly once for instant and animated moves', () => {
+  const handlerRef: { current: (() => void) | null } = { current: null };
+
+  const instant = new InterruptibleMap();
+  let instantEnds = 0;
+  startCameraAnimation(instant, handlerRef, 'flyTo', { duration: 0, center: [0, 0] }, () => {
+    instantEnds += 1;
+  });
+  assert.equal(instantEnds, 1);
+  assert.equal(instant.isMoving(), false);
+  instant.endFlight();
+  assert.equal(instantEnds, 1);
+
+  const reduced = new InterruptibleMap();
+  reduced.reducedMotion = true;
+  let reducedEnds = 0;
+  startCameraAnimation(reduced, handlerRef, 'easeTo', { duration: 560, center: [1, 1] }, () => {
+    reducedEnds += 1;
+  });
+  assert.equal(reducedEnds, 1);
+  assert.equal(reduced.isMoving(), false);
+  reduced.endFlight();
+  assert.equal(reducedEnds, 1);
+
+  const animated = new InterruptibleMap();
+  let animatedEnds = 0;
+  startCameraAnimation(animated, handlerRef, 'flyTo', { duration: 1800, center: [-20, 20] }, () => {
+    animatedEnds += 1;
+  });
+  assert.equal(animatedEnds, 0);
+  assert.equal(animated.isMoving(), true);
+  animated.endFlight();
+  assert.equal(animatedEnds, 1);
+  animated.endFlight();
+  assert.equal(animatedEnds, 1);
+});
+
+test('reduced motion + 768 Worldwide: short canvas, width-fit zoom, one camera call', () => {
+  const viewport = { width: 768, height: 900 };
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    768,
+    900,
+    { left: 0, right: 0 }
+  );
+  const full = { top: 0, height: 900 };
+  let state = createCanvasMachine(viewport);
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: camera.zoom, viewport });
+  assert.equal(canvasReadyForFlight(full, state.box), false, 'must not fly until the short box is committed');
+  assert.equal(canvasReadyForFlight(state.box, state.box), true);
+  assert.ok(state.box.height < 900);
+  assert.ok(mapboxHeightMinZoom(state.box.height) <= camera.zoom + 1e-9);
+  assert.ok(camera.zoom <= Math.log2(768 / MERCATOR_TILE_SIZE) + 1e-9);
+
+  const map = new InterruptibleMap();
+  map.reducedMotion = true;
+  map.padding = { ...ZERO_PADDING, left: 396 };
+  map.transform.padding = { ...map.padding };
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  let ends = 0;
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    {
+      duration: 900,
+      center: [camera.lng, camera.lat],
+      zoom: camera.zoom,
+      padding: ZERO_PADDING,
+    },
+    () => {
+      ends += 1;
+      clearPaddingKeepView(map);
+    }
+  );
+  const cameraCalls = map.methods.filter((name) =>
+    name === 'flyTo' || name === 'easeTo' || name === 'jumpTo' || name === 'setCenter'
+  );
+  assert.deepEqual(cameraCalls, ['flyTo']);
+  assert.equal(ends, 1);
+  assert.equal(map.isMoving(), false);
+  map.endFlight();
+  assert.equal(ends, 1);
+  assert.deepEqual(map.methods.filter((name) => name === 'jumpTo' || name === 'setCenter'), []);
 });
