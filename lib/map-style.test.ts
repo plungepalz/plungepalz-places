@@ -7,9 +7,15 @@ import {
   CLUSTER_COUNT_SMALL,
   CLUSTER_RADIUS,
   CLUSTER_RADIUS_EXPRESSION,
+  MAPBOX_STREETS_STYLE,
+  MAP_FADE_DURATION_MS,
+  PAINT_TRANSITION,
   PIN_HALO_RADIUS,
   PIN_HALO_RADIUS_EXPRESSION,
   PIN_ICON_SIZE,
+  PIN_STROKE,
+  PLACES_LAYERS_ABOVE_LABELS,
+  PLACES_LAYERS_BEFORE_ID,
   WCAG_AA_NORMAL,
   clusterColorForCount,
   clusterLabelPairs,
@@ -24,8 +30,22 @@ import {
   pinVisualState,
   placeIdInFilter,
   placesMapLayerSpecs,
+  placesSourceSignature,
+  placesToGeoJSON,
+  MUTED_MOTORWAY,
+  MUTED_TRUNK,
+  isMotorwayOrTrunkLayer,
+  mutedRoadColor,
+  muteMotorwayLayers,
+  LIST_HEADER_ESTIMATE_PX,
+  PLACE_CARD_MIN_HEIGHT_PX,
+  placesListMaxHeightPx,
+  placesListSlotMaxHeightPx,
+  scrollDeltaToRevealChild,
+  scrollPlaceCardIntoView,
   shouldScrollChildIntoView,
   stepByPointCount,
+  syncMapHoveredCard,
 } from './map-style';
 
 test('brand orange token is a single hex used by pins and accents', () => {
@@ -90,10 +110,22 @@ test('pin icon, halo, and image follow the visual state', () => {
   assert.ok(PIN_ICON_SIZE.hover > PIN_ICON_SIZE.default);
   assert.ok(PIN_ICON_SIZE.selected > PIN_ICON_SIZE.hover);
   assert.equal(pinHaloRadius('default'), 0);
+  assert.ok(PIN_HALO_RADIUS.hover <= 8);
+  assert.ok(PIN_HALO_RADIUS.selected <= 12);
   assert.equal(pinHaloRadius('selected'), PIN_HALO_RADIUS.selected);
   assert.equal(pinImageForState('selected'), 'pin-place-active');
   assert.equal(pinImageForState('hover'), 'pin-place');
   assert.ok(expressionContainsFeatureState(PIN_HALO_RADIUS_EXPRESSION));
+});
+
+test('map uses streets-v12 and paints Places layers above labels', () => {
+  assert.equal(MAPBOX_STREETS_STYLE, 'mapbox://styles/mapbox/streets-v12');
+  assert.equal(PLACES_LAYERS_ABOVE_LABELS, true);
+  assert.equal(PLACES_LAYERS_BEFORE_ID, undefined);
+  assert.ok(MAP_FADE_DURATION_MS >= 300);
+  assert.equal(PAINT_TRANSITION.duration, 180);
+  assert.equal(PIN_STROKE, '#ffffff');
+  assert.equal(BRAND.clusterStroke, '#ffffff');
 });
 
 test('no layer layout property uses feature-state (Mapbox paint-only)', () => {
@@ -125,6 +157,44 @@ test('no layer layout property uses feature-state (Mapbox paint-only)', () => {
   assert.equal(selected.layout?.['icon-image'], 'pin-place-active');
   const halo = layers.find((layer) => layer.id === 'pin-halo')!;
   assert.equal(expressionContainsFeatureState(halo.paint), true);
+  assert.equal(halo.paint?.['circle-stroke-color'], PIN_STROKE);
+
+  const hover = layers.find((layer) => layer.id === 'unclustered-point-hover')!;
+  assert.equal(expressionContainsFeatureState(hover.layout ?? {}), false);
+  assert.equal(expressionContainsFeatureState(hover.paint), true);
+  assert.notDeepEqual(hover.filter, placeIdInFilter(['hover-id']));
+  assert.equal(hover.paint?.['icon-opacity-transition'], PAINT_TRANSITION);
+
+  const clusters = layers.find((layer) => layer.id === 'clusters')!;
+  assert.equal(clusters.paint?.['circle-stroke-color'], BRAND.clusterStroke);
+  assert.ok((clusters.paint?.['circle-stroke-width'] as number) >= 2);
+
+  assert.ok(layers.some((layer) => layer.id === 'cluster-shadow'));
+  assert.ok(layers.some((layer) => layer.id === 'pin-shadow'));
+});
+
+test('hover does not remount pin filters; selected still uses a dedicated layer', () => {
+  const idle = placesMapLayerSpecs({ selectedPlaceId: null });
+  const hovered = placesMapLayerSpecs({ hoveredPlaceId: 'hover-id', selectedPlaceId: null });
+  const idleHover = idle.find((layer) => layer.id === 'unclustered-point-hover')!;
+  const nextHover = hovered.find((layer) => layer.id === 'unclustered-point-hover')!;
+  assert.deepEqual(idleHover.filter, nextHover.filter);
+  assert.deepEqual(idle.find((layer) => layer.id === 'unclustered-point')?.filter, [
+    '!',
+    ['has', 'point_count'],
+  ]);
+});
+
+test('places GeoJSON signature stays put when only names are unused', () => {
+  const places = [
+    { place_id: 'a', place_name: 'One', lat: 1, lng: 2 },
+    { place_id: 'b', place_name: 'Two', lat: 3, lng: 4 },
+  ];
+  assert.equal(placesSourceSignature(places), placesSourceSignature(places.map((p) => ({ ...p }))));
+  const geo = placesToGeoJSON(places);
+  assert.equal(geo.features.length, 2);
+  assert.deepEqual(geo.features[0].geometry.coordinates, [2, 1]);
+  assert.equal(geo.features[0].id, 'a');
 });
 
 test('cluster leaf lookup is a cheap place_id scan', () => {
@@ -138,9 +208,86 @@ test('cluster leaf lookup is a cheap place_id scan', () => {
   assert.equal(clusterLeafHasPlace(leaves, null), false);
 });
 
+test('list max-height is clamped to the viewport, not content height', () => {
+  const body = placesListMaxHeightPx(900, 112);
+  assert.equal(body, 900 - 112 - 16 - LIST_HEADER_ESTIMATE_PX);
+  assert.ok(112 + LIST_HEADER_ESTIMATE_PX + body <= 900);
+  assert.ok(placesListMaxHeightPx(768, 96) < 5320);
+  assert.equal(placesListMaxHeightPx(200, 180), 160);
+  const slot = placesListSlotMaxHeightPx(900, 122);
+  assert.ok(122 + slot <= 900);
+  assert.ok(PLACE_CARD_MIN_HEIGHT_PX >= 96);
+  const hideInner = placesListMaxHeightPx(768, 96);
+  const contentHeight = 82 * 74;
+  assert.ok(contentHeight > 6000);
+  assert.ok(hideInner < 700, 'Hide list inner box must stay viewport-clamped, not ~6081px content');
+});
+
+test('list scroll and hover sync no-op without a list root', () => {
+  assert.equal(scrollPlaceCardIntoView(null, null), false);
+  assert.equal(scrollPlaceCardIntoView('abc', null), false);
+  syncMapHoveredCard(null, 'abc');
+  const hovered: string[] = [];
+  const cleared: string[] = [];
+  const card = {
+    removeAttribute: (name: string) => {
+      cleared.push(name);
+    },
+    setAttribute: (name: string, value: string) => {
+      hovered.push(`${name}=${value}`);
+    },
+  };
+  const root = {
+    querySelectorAll: () => [{ removeAttribute: (name: string) => cleared.push(`prev:${name}`) }],
+    querySelector: () => card,
+  };
+  syncMapHoveredCard(root as unknown as ParentNode, 'place-1');
+  assert.deepEqual(cleared, ['prev:data-map-hover']);
+  assert.deepEqual(hovered, ['data-map-hover=true']);
+});
+
 test('list scroll only when the card is off-screen', () => {
   const parent = { top: 100, bottom: 500 };
   assert.equal(shouldScrollChildIntoView({ top: 120, bottom: 200 }, parent), false);
+  assert.equal(scrollDeltaToRevealChild({ top: 120, bottom: 200 }, parent), 0);
+  assert.equal(shouldScrollChildIntoView({ top: 100, bottom: 200 }, parent), false);
+  assert.equal(shouldScrollChildIntoView({ top: 400, bottom: 500 }, parent), false);
   assert.equal(shouldScrollChildIntoView({ top: 80, bottom: 160 }, parent), true);
+  assert.equal(scrollDeltaToRevealChild({ top: 80, bottom: 160 }, parent), -20);
   assert.equal(shouldScrollChildIntoView({ top: 480, bottom: 560 }, parent), true);
+  assert.equal(scrollDeltaToRevealChild({ top: 480, bottom: 560 }, parent), 60);
+  const tallContent = { top: 100, bottom: 5000, clientHeight: 400 };
+  assert.equal(scrollDeltaToRevealChild({ top: 267, bottom: 365 }, tallContent), 0);
+  assert.equal(scrollDeltaToRevealChild({ top: 110, bottom: 190 }, tallContent, 56), 110 - 156);
+  assert.equal(scrollDeltaToRevealChild({ top: 160, bottom: 240 }, tallContent, 56), 0);
+});
+
+test('motorway and trunk layers mute toward warm grey, not brand orange', () => {
+  assert.equal(isMotorwayOrTrunkLayer('road-motorway'), true);
+  assert.equal(isMotorwayOrTrunkLayer('bridge-motorway-case'), true);
+  assert.equal(isMotorwayOrTrunkLayer('road-trunk'), true);
+  assert.equal(isMotorwayOrTrunkLayer('road-primary'), false);
+  assert.equal(mutedRoadColor('road-motorway'), MUTED_MOTORWAY);
+  assert.equal(mutedRoadColor('road-trunk'), MUTED_TRUNK);
+  assert.notEqual(mutedRoadColor('road-motorway'), BRAND.orange);
+  const paint = new Map<string, unknown>([
+    ['road-motorway', '#f97316'],
+    ['road-primary', '#ffffff'],
+  ]);
+  const changed = muteMotorwayLayers({
+    getStyle: () => ({
+      layers: [
+        { id: 'road-motorway', type: 'line' },
+        { id: 'road-primary', type: 'line' },
+        { id: 'settlement-major-label', type: 'symbol' },
+      ],
+    }),
+    getPaintProperty: (id) => paint.get(id),
+    setPaintProperty: (id, _prop, value) => {
+      paint.set(id, value);
+    },
+  });
+  assert.equal(changed, 1);
+  assert.equal(paint.get('road-motorway'), MUTED_MOTORWAY);
+  assert.equal(paint.get('road-primary'), '#ffffff');
 });

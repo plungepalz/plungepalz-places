@@ -26,6 +26,6 @@ export default function CoverImage({ src, alt, className }: CoverImageProps) {
   return (
     // Cover images come from arbitrary remote URLs (API / Unsplash mocks), so next/image domains cannot be enumerated.
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={src} alt={alt} className={className} />
+    <img src={src} alt={alt} width={72} height={72} className={className} />
   );
 }

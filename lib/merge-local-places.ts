@@ -53,3 +53,65 @@ export function mergeLocalPlaces(
   const extras = localPlaces.filter((place) => !seen.has(place.place_id) && localPlaceMatchesFilters(place, filters));
   return { places: [...extras, ...serverPlaces], extraCount: extras.length };
 }
+
+/**
+ * Keep the previous array when every item is the same reference so list memo
+ * can skip 82 cards while the user types a filter or hovers a pin.
+ */
+export function reuseIfSamePlaceRefs(
+  prev: PlaceSearchResult[] | null | undefined,
+  next: PlaceSearchResult[]
+): PlaceSearchResult[] {
+  if (
+    prev &&
+    prev.length === next.length &&
+    prev.length > 0 &&
+    prev.every((place, index) => place === next[index])
+  ) {
+    return prev;
+  }
+  if (prev && prev.length === 0 && next.length === 0) return prev;
+  return next;
+}
+
+/**
+ * Keep previous place objects (and therefore React list keys / DOM nodes)
+ * when the same place_id comes back in a new /search payload.
+ */
+export function reconcilePlacesById(
+  prev: PlaceSearchResult[] | null | undefined,
+  next: PlaceSearchResult[]
+): PlaceSearchResult[] {
+  if (!prev || prev.length === 0) return next;
+  if (next.length === 0) return next;
+  const prevById = new Map(prev.map((place) => [place.place_id, place]));
+  let sameOrder = prev.length === next.length;
+  const out = next.map((place, index) => {
+    const kept = prevById.get(place.place_id);
+    if (!kept) {
+      sameOrder = false;
+      return place;
+    }
+    if (sameOrder && kept !== prev[index]) sameOrder = false;
+    return kept;
+  });
+  if (sameOrder) return prev;
+  return out;
+}
+
+/** Model of React's keyed list: same place_id keeps the previous node. */
+export function retainPlaceNodes<T>(
+  prevNodes: Map<string, T>,
+  nextIds: string[],
+  create: (id: string) => T
+): Map<string, T> {
+  const next = new Map<string, T>();
+  for (const id of nextIds) {
+    next.set(id, prevNodes.get(id) ?? create(id));
+  }
+  return next;
+}
+
+export function placeCardKey(place: { place_id: string }): string {
+  return place.place_id;
+}
