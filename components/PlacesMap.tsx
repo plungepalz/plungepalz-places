@@ -13,13 +13,13 @@ import {
   flyToThenOnMoveend,
   isUserMapMove,
   NARROW_VIEWPORT,
-  lowZoomCanvasLayout,
+  createCanvasMachine,
   mapControlsRightPx,
   pinHintCenterX,
   presetCamera,
   readMapWaterColor,
+  reduceCanvasMachine,
   scheduleMapResize,
-  worldwideFraming,
   type MapResizeState,
 } from '@/lib/map-camera';
 import type { LocationPreset } from '@/lib/locations';
@@ -245,9 +245,9 @@ export default function PlacesMap({
     width: typeof window === 'undefined' ? 1280 : window.innerWidth,
     height: typeof window === 'undefined' ? 800 : window.innerHeight,
   }));
-  const [liveZoom, setLiveZoom] = useState<number | null>(null);
   const [waterColor, setWaterColor] = useState<string | undefined>(undefined);
   const resizeStateRef = useRef<MapResizeState>({ rafId: null });
+  const liveZoomRef = useRef<number | null>(null);
   const slotSize = useMemo(
     () => ({
       width: viewportWidth ?? outerSize.width,
@@ -255,17 +255,44 @@ export default function PlacesMap({
     }),
     [outerSize.height, outerSize.width, viewportHeight, viewportWidth]
   );
-  const pendingPresetZoom =
-    flyRequest?.exactZoom && location
-      ? presetCamera(location, slotSize.width, slotSize.height, { left: 0, right: 0 }).zoom
-      : null;
-  const fallbackZoom =
-    location?.id === 'worldwide'
-      ? worldwideFraming(slotSize.width, slotSize.height, { left: 0 }).zoom
-      : (location?.zoom ?? 3.4);
-  const layoutZoom = pendingPresetZoom ?? liveZoom ?? fallbackZoom;
-  const canvasLayout = lowZoomCanvasLayout(slotSize, layoutZoom);
+  const canvasMachineRef = useRef(createCanvasMachine(slotSize));
+  const [canvasLayout, setCanvasLayout] = useState(() => ({
+    top: 0,
+    height: typeof window === 'undefined' ? 800 : window.innerHeight,
+  }));
   const flyFitTop = canvasLayout.top > 0 ? 0 : fitTop;
+
+  const commitCanvas = useCallback((next: ReturnType<typeof reduceCanvasMachine>) => {
+    canvasMachineRef.current = next;
+    setCanvasLayout((prev) =>
+      prev.top === next.box.top && prev.height === next.box.height ? prev : next.box
+    );
+  }, []);
+
+  const targetZoomForFly = useCallback(
+    (currentZoom: number) => {
+      if (!flyRequest) return currentZoom;
+      if (flyRequest.exactZoom && location) {
+        return presetCamera(location, slotSize.width, slotSize.height, { left: 0, right: 0 }).zoom;
+      }
+      if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
+        return presetCamera(
+          {
+            id: 'worldwide',
+            lat: flyRequest.latitude,
+            lng: flyRequest.longitude,
+            zoom: flyRequest.zoom ?? 1.15,
+            radiusKm: 20000,
+          },
+          slotSize.width,
+          slotSize.height,
+          { left: 0, right: 0 }
+        ).zoom;
+      }
+      return resolveFlyZoom(currentZoom, flyRequest);
+    },
+    [flyRequest, location, slotSize.height, slotSize.width]
+  );
 
   const requestMapResize = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -313,9 +340,18 @@ export default function PlacesMap({
     };
   }, [requestMapResize, canvasLayout.top, canvasLayout.height]);
 
-  useEffect(() => {
-    requestMapResize();
-  }, [canvasLayout.top, canvasLayout.height, requestMapResize]);
+  useLayoutEffect(() => {
+    let next = reduceCanvasMachine(canvasMachineRef.current, { type: 'viewport', viewport: slotSize });
+    if (flyRequest) {
+      const currentZoom = mapRef.current?.getMap()?.getZoom() ?? liveZoomRef.current ?? 3.4;
+      next = reduceCanvasMachine(next, {
+        type: 'prepareFlight',
+        targetZoom: targetZoomForFly(currentZoom),
+        viewport: slotSize,
+      });
+    }
+    commitCanvas(next);
+  }, [commitCanvas, flyRequest, slotSize, targetZoomForFly]);
 
   const geojson = useMemo(
     () => ({
@@ -472,8 +508,7 @@ export default function PlacesMap({
     if (!flyRequest || !mapRef.current) return;
     const map = mapRef.current.getMap();
     const currentZoom = map.getZoom();
-    const planned = lowZoomCanvasLayout(slotSize, layoutZoom);
-    const size = { width: slotSize.width, height: planned.height };
+    const size = { width: slotSize.width, height: canvasMachineRef.current.box.height };
     const narrowWorldFly =
       Boolean(flyRequest.exactZoom) &&
       slotSize.width <= NARROW_VIEWPORT &&
@@ -516,7 +551,9 @@ export default function PlacesMap({
       longitude = camera.lng;
       latitude = camera.lat;
     }
-    setLiveZoom(zoom);
+    liveZoomRef.current = zoom;
+    flightTagRef.current = 'resize';
+    map.resize();
     if (flyEndHandlerRef.current) {
       map.off('moveend', flyEndHandlerRef.current);
       flyEndHandlerRef.current = null;
@@ -526,6 +563,8 @@ export default function PlacesMap({
     flightTagRef.current = programmatic ? 'resize' : flyRequest.exactZoom ? 'preset' : 'place';
     const onFlyEnd = () => {
       flyEndHandlerRef.current = null;
+      const endedZoom = mapRef.current?.getMap()?.getZoom() ?? zoom;
+      commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
       flightTagRef.current = null;
       if (detailsOpenRef.current || keepFitPadding) return;
       const live = mapRef.current?.getMap();
@@ -562,9 +601,9 @@ export default function PlacesMap({
     onFlyComplete();
   }, [
     collapseList,
+    commitCanvas,
     flyFitTop,
     flyRequest,
-    layoutZoom,
     location,
     onFlyComplete,
     onUserCameraMove,
@@ -708,10 +747,24 @@ export default function PlacesMap({
     };
   }, [imagesReady, locationPickMode, onHoverPlace]);
 
-  const handleMove = useCallback((event: ViewStateChangeEvent) => {
-    const nextZoom = event.viewState.zoom;
-    setLiveZoom((prev) => (prev != null && Math.abs(prev - nextZoom) < 1e-6 ? prev : nextZoom));
-  }, []);
+  const handleMove = useCallback(
+    (event: ViewStateChangeEvent) => {
+      const nextZoom = event.viewState.zoom;
+      const prevZoom = liveZoomRef.current;
+      liveZoomRef.current = nextZoom;
+      const tag = flightTagRef.current;
+      if (tag === 'preset' || tag === 'resize' || tag === 'programmatic' || tag === 'place') {
+        commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightProgress', zoom: nextZoom }));
+        return;
+      }
+      if (prevZoom != null && Math.abs(prevZoom - nextZoom) < 1e-6) {
+        commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'pan', zoom: nextZoom }));
+        return;
+      }
+      commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'userZoom', zoom: nextZoom }));
+    },
+    [commitCanvas]
+  );
 
   const handleMoveEnd = useCallback(
     (event: ViewStateChangeEvent) => {
