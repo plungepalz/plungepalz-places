@@ -39,6 +39,8 @@ import {
   reduceCanvasMachine,
   scheduleMapResize,
   shouldCollapseList,
+  shouldApplyNarrowWorldwideAfterResize,
+  shouldJumpToNarrowWorldwideFit,
   shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
   worldwideFraming,
@@ -237,17 +239,17 @@ test('scheduleMapResize coalesces to one map.resize() per frame', () => {
   const cancel = (id: number) => {
     pending.delete(id);
   };
-  scheduleMapResize(map, state, raf, cancel);
-  scheduleMapResize(map, state, raf, cancel);
-  scheduleMapResize(map, state, raf, cancel);
+  scheduleMapResize(map, state, raf, cancel, () => calls.push('after-stale'));
+  scheduleMapResize(map, state, raf, cancel, () => calls.push('after'));
+  scheduleMapResize(map, state, raf, cancel, () => calls.push('after'));
   assert.equal(pending.size, 1);
   assert.equal(calls.length, 0);
   const cb = [...pending.values()][0];
   cb(0);
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls, ['resize', 'after']);
   assert.equal(state.rafId, null);
-  scheduleMapResize(null, state, raf, cancel);
-  assert.equal(calls.length, 1);
+  scheduleMapResize(null, state, raf, cancel, () => calls.push('after-null'));
+  assert.deepEqual(calls, ['resize', 'after']);
 });
 
 test('shouldReapplyPresetOnSizeChange on breakpoint but not after leaving the preset', () => {
@@ -470,14 +472,122 @@ test('canvas machine: wheel zoom past the clamp grows the canvas once', () => {
   });
   state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
   const short = state.box.height;
-  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 0.7 });
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 0.7, prevZoom: target });
   assert.ok(state.box.height < 900);
-  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: clamp });
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: clamp, prevZoom: 0.7 });
   assert.equal(state.box.height, 900);
   assert.equal(state.shortened, false);
-  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 2 });
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 2, prevZoom: clamp });
   assert.equal(state.box.height, 900);
   assert.ok(short < 900);
+});
+
+test('canvas machine: wheel zoom-out never grows the short canvas', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  const clamp = mapboxHeightMinZoom(900);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: target,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 0.7, prevZoom: target });
+  assert.ok(state.box.height < 900);
+  assert.ok(Math.abs(state.box.height - mercatorWorldPx(0.7)) < 1e-6);
+  assert.equal(state.box.top + state.box.height, 900);
+  const mid = { ...state.box };
+  assert.ok(mid.top > 0);
+  // Zoom-out from the grown-but-still-short box must keep that height.
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 0.55, prevZoom: 0.7 });
+  assert.deepEqual(state.box, mid);
+  assert.equal(state.shortened, true);
+  // A frame that reports the full-height clamp on the way out must not snap
+  // top 177→0 / height 723→900. Stay short until a zoom-in reaches the clamp.
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: clamp, prevZoom: 0.9 });
+  assert.deepEqual(state.box, mid);
+  assert.equal(state.shortened, true);
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: clamp, prevZoom: 0.7 });
+  assert.equal(state.box.height, 900);
+  assert.equal(state.shortened, false);
+});
+
+test('768→1280→768 re-applies the narrow Worldwide camera after resize settles', () => {
+  const compact = { width: 768, height: 900 };
+  const desktop = { width: 1280, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  const clamp = mapboxHeightMinZoom(900);
+
+  let state = createCanvasMachine(compact);
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: target });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  assert.ok(state.shortened);
+  assert.ok(state.box.height < 900);
+
+  state = reduceCanvasMachine(state, { type: 'viewport', viewport: desktop });
+  assert.equal(state.box.height, 900);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', compact, desktop), false);
+  assert.equal(shouldJumpToNarrowWorldwideFit(false, 'worldwide', desktop, clamp), false);
+
+  // Second shrink — not only the first 1280→768 — must re-apply the camera
+  // after shrink + map.resize(), because live zoom is still the desktop clamp.
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', desktop, compact), true);
+  assert.equal(shouldJumpToNarrowWorldwideFit(false, 'worldwide', compact, clamp), true);
+  assert.equal(shouldJumpToNarrowWorldwideFit(false, 'worldwide', compact, target), false);
+  assert.equal(shouldJumpToNarrowWorldwideFit(true, 'worldwide', compact, clamp), false);
+  assert.equal(shouldJumpToNarrowWorldwideFit(false, 'tokyo', compact, clamp), false);
+  assert.equal(
+    shouldApplyNarrowWorldwideAfterResize({
+      pending: true,
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      canvasHeight: 900,
+      liveZoom: clamp,
+    }),
+    false,
+    'must wait until the short canvas is on screen'
+  );
+  assert.equal(
+    shouldApplyNarrowWorldwideAfterResize({
+      pending: true,
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      canvasHeight: mercatorWorldPx(target),
+      liveZoom: clamp,
+    }),
+    true
+  );
+  assert.equal(
+    shouldApplyNarrowWorldwideAfterResize({
+      pending: false,
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      canvasHeight: mercatorWorldPx(target),
+      liveZoom: clamp,
+    }),
+    false
+  );
+
+  state = reduceCanvasMachine(state, {
+    type: 'resizeNarrowFit',
+    viewport: compact,
+    targetZoom: target,
+  });
+  assert.ok(state.box.height < 900);
+  assert.ok(mapboxHeightMinZoom(state.box.height) <= target + 1e-9);
+
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    compact.width,
+    compact.height,
+    { left: 0, right: 0 }
+  );
+  assert.ok(Math.abs(camera.zoom - target) < 1e-9);
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: camera.zoom });
+  assert.ok(state.shortened);
+  assert.ok(Math.abs((state.anchorZoom ?? 0) - target) < 1e-9);
 });
 
 test('canvas machine: resize 1280→768 shrinks then lands at the narrow fit', () => {

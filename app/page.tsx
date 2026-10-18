@@ -407,6 +407,7 @@ export default function HomePage() {
           viewportWidth={viewportWidth}
           viewportHeight={viewportHeight}
           location={location}
+          leftPreset={leftPreset}
         />
       </div>
 
