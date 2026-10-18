@@ -129,6 +129,10 @@ export interface FlyRequest {
    * Card/pin flights omit it and keep the never-zoom-out Math.max behaviour.
    */
   exactZoom?: boolean;
+  /**
+   * Breakpoint / container resize re-apply. Instant, and never a user move.
+   */
+  programmatic?: boolean;
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  createListHeadingMachine,
+  listHeadingText,
+  settleListHeadingRequest,
+  shouldApplySettledSearch,
+  startListHeadingRequest,
+} from './list-heading-state';
+import { LOCATION_PRESETS } from './locations';
+import {
   DRAWER_OCCUPIED,
   DRAWER_WIDTH,
   LIST_PANEL_RIGHT,
@@ -14,15 +22,46 @@ import {
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
+  cameraMoveendEffects,
+  canvasReadyForFlight,
+  clearPaddingKeepView,
+  isUserGestureEvent,
+  paddingIsZero,
+  shouldClearPaddingAfterFlight,
+  shouldReportViewport,
+  startCameraAnimation,
+  MERCATOR_TILE_SIZE,
+  LIST_EXPAND_RESIZE_MS,
+  WORLD_FIT_EDGE_PAD,
+  canvasLayoutAfterPan,
+  canvasLayoutIgnoresList,
+  createCanvasMachine,
+  cssColorFromPaint,
+  defaultCompactList,
+  hideListForWorldwidePreset,
   isUserMapMove,
   layoutInsets,
   lngScreenCopies,
   listPanelRightEdge,
+  lowZoomCanvasLayout,
   mapControlsRightPx,
   mapboxHeightMinZoom,
+  mercatorWorldPx,
+  narrowWidthFitZoom,
+  needsLowZoomCanvas,
   pinHintCenterX,
+  presetCamera,
+  readMapWaterColor,
+  reduceCanvasMachine,
+  scheduleMapResize,
   shouldCollapseList,
+  shouldApplyNarrowWorldwideAfterResize,
+  shouldJumpToNarrowWorldwideFit,
+  shouldReapplyNarrowWorldwide,
+  shouldReapplyPresetOnSizeChange,
   worldwideFraming,
+  worldwideMapHeightCap,
+  zoomToFitRadiusKm,
 } from './map-camera';
 
 const PLACES = [
@@ -174,6 +213,94 @@ test('isUserMapMove uses originalEvent or a flight tag', () => {
   assert.equal(isUserMapMove(undefined), false);
 });
 
+test('resize and programmatic camera never count as a user move', () => {
+  assert.equal(isUserMapMove({ originalEvent: { type: 'resize' } }), false);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'resize' } }, 'preset'), false);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'orientationchange' } }), false);
+  assert.equal(isUserMapMove({}, 'resize'), false);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'mouseup' } }, 'resize'), false);
+  assert.equal(isUserMapMove({}, 'programmatic'), false);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'wheel' } }), true);
+});
+
+test('resize does not flip the chip to Map area', () => {
+  let leftPreset = false;
+  const onUserCameraMove = () => {
+    leftPreset = true;
+  };
+  for (const event of [
+    { originalEvent: { type: 'resize' } as { type: string }, tag: null as string | null },
+    { originalEvent: undefined as { type: string } | undefined, tag: 'resize' },
+    { originalEvent: { type: 'resize' }, tag: 'preset' },
+    { originalEvent: undefined, tag: 'programmatic' },
+  ]) {
+    if (isUserMapMove({ originalEvent: event.originalEvent }, event.tag)) onUserCameraMove();
+  }
+  assert.equal(leftPreset, false);
+  if (isUserMapMove({ originalEvent: { type: 'mouseup' } })) onUserCameraMove();
+  assert.equal(leftPreset, true);
+});
+
+test('scheduleMapResize coalesces to one map.resize() per frame', () => {
+  const calls: string[] = [];
+  const map = { resize: () => calls.push('resize') };
+  const state = { rafId: null as number | null };
+  let nextId = 1;
+  const pending = new Map<number, FrameRequestCallback>();
+  const raf = (cb: FrameRequestCallback) => {
+    const id = nextId++;
+    pending.set(id, cb);
+    return id;
+  };
+  const cancel = (id: number) => {
+    pending.delete(id);
+  };
+  scheduleMapResize(map, state, raf, cancel, () => calls.push('after-stale'));
+  scheduleMapResize(map, state, raf, cancel, () => calls.push('after'));
+  scheduleMapResize(map, state, raf, cancel, () => calls.push('after'));
+  assert.equal(pending.size, 1);
+  assert.equal(calls.length, 0);
+  const cb = [...pending.values()][0];
+  cb(0);
+  assert.deepEqual(calls, ['resize', 'after']);
+  assert.equal(state.rafId, null);
+  scheduleMapResize(null, state, raf, cancel, () => calls.push('after-null'));
+  assert.deepEqual(calls, ['resize', 'after']);
+});
+
+test('shouldReapplyPresetOnSizeChange on breakpoint but not after leaving the preset', () => {
+  const compact = { width: 768, height: 900 };
+  const desktop = { width: 1280, height: 900 };
+  assert.equal(shouldReapplyPresetOnSizeChange(false, compact, desktop), true);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, desktop, compact), true);
+  assert.equal(shouldReapplyPresetOnSizeChange(true, compact, desktop), false);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, null, desktop), false);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, compact, compact), false);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, compact, { width: 768, height: 1024 }), true);
+});
+
+test('presetCamera re-frames Worldwide when the breakpoint changes', () => {
+  const loc = { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 };
+  const at768 = presetCamera(loc, 768, 900, { left: 0, right: 0 });
+  const at1280 = presetCamera(loc, 1280, 900);
+  assert.ok(at768.zoom <= Math.log2(768 / 512) + 1e-9);
+  assert.ok(Math.abs(at768.zoom - narrowWidthFitZoom(768)) < 1e-9);
+  assert.equal(at768.lng, WORLDWIDE_COMFORT_LNG);
+  assert.ok(at1280.zoom > at768.zoom);
+  assert.notEqual(at1280.lng, at768.lng);
+  assert.equal(LIST_EXPAND_RESIZE_MS, 220);
+});
+
+test('flyPadding exactZoom uses fitTop so the map can fill behind the chrome', () => {
+  const padded = flyPadding(false, true, { width: 768, height: 900 }, true, 179);
+  assert.equal(padded.top, 179);
+  assert.equal(padded.left, 0);
+  assert.equal(padded.right, 0);
+  const desktop = flyPadding(false, true, { width: 1280, height: 900 }, false, 0);
+  assert.equal(desktop.top, 0);
+  assert.equal(desktop.left, LIST_PANEL_RIGHT);
+});
+
 test('1280x900 uses the height min zoom and a Pacific seam, not a gap-fit zoom', () => {
   const framing = worldwideFraming(1280, 900);
   const heightMin = mapboxHeightMinZoom(900);
@@ -201,11 +328,375 @@ test('1440x900 keeps the comfortable lng -20 framing and fits the world in the g
   assertPlacesInGap(1440, 900);
 });
 
-test('Worldwide framing at 768 with a collapsed list uses the full width', () => {
+test('Worldwide framing at 768 with a collapsed list fits the whole world', () => {
   const framing = worldwideFraming(768, 900, { left: 0, right: 0 });
   assert.equal(framing.panelRight, 0);
   assert.equal(framing.rightPadding, 0);
   assert.equal(framing.gap, 768);
+  assert.equal(framing.overflow, false);
+  assert.equal(framing.lng, WORLDWIDE_COMFORT_LNG);
+  assert.equal(framing.lat, 20);
+  assert.ok(framing.zoom < mapboxHeightMinZoom(900));
+  assert.ok(framing.worldPx <= framing.gap + 1);
+  assertPlacesInGap(768, 900, { left: 0, right: 0 });
+});
+
+test('hideListForWorldwidePreset is only narrow Worldwide while still on the chip', () => {
+  assert.equal(hideListForWorldwidePreset(768, true, false), true);
+  assert.equal(hideListForWorldwidePreset(768, true, true), false);
+  assert.equal(hideListForWorldwidePreset(1280, true, false), false);
+  assert.equal(hideListForWorldwidePreset(1440, true, false), false);
+  assert.equal(hideListForWorldwidePreset(768, false, false), false);
+});
+
+test('defaultCompactList is every preset at ≤768', () => {
+  assert.equal(defaultCompactList(768), true);
+  assert.equal(defaultCompactList(1280), false);
+  assert.equal(defaultCompactList(1440), false);
+});
+
+test('at 768x900 Worldwide camera zoom is <= log2(768/512) and populated longitudes fit', () => {
+  const viewport = { width: 768, height: 900 };
+  const widthFitZoom = Math.log2(768 / MERCATOR_TILE_SIZE);
+  const loc = { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 };
+  const camera = presetCamera(loc, 768, 900, { left: 0, right: 0 });
+  assert.ok(camera.zoom <= widthFitZoom + 1e-9);
+  assert.ok(camera.zoom <= narrowWidthFitZoom(768) + 1e-9);
+
+  const layout = lowZoomCanvasLayout(viewport, camera.zoom);
+  assert.ok(layout.height <= 768);
+  assert.ok(mapboxHeightMinZoom(layout.height) <= camera.zoom + 1e-9);
+  assertPlacesInGap(768, layout.height, { left: 0, right: 0 });
+
+  const framing = worldwideFraming(768, 900, { left: 0, right: 0 });
+  assert.equal(framing.overflow, false);
+  assert.ok(framing.worldPx <= 768 - 2 * WORLD_FIT_EDGE_PAD + 1);
+  const populated = [
+    ['Hawaii', -157.8],
+    ['Japan', 139.69],
+    ['Sydney', 151.21],
+    ['Melbourne', 144.96],
+    ['Fiji', 178.0],
+    ['NZ', 174.78],
+  ] as const;
+  for (const [name, lng] of populated) {
+    const copies = lngScreenCopies(lng, camera.lng, camera.zoom, 768, 0, 0);
+    const onScreen = copies.some((x) => x > WORLD_FIT_EDGE_PAD && x < 768 - WORLD_FIT_EDGE_PAD);
+    assert.ok(
+      onScreen,
+      `${name} (${lng}) copies [${copies.map((x) => x.toFixed(1)).join(', ')}] ` +
+        `must sit in ${WORLD_FIT_EDGE_PAD}..${768 - WORLD_FIT_EDGE_PAD} at zoom=${camera.zoom.toFixed(3)}`
+    );
+  }
+
+  const desktop = lowZoomCanvasLayout({ width: 1280, height: 900 }, 0.814);
+  assert.deepEqual(desktop, { top: 0, height: 900 });
+  const framing1280 = worldwideFraming(1280, 900);
+  assert.ok(Math.abs(framing1280.zoom - mapboxHeightMinZoom(900)) < 1e-9);
+  const framing1440 = worldwideFraming(1440, 900);
+  assert.ok(Math.abs(framing1440.zoom - Math.log2((1440 - LIST_PANEL_RIGHT) / 512)) < 1e-9);
+});
+
+test('1280→768 re-applies narrow Worldwide framing while the chip is still Worldwide', () => {
+  const desktop = { width: 1280, height: 900 };
+  const compact = { width: 768, height: 900 };
+  assert.equal(needsLowZoomCanvas(1280, 900), false);
+  assert.equal(needsLowZoomCanvas(768, 900), true);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', desktop, compact), true);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', compact, desktop), false);
+  assert.equal(shouldReapplyNarrowWorldwide(true, 'worldwide', desktop, compact), false);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'tokyo', desktop, compact), false);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', null, compact), false);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, desktop, compact), true);
+
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    compact.width,
+    compact.height,
+    { left: 0, right: 0 }
+  );
+  assert.ok(camera.zoom <= narrowWidthFitZoom(768) + 1e-9);
+  assert.ok(camera.zoom < mapboxHeightMinZoom(900));
+});
+
+test('shortened canvas follows zoom, not the Worldwide chip, and a pan keeps zoom', () => {
+  const viewport = { width: 768, height: 900 };
+  const lowZoom = narrowWidthFitZoom(768);
+  const atChip = lowZoomCanvasLayout(viewport, lowZoom);
+  const afterLeaveChip = lowZoomCanvasLayout(viewport, lowZoom);
+  assert.deepEqual(atChip, afterLeaveChip);
+  assert.ok(atChip.height < 900);
+  assert.ok(mapboxHeightMinZoom(atChip.height) <= lowZoom + 1e-9);
+
+  const panned = canvasLayoutAfterPan(viewport, lowZoom);
+  assert.equal(panned.zoom, lowZoom);
+  assert.deepEqual(panned.layout, atChip);
+
+  const midZoom = 0.7;
+  const mid = lowZoomCanvasLayout(viewport, midZoom);
+  assert.ok(Math.abs(mid.height - mercatorWorldPx(midZoom)) < 1e-6);
+  assert.equal(mid.top + mid.height, 900);
+  assert.ok(mid.height > atChip.height);
+  assert.ok(mid.height < 900);
+
+  const pastClamp = lowZoomCanvasLayout(viewport, mapboxHeightMinZoom(900));
+  assert.deepEqual(pastClamp, { top: 0, height: 900 });
+});
+
+test('canvas machine keeps a 3.4→0.585 flight short the whole way', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  let state = createCanvasMachine(viewport);
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: target });
+  assert.equal(state.shortened, true);
+  assert.equal(state.flightLocked, true);
+  const short = state.box.height;
+  assert.ok(short < 900);
+  assert.ok(mapboxHeightMinZoom(short) <= target + 1e-9);
+  for (const zoom of [3.4, 2.4, 1.6, 1.1, 0.9, 0.7, target]) {
+    state = reduceCanvasMachine(state, { type: 'flightProgress', zoom });
+    assert.equal(state.box.height, short, `canvas grew at live zoom ${zoom}`);
+  }
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  assert.equal(state.flightLocked, false);
+  assert.equal(state.box.height, short);
+  assert.ok(state.shortened);
+});
+
+test('canvas machine: a drag keeps the short canvas', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: target,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  const short = state.box.height;
+  state = reduceCanvasMachine(state, { type: 'pan', zoom: target });
+  state = reduceCanvasMachine(state, { type: 'pan', zoom: target });
+  assert.equal(state.box.height, short);
+  assert.equal(state.shortened, true);
+});
+
+test('canvas machine: wheel zoom past the clamp grows the canvas once', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  const clamp = mapboxHeightMinZoom(900);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: target,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  const short = state.box.height;
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 0.7, prevZoom: target });
+  assert.ok(state.box.height < 900);
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: clamp, prevZoom: 0.7 });
+  assert.equal(state.box.height, 900);
+  assert.equal(state.shortened, false);
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 2, prevZoom: clamp });
+  assert.equal(state.box.height, 900);
+  assert.ok(short < 900);
+});
+
+test('canvas machine: wheel zoom-out never grows the short canvas', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  const clamp = mapboxHeightMinZoom(900);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: target,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 0.7, prevZoom: target });
+  assert.ok(state.box.height < 900);
+  assert.ok(Math.abs(state.box.height - mercatorWorldPx(0.7)) < 1e-6);
+  assert.equal(state.box.top + state.box.height, 900);
+  const mid = { ...state.box };
+  assert.ok(mid.top > 0);
+  // Zoom-out from the grown-but-still-short box must keep that height.
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 0.55, prevZoom: 0.7 });
+  assert.deepEqual(state.box, mid);
+  assert.equal(state.shortened, true);
+  // A frame that reports the full-height clamp on the way out must not snap
+  // top 177→0 / height 723→900. Stay short until a zoom-in reaches the clamp.
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: clamp, prevZoom: 0.9 });
+  assert.deepEqual(state.box, mid);
+  assert.equal(state.shortened, true);
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: clamp, prevZoom: 0.7 });
+  assert.equal(state.box.height, 900);
+  assert.equal(state.shortened, false);
+});
+
+test('768→1280→768 re-applies the narrow Worldwide camera after resize settles', () => {
+  const compact = { width: 768, height: 900 };
+  const desktop = { width: 1280, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  const clamp = mapboxHeightMinZoom(900);
+
+  let state = createCanvasMachine(compact);
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: target });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  assert.ok(state.shortened);
+  assert.ok(state.box.height < 900);
+
+  state = reduceCanvasMachine(state, { type: 'viewport', viewport: desktop });
+  assert.equal(state.box.height, 900);
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', compact, desktop), false);
+  assert.equal(shouldJumpToNarrowWorldwideFit(false, 'worldwide', desktop, clamp), false);
+
+  // Second shrink — not only the first 1280→768 — must re-apply the camera
+  // after shrink + map.resize(), because live zoom is still the desktop clamp.
+  assert.equal(shouldReapplyNarrowWorldwide(false, 'worldwide', desktop, compact), true);
+  assert.equal(shouldJumpToNarrowWorldwideFit(false, 'worldwide', compact, clamp), true);
+  assert.equal(shouldJumpToNarrowWorldwideFit(false, 'worldwide', compact, target), false);
+  assert.equal(shouldJumpToNarrowWorldwideFit(true, 'worldwide', compact, clamp), false);
+  assert.equal(shouldJumpToNarrowWorldwideFit(false, 'tokyo', compact, clamp), false);
+  assert.equal(
+    shouldApplyNarrowWorldwideAfterResize({
+      pending: true,
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      canvasHeight: 900,
+      liveZoom: clamp,
+    }),
+    false,
+    'must wait until the short canvas is on screen'
+  );
+  assert.equal(
+    shouldApplyNarrowWorldwideAfterResize({
+      pending: true,
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      canvasHeight: mercatorWorldPx(target),
+      liveZoom: clamp,
+    }),
+    true
+  );
+  assert.equal(
+    shouldApplyNarrowWorldwideAfterResize({
+      pending: false,
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      canvasHeight: mercatorWorldPx(target),
+      liveZoom: clamp,
+    }),
+    false
+  );
+
+  state = reduceCanvasMachine(state, {
+    type: 'resizeNarrowFit',
+    viewport: compact,
+    targetZoom: target,
+  });
+  assert.ok(state.box.height < 900);
+  assert.ok(mapboxHeightMinZoom(state.box.height) <= target + 1e-9);
+
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    compact.width,
+    compact.height,
+    { left: 0, right: 0 }
+  );
+  assert.ok(Math.abs(camera.zoom - target) < 1e-9);
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: camera.zoom });
+  assert.ok(state.shortened);
+  assert.ok(Math.abs((state.anchorZoom ?? 0) - target) < 1e-9);
+});
+
+test('canvas machine: resize 1280→768 shrinks then lands at the narrow fit', () => {
+  const desktop = { width: 1280, height: 900 };
+  const compact = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  let state = createCanvasMachine(desktop);
+  assert.equal(state.box.height, 900);
+  state = reduceCanvasMachine(state, { type: 'resizeNarrowFit', viewport: compact, targetZoom: target });
+  assert.equal(state.viewport.width, 768);
+  assert.ok(state.box.height < 900);
+  assert.ok(mapboxHeightMinZoom(state.box.height) <= target + 1e-9);
+  state = reduceCanvasMachine(state, { type: 'flightProgress', zoom: 0.814 });
+  assert.ok(state.box.height < 900);
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  assert.ok(state.shortened);
+  assert.ok(Math.abs((state.anchorZoom ?? 0) - target) < 1e-9);
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    768,
+    900,
+    { left: 0, right: 0 }
+  );
+  assert.ok(Math.abs(camera.zoom - target) < 1e-9);
+});
+
+test('Show list does not remesasure or shrink the 768 Worldwide canvas', () => {
+  const viewport = { width: 768, height: 900 };
+  const zoom = narrowWidthFitZoom(768);
+  const hidden = canvasLayoutIgnoresList(viewport, zoom);
+  const shown = lowZoomCanvasLayout(viewport, zoom);
+  assert.deepEqual(hidden, shown);
+  assert.equal(shown.top + shown.height, 900);
+  assert.ok(shown.height < 900);
+  assert.ok(shown.height !== 768 || shown.top !== 0);
+});
+
+test('readMapWaterColor prefers the water layer over beige', () => {
+  assert.equal(cssColorFromPaint('#cad2d3'), '#cad2d3');
+  assert.equal(
+    cssColorFromPaint(['interpolate', ['linear'], ['zoom'], 0, '#a8d5e5', 8, '#7eb6c9']),
+    '#7eb6c9'
+  );
+  const paint: Record<string, Record<string, unknown>> = {
+    water: { 'fill-color': '#cad2d3' },
+    background: { 'background-color': '#f8f4f0' },
+  };
+  assert.equal(
+    readMapWaterColor((layer, prop) => paint[layer]?.[prop]),
+    '#cad2d3'
+  );
+  delete paint.water;
+  assert.equal(
+    readMapWaterColor((layer, prop) => paint[layer]?.[prop]),
+    '#f8f4f0'
+  );
+  assert.notEqual(readMapWaterColor((layer, prop) => paint[layer]?.[prop]), '#e8e4dc');
+});
+
+test('768x1024 Worldwide zoom fits 360° of longitude in the canvas width', () => {
+  const framing = worldwideFraming(768, 1024, { left: 0, right: 0 });
+  const widthFitZoom = Math.log2(768 / MERCATOR_TILE_SIZE);
+  assert.ok(framing.zoom <= widthFitZoom + 1e-9);
+  assert.ok(framing.worldPx <= 768 + 1);
+  assert.equal(framing.overflow, false);
+  assertPlacesInGap(768, 1024, { left: 0, right: 0 });
+  const cap = worldwideMapHeightCap(768, 1024 - 160);
+  assert.ok(cap <= 768);
+  assert.ok(mapboxHeightMinZoom(cap) <= widthFitZoom + 1e-9);
+});
+
+test('flyPadding with forced collapse at 768 Worldwide uses the full width', () => {
+  const padding = flyPadding(false, true, { width: 768, height: 900 }, true);
+  assert.equal(padding.left, 0);
+  assert.equal(padding.right, 0);
+});
+
+test('presetCamera keeps desktop zoom and tightens ≤768 so the radius fits', () => {
+  const tokyo = { id: 'tokyo', lat: 35.6762, lng: 139.6503, zoom: 11, radiusKm: 30 };
+  const desktop = presetCamera(tokyo, 1440, 900);
+  assert.equal(desktop.zoom, 11);
+  assert.equal(desktop.lng, tokyo.lng);
+  const narrow = presetCamera(tokyo, 768, 900, { left: 0, right: 0 });
+  assert.ok(narrow.zoom < 11);
+  const fit = zoomToFitRadiusKm(tokyo.lat, tokyo.radiusKm, 768 * 0.86);
+  assert.ok(narrow.zoom <= fit + 1e-9);
+});
+
+test('768 with the list still uses the height-min floor (collapse is what lowers zoom)', () => {
+  const withList = worldwideFraming(768, 900);
+  assert.equal(withList.panelRight, LIST_PANEL_RIGHT);
+  assert.ok(Math.abs(withList.zoom - mapboxHeightMinZoom(900)) < 1e-9);
+  assert.equal(withList.overflow, true);
 });
 
 test('Worldwide framing subtracts drawer right padding from the visible gap', () => {
@@ -222,11 +713,38 @@ test('Worldwide framing subtracts drawer right padding from the visible gap', ()
  */
 class InterruptibleMap {
   padding = { ...ZERO_PADDING };
+  center = { lng: -20, lat: 20 };
+  width = 1440;
+  height = 900;
+  /** Degrees per CSS pixel — enough to see a half-padding shift. */
+  degPerPx = 0.01;
+  methods: string[] = [];
+  /** When true, flyTo finishes synchronously like prefers-reduced-motion → jumpTo. */
+  reducedMotion = false;
   private flying = false;
   private pending: Array<() => void> = [];
 
   getPadding() {
     return { ...this.padding };
+  }
+
+  getCanvas() {
+    return { clientWidth: this.width, clientHeight: this.height };
+  }
+
+  paddedCenter() {
+    return {
+      x: (this.width + (this.padding.left ?? 0) - (this.padding.right ?? 0)) / 2,
+      y: (this.height + (this.padding.top ?? 0) - (this.padding.bottom ?? 0)) / 2,
+    };
+  }
+
+  unproject([x, y]: [number, number]) {
+    const c = this.paddedCenter();
+    return {
+      lng: this.center.lng + (x - c.x) * this.degPerPx,
+      lat: this.center.lat - (y - c.y) * this.degPerPx,
+    };
   }
 
   once(_event: string, handler: () => void) {
@@ -242,15 +760,57 @@ class InterruptibleMap {
     for (const handler of handlers) handler();
   }
 
-  flyTo(options: { padding?: Partial<typeof ZERO_PADDING> }) {
+  private applyCamera(options: {
+    padding?: Partial<typeof ZERO_PADDING>;
+    duration?: number;
+    center?: [number, number];
+  }) {
     if (this.flying) {
       this.flying = false;
       this.emitMoveend();
     }
-    this.flying = true;
+    if (options.center) {
+      this.center = { lng: options.center[0], lat: options.center[1] };
+    }
     if (options.padding) {
       this.padding = { ...ZERO_PADDING, ...options.padding };
     }
+    // mapbox-gl 3.33: duration 0 (and reduced-motion jumpTo) fires moveend
+    // inside flyTo(), before a listener attached afterward can see it.
+    if (options.duration === 0 || this.reducedMotion) {
+      this.flying = false;
+      this.emitMoveend();
+      return;
+    }
+    this.flying = true;
+  }
+
+  flyTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number; center?: [number, number] }) {
+    this.methods.push('flyTo');
+    this.applyCamera(options);
+  }
+
+  easeTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number; center?: [number, number] }) {
+    this.methods.push('easeTo');
+    this.applyCamera(options);
+  }
+
+  jumpTo(options?: { center?: [number, number]; padding?: Partial<typeof ZERO_PADDING> }) {
+    this.methods.push('jumpTo');
+    if (options?.center) {
+      this.center = { lng: options.center[0], lat: options.center[1] };
+    }
+    if (options?.padding) {
+      this.padding = { ...ZERO_PADDING, ...options.padding };
+    }
+  }
+
+  setCenter() {
+    this.methods.push('setCenter');
+  }
+
+  isMoving() {
+    return this.flying;
   }
 
   endFlight() {
@@ -259,21 +819,20 @@ class InterruptibleMap {
   }
 }
 
-/** Mirrors PlacesMap: off the previous handler, then flyToThenOnMoveend, then store the new one. */
+/** Mirrors PlacesMap: replace in-flight cameras through startCameraAnimation. */
 function startPlacesMapFlight(
   map: InterruptibleMap,
   handlerRef: { current: (() => void) | null }
 ) {
-  if (handlerRef.current) {
-    map.off('moveend', handlerRef.current);
-    handlerRef.current = null;
-  }
-  const onFlyEnd = () => {
-    handlerRef.current = null;
-    map.padding = { ...ZERO_PADDING };
-  };
-  flyToThenOnMoveend(map, { padding: { ...ZERO_PADDING, left: 396 } }, onFlyEnd);
-  handlerRef.current = onFlyEnd;
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    { padding: { ...ZERO_PADDING, left: 396 } },
+    () => {
+      clearPaddingKeepView(map);
+    }
+  );
 }
 
 test('easeOutCubic is 0 at start, 1 at end, and faster early', () => {
@@ -290,5 +849,267 @@ test('preset change mid-flight leaves padding at 0', () => {
   startPlacesMapFlight(map, handlerRef);
   assert.equal(map.getPadding().left, 396);
   map.endFlight();
+  assert.deepEqual(map.getPadding(), ZERO_PADDING);
+});
+
+test('instant flyTo (duration 0) runs the end handler even when moveend is synchronous', () => {
+  const map = new InterruptibleMap();
+  let ended = 0;
+  flyToThenOnMoveend(map, { duration: 0, padding: { ...ZERO_PADDING, left: 396 } }, () => {
+    ended += 1;
+    map.padding = { ...ZERO_PADDING };
+  });
+  assert.equal(ended, 1);
+  assert.equal(map.isMoving(), false);
+  assert.deepEqual(map.getPadding(), ZERO_PADDING);
+  map.endFlight();
+  assert.equal(ended, 1);
+});
+
+test('prefers-reduced-motion flyTo (sync moveend, duration > 0) still runs the end handler', () => {
+  const map = new InterruptibleMap();
+  map.reducedMotion = true;
+  let ended = 0;
+  flyToThenOnMoveend(map, { duration: 900 }, () => {
+    ended += 1;
+  });
+  assert.equal(ended, 1);
+  assert.equal(map.isMoving(), false);
+  map.endFlight();
+  assert.equal(ended, 1);
+});
+
+test('camera end handler fires exactly once for instant and animated moves', () => {
+  const handlerRef: { current: (() => void) | null } = { current: null };
+
+  const instant = new InterruptibleMap();
+  let instantEnds = 0;
+  startCameraAnimation(instant, handlerRef, 'flyTo', { duration: 0, center: [0, 0] }, () => {
+    instantEnds += 1;
+  });
+  assert.equal(instantEnds, 1);
+  assert.equal(instant.isMoving(), false);
+  instant.endFlight();
+  assert.equal(instantEnds, 1);
+
+  const reduced = new InterruptibleMap();
+  reduced.reducedMotion = true;
+  let reducedEnds = 0;
+  startCameraAnimation(reduced, handlerRef, 'easeTo', { duration: 560, center: [1, 1] }, () => {
+    reducedEnds += 1;
+  });
+  assert.equal(reducedEnds, 1);
+  assert.equal(reduced.isMoving(), false);
+  reduced.endFlight();
+  assert.equal(reducedEnds, 1);
+
+  const animated = new InterruptibleMap();
+  let animatedEnds = 0;
+  startCameraAnimation(animated, handlerRef, 'flyTo', { duration: 1800, center: [-20, 20] }, () => {
+    animatedEnds += 1;
+  });
+  assert.equal(animatedEnds, 0);
+  assert.equal(animated.isMoving(), true);
+  animated.endFlight();
+  assert.equal(animatedEnds, 1);
+  animated.endFlight();
+  assert.equal(animatedEnds, 1);
+});
+
+test('reduced motion + 768 Worldwide: short canvas, width-fit zoom, one camera call', () => {
+  const viewport = { width: 768, height: 900 };
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    768,
+    900,
+    { left: 0, right: 0 }
+  );
+  const full = { top: 0, height: 900 };
+  let state = createCanvasMachine(viewport);
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: camera.zoom, viewport });
+  assert.equal(canvasReadyForFlight(full, state.box), false, 'must not fly until the short box is committed');
+  assert.equal(canvasReadyForFlight(state.box, state.box), true);
+  assert.ok(state.box.height < 900);
+  assert.ok(mapboxHeightMinZoom(state.box.height) <= camera.zoom + 1e-9);
+  assert.ok(camera.zoom <= Math.log2(768 / MERCATOR_TILE_SIZE) + 1e-9);
+
+  const map = new InterruptibleMap();
+  map.reducedMotion = true;
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  let ends = 0;
+  const flightPadding = ZERO_PADDING;
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    {
+      duration: 900,
+      center: [camera.lng, camera.lat],
+      zoom: camera.zoom,
+      padding: flightPadding,
+    },
+    () => {
+      ends += 1;
+      if (shouldClearPaddingAfterFlight(flightPadding, map.getPadding())) {
+        clearPaddingKeepView(map);
+      }
+    }
+  );
+  const cameraCalls = map.methods.filter((name) =>
+    name === 'flyTo' || name === 'easeTo' || name === 'jumpTo' || name === 'setCenter'
+  );
+  assert.deepEqual(cameraCalls, ['flyTo']);
+  assert.equal(ends, 1);
+  assert.equal(map.isMoving(), false);
+  map.endFlight();
+  assert.equal(ends, 1);
+});
+
+test('preset with zero padding is exactly one camera call', () => {
+  assert.equal(shouldClearPaddingAfterFlight(ZERO_PADDING, ZERO_PADDING), false);
+  assert.equal(shouldClearPaddingAfterFlight(ZERO_PADDING, { ...ZERO_PADDING, right: 400 }), false);
+  assert.equal(shouldClearPaddingAfterFlight({ ...ZERO_PADDING, right: 400 }, ZERO_PADDING), false);
+  assert.equal(
+    shouldClearPaddingAfterFlight({ ...ZERO_PADDING, right: 400 }, { ...ZERO_PADDING, right: 400 }),
+    true
+  );
+
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    768,
+    900,
+    { left: 0, right: 0 }
+  );
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const flightPadding = flyPadding(false, true, { width: 768, height: 704 }, true, 0);
+  assert.equal(paddingIsZero(flightPadding), true);
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    {
+      duration: 900,
+      center: [camera.lng, camera.lat],
+      zoom: camera.zoom,
+      padding: flightPadding,
+    },
+    () => {
+      if (shouldClearPaddingAfterFlight(flightPadding, map.getPadding())) {
+        clearPaddingKeepView(map);
+      }
+    }
+  );
+  map.endFlight();
+  assert.deepEqual(
+    map.methods.filter((name) => name === 'flyTo' || name === 'easeTo' || name === 'jumpTo' || name === 'setCenter'),
+    ['flyTo']
+  );
+});
+
+test('user zoom-in grows the short canvas after a padding clear', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  const clamp = mapboxHeightMinZoom(900);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: target,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  const short = state.box.height;
+  assert.ok(short < 900);
+
+  const applyMove = (
+    current: typeof state,
+    tag: string | null,
+    event: { originalEvent?: { type?: string } },
+    prevZoom: number,
+    nextZoom: number
+  ) => {
+    const programmatic =
+      (tag === 'preset' || tag === 'resize' || tag === 'programmatic' || tag === 'place') &&
+      !isUserGestureEvent(event);
+    if (programmatic) {
+      return reduceCanvasMachine(current, { type: 'flightProgress', zoom: nextZoom });
+    }
+    return reduceCanvasMachine(current, { type: 'userZoom', zoom: nextZoom, prevZoom });
+  };
+
+  // Padding-clear jumpTo is tagged resize and has no gesture — no grow.
+  state = applyMove(state, 'resize', {}, target, target);
+  assert.equal(state.box.height, short);
+  assert.equal(state.shortened, true);
+
+  // A leaked resize tag must not block a real wheel zoom-in at the floor.
+  state = applyMove(state, 'resize', { originalEvent: { type: 'wheel' } }, target, clamp);
+  assert.equal(state.box.height, 900);
+  assert.equal(state.shortened, false);
+});
+
+function visualCenter(map: InterruptibleMap) {
+  const canvas = map.getCanvas();
+  return map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+}
+
+test('clearPaddingKeepView keeps the visual centre (padded mock transform)', () => {
+  const map = new InterruptibleMap();
+  map.padding = { ...ZERO_PADDING, right: 400 };
+  map.center = { lng: -111.94, lat: 33.425 };
+  const before = visualCenter(map);
+  const shiftedIfUncentered = {
+    lng: map.center.lng,
+    lat: map.center.lat,
+  };
+  assert.notEqual(before.lng, shiftedIfUncentered.lng);
+  assert.equal(clearPaddingKeepView(map), true);
+  assert.deepEqual(visualCenter(map), before);
+  assert.deepEqual(map.getPadding(), ZERO_PADDING);
+  assert.ok(map.methods.includes('jumpTo'));
+  assert.equal(clearPaddingKeepView(map), false);
+});
+
+test('padding-clear jumpTo updates bounds and search without flipping the chip', () => {
+  const effects = cameraMoveendEffects({}, 'resize');
+  assert.equal(effects.leavePreset, false);
+  assert.equal(effects.reportBounds, true);
+  assert.equal(shouldReportViewport('resize'), true);
+  assert.equal(isUserMapMove({}, 'resize'), false);
+
+  const unitedStates = LOCATION_PRESETS.find((item) => item.id === 'united-states')!;
+  let heading = createListHeadingMachine();
+  heading = startListHeadingRequest(heading);
+  heading = settleListHeadingRequest(
+    heading,
+    1,
+    { shown: 1, total: 1, hasMore: false, places: [{ city: 'Tempe' }] },
+    { hasMap: true, zoom: 12, location: unitedStates, leftPreset: true }
+  );
+  assert.equal(heading.heading?.chipLabel, 'Map area');
+
+  heading = startListHeadingRequest(heading);
+  heading = settleListHeadingRequest(
+    heading,
+    2,
+    { shown: 4, total: 4, hasMore: false, places: [{ city: 'Tempe' }] },
+    { hasMap: true, zoom: 12, location: unitedStates, leftPreset: true }
+  );
+  assert.equal(shouldApplySettledSearch(2, heading), true);
+  assert.equal(shouldApplySettledSearch(1, heading), false);
+  assert.equal(listHeadingText(heading.heading), '4 places in this area');
+  assert.equal(heading.heading?.chipLabel, 'Map area');
+});
+
+test('drawer close after a card fly does not shift the view', () => {
+  const size = { width: 1280, height: 900 };
+  const padding = flyPadding(true, false, size);
+  assert.ok((padding.right ?? 0) > 0);
+  const map = new InterruptibleMap();
+  map.width = size.width;
+  map.height = size.height;
+  map.padding = { ...ZERO_PADDING, ...padding };
+  map.center = { lng: -111.94, lat: 33.425 };
+  const before = visualCenter(map);
+  assert.equal(clearPaddingKeepView(map), true);
+  assert.deepEqual(visualCenter(map), before);
   assert.deepEqual(map.getPadding(), ZERO_PADDING);
 });
