@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { placesListHeading } from '@/lib/list-heading';
 import { FILTER_OVERLAY_HEADER_INSET, shouldScrollChildIntoView } from '@/lib/map-style';
 import type { PlaceSearchResult } from '@/lib/types';
@@ -29,7 +29,7 @@ interface PlacesListProps {
   onToggleExpanded?: () => void;
 }
 
-export default function PlacesList({
+function PlacesList({
   places,
   total,
   selectedPlaceId,
@@ -72,12 +72,12 @@ export default function PlacesList({
 
   const headerInner = (
     <>
-      <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+      <h2 className="min-h-6 text-base font-semibold text-gray-900">{title}</h2>
       {collapsible ? (
         <span className="ml-3 flex shrink-0 items-center gap-1 text-sm font-medium text-gray-500">
           {expanded ? 'Hide list' : 'Show list'}
           <svg
-            className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
+            className={`h-4 w-4 places-list-chevron ${expanded ? 'rotate-180' : ''}`}
             viewBox="0 0 20 20"
             fill="currentColor"
             aria-hidden
@@ -96,10 +96,14 @@ export default function PlacesList({
   return (
     <div
       data-places-list
-      className={`flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5 ${
+      data-list-expanded={expanded ? 'true' : 'false'}
+      className={`places-list flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5 ${
         compact ? 'h-auto' : 'h-full'
       }`}
     >
+      <div className="relative h-0.5 shrink-0 overflow-hidden bg-transparent" aria-hidden>
+        {isLoading ? <div className="places-loading-bar" /> : null}
+      </div>
       <div
         className="border-b border-gray-100"
         style={filterHeaderInset ? { paddingTop: FILTER_OVERLAY_HEADER_INSET } : undefined}
@@ -119,11 +123,15 @@ export default function PlacesList({
         )}
       </div>
 
-      {compact ? null : (
+      <div
+        className={`places-list-body-wrap ${compact ? 'places-list-body-wrap-collapsed' : 'places-list-body-wrap-expanded'}`}
+        aria-hidden={compact}
+        inert={compact ? true : undefined}
+      >
         <div
           id="places-list-body"
           ref={scrollRef}
-          className="flex-1 space-y-1 overflow-y-auto px-2 py-2"
+          className="places-list-body flex-1 space-y-1 overflow-y-auto px-2 py-2"
         >
           {error && (
             <div className="m-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
@@ -145,9 +153,9 @@ export default function PlacesList({
                 isSelected={selectedPlaceId === place.place_id}
                 isHovered={hoveredPlaceId === place.place_id}
                 isFavorited={favorites.has(place.place_id)}
-                onSelect={() => onSelectPlace(place.place_id)}
-                onHover={(hover) => onHoverPlace(hover ? place.place_id : null)}
-                onToggleFavorite={() => onToggleFavorite(place.place_id)}
+                onSelectPlace={onSelectPlace}
+                onHoverPlace={onHoverPlace}
+                onToggleFavorite={onToggleFavorite}
               />
             ))
           )}
@@ -163,14 +171,10 @@ export default function PlacesList({
               </button>
             </div>
           )}
-
-          {isLoading && places.length > 0 && (
-            <div className="flex items-center justify-center py-4">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand border-t-transparent" />
-            </div>
-          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
+
+export default memo(PlacesList);

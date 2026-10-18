@@ -7,9 +7,15 @@ import {
   CLUSTER_COUNT_SMALL,
   CLUSTER_RADIUS,
   CLUSTER_RADIUS_EXPRESSION,
+  MAPBOX_STREETS_STYLE,
+  MAP_FADE_DURATION_MS,
+  PAINT_TRANSITION,
   PIN_HALO_RADIUS,
   PIN_HALO_RADIUS_EXPRESSION,
   PIN_ICON_SIZE,
+  PIN_STROKE,
+  PLACES_LAYERS_ABOVE_LABELS,
+  PLACES_LAYERS_BEFORE_ID,
   WCAG_AA_NORMAL,
   clusterColorForCount,
   clusterLabelPairs,
@@ -24,6 +30,8 @@ import {
   pinVisualState,
   placeIdInFilter,
   placesMapLayerSpecs,
+  placesSourceSignature,
+  placesToGeoJSON,
   shouldScrollChildIntoView,
   stepByPointCount,
 } from './map-style';
@@ -96,6 +104,16 @@ test('pin icon, halo, and image follow the visual state', () => {
   assert.ok(expressionContainsFeatureState(PIN_HALO_RADIUS_EXPRESSION));
 });
 
+test('map uses streets-v12 and paints Places layers above labels', () => {
+  assert.equal(MAPBOX_STREETS_STYLE, 'mapbox://styles/mapbox/streets-v12');
+  assert.equal(PLACES_LAYERS_ABOVE_LABELS, true);
+  assert.equal(PLACES_LAYERS_BEFORE_ID, undefined);
+  assert.ok(MAP_FADE_DURATION_MS >= 300);
+  assert.equal(PAINT_TRANSITION.duration, 180);
+  assert.equal(PIN_STROKE, '#ffffff');
+  assert.equal(BRAND.clusterStroke, '#ffffff');
+});
+
 test('no layer layout property uses feature-state (Mapbox paint-only)', () => {
   assert.equal(
     expressionContainsFeatureState({
@@ -125,6 +143,44 @@ test('no layer layout property uses feature-state (Mapbox paint-only)', () => {
   assert.equal(selected.layout?.['icon-image'], 'pin-place-active');
   const halo = layers.find((layer) => layer.id === 'pin-halo')!;
   assert.equal(expressionContainsFeatureState(halo.paint), true);
+  assert.equal(halo.paint?.['circle-stroke-color'], PIN_STROKE);
+
+  const hover = layers.find((layer) => layer.id === 'unclustered-point-hover')!;
+  assert.equal(expressionContainsFeatureState(hover.layout ?? {}), false);
+  assert.equal(expressionContainsFeatureState(hover.paint), true);
+  assert.notDeepEqual(hover.filter, placeIdInFilter(['hover-id']));
+  assert.equal(hover.paint?.['icon-opacity-transition'], PAINT_TRANSITION);
+
+  const clusters = layers.find((layer) => layer.id === 'clusters')!;
+  assert.equal(clusters.paint?.['circle-stroke-color'], BRAND.clusterStroke);
+  assert.ok((clusters.paint?.['circle-stroke-width'] as number) >= 2);
+
+  assert.ok(layers.some((layer) => layer.id === 'cluster-shadow'));
+  assert.ok(layers.some((layer) => layer.id === 'pin-shadow'));
+});
+
+test('hover does not remount pin filters; selected still uses a dedicated layer', () => {
+  const idle = placesMapLayerSpecs({ selectedPlaceId: null });
+  const hovered = placesMapLayerSpecs({ hoveredPlaceId: 'hover-id', selectedPlaceId: null });
+  const idleHover = idle.find((layer) => layer.id === 'unclustered-point-hover')!;
+  const nextHover = hovered.find((layer) => layer.id === 'unclustered-point-hover')!;
+  assert.deepEqual(idleHover.filter, nextHover.filter);
+  assert.deepEqual(idle.find((layer) => layer.id === 'unclustered-point')?.filter, [
+    '!',
+    ['has', 'point_count'],
+  ]);
+});
+
+test('places GeoJSON signature stays put when only names are unused', () => {
+  const places = [
+    { place_id: 'a', place_name: 'One', lat: 1, lng: 2 },
+    { place_id: 'b', place_name: 'Two', lat: 3, lng: 4 },
+  ];
+  assert.equal(placesSourceSignature(places), placesSourceSignature(places.map((p) => ({ ...p }))));
+  const geo = placesToGeoJSON(places);
+  assert.equal(geo.features.length, 2);
+  assert.deepEqual(geo.features[0].geometry.coordinates, [2, 1]);
+  assert.equal(geo.features[0].id, 'a');
 });
 
 test('cluster leaf lookup is a cheap place_id scan', () => {

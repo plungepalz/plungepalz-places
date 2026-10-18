@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { reuseIfSamePlaceRefs } from './merge-local-places';
+import type { PlaceSearchResult } from './types';
+
+function place(id: string): PlaceSearchResult {
+  return {
+    place_id: id,
+    place_slug: id,
+    place_name: id,
+    place_type: 'business',
+    address: null,
+    city: null,
+    state_province: null,
+    country: null,
+    activity_types: ['sauna'],
+    description: null,
+    cover_image: null,
+    lat: 0,
+    lng: 0,
+    is_approved: true,
+    ts_created: '2024-01-01T00:00:00Z',
+  };
+}
+
+test('reuseIfSamePlaceRefs keeps the previous array when item refs match', () => {
+  const a = place('a');
+  const b = place('b');
+  const prev = [a, b];
+  const next = [a, b];
+  assert.equal(reuseIfSamePlaceRefs(prev, next), prev);
+  assert.equal(reuseIfSamePlaceRefs(null, next), next);
+  const other = [place('a'), b];
+  assert.equal(reuseIfSamePlaceRefs(prev, other), other);
+  const empty: PlaceSearchResult[] = [];
+  assert.equal(reuseIfSamePlaceRefs(empty, []), empty);
+});

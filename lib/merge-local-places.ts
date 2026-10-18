@@ -53,3 +53,23 @@ export function mergeLocalPlaces(
   const extras = localPlaces.filter((place) => !seen.has(place.place_id) && localPlaceMatchesFilters(place, filters));
   return { places: [...extras, ...serverPlaces], extraCount: extras.length };
 }
+
+/**
+ * Keep the previous array when every item is the same reference so list memo
+ * can skip 82 cards while the user types a filter or hovers a pin.
+ */
+export function reuseIfSamePlaceRefs(
+  prev: PlaceSearchResult[] | null | undefined,
+  next: PlaceSearchResult[]
+): PlaceSearchResult[] {
+  if (
+    prev &&
+    prev.length === next.length &&
+    prev.length > 0 &&
+    prev.every((place, index) => place === next[index])
+  ) {
+    return prev;
+  }
+  if (prev && prev.length === 0 && next.length === 0) return prev;
+  return next;
+}

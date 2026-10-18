@@ -8,16 +8,24 @@ import { BRAND } from '@/lib/brand';
 import {
   CAMERA_DURATION,
   ZERO_PADDING,
-  easeOutCubic,
+  cameraEaseOptions,
+  cameraFlyOptions,
   flyPadding,
-  flyToThenOnMoveend,
   isUserMapMove,
   mapControlsRightPx,
   pinHintCenterX,
   presetCamera,
+  startCameraAnimation,
 } from '@/lib/map-camera';
 import type { LocationPreset } from '@/lib/locations';
-import { clusterLeafHasPlace, placesMapLayerSpecs } from '@/lib/map-style';
+import {
+  MAPBOX_STREETS_STYLE,
+  MAP_FADE_DURATION_MS,
+  PIN_STROKE,
+  clusterLeafHasPlace,
+  placesMapLayerSpecs,
+  placesToGeoJSON,
+} from '@/lib/map-style';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -139,7 +147,7 @@ function pinSvg(fill: string, innerWhiteDot: boolean): string {
   const inner = innerWhiteDot
     ? '<circle cx="16" cy="14" r="6" fill="white" fill-opacity="0.92"/>'
     : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="80" viewBox="0 0 32 40"><path d="${PIN_PATH}" fill="${fill}"/>${inner}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="80" viewBox="-3 -3 38 48"><defs><filter id="pin-shadow" x="-40%" y="-20%" width="180%" height="180%"><feDropShadow dx="0" dy="1.4" stdDeviation="1.1" flood-color="#0f172a" flood-opacity="0.32"/></filter></defs><path d="${PIN_PATH}" fill="${fill}" stroke="${PIN_STROKE}" stroke-width="1.8" stroke-linejoin="round" filter="url(#pin-shadow)"/>${inner}</svg>`;
 }
 
 function addFallbackOrangePin(map: MapboxMap, id: string): void {
@@ -152,6 +160,8 @@ function addFallbackOrangePin(map: MapboxMap, id: string): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.fillStyle = BRAND.orange;
+  ctx.strokeStyle = PIN_STROKE;
+  ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.moveTo(32, 76);
   ctx.quadraticCurveTo(8, 44, 8, 28);
@@ -159,6 +169,7 @@ function addFallbackOrangePin(map: MapboxMap, id: string): void {
   ctx.quadraticCurveTo(56, 44, 32, 76);
   ctx.closePath();
   ctx.fill();
+  ctx.stroke();
   map.addImage(id, ctx.getImageData(0, 0, width, height), { pixelRatio: 2 });
 }
 
@@ -237,23 +248,15 @@ export default function PlacesMap({
     return () => observer.disconnect();
   }, []);
 
-  const geojson = useMemo(
-    () => ({
-      type: 'FeatureCollection' as const,
-      features: places.map((place) => ({
-        type: 'Feature' as const,
-        id: place.place_id,
-        properties: {
-          place_id: place.place_id,
-          place_name: place.place_name,
-        },
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [place.lng, place.lat] as [number, number],
-        },
-      })),
-    }),
-    [places]
+  const geojson = useMemo(() => placesToGeoJSON(places), [places]);
+
+  const layerSpecs = useMemo(
+    () =>
+      placesMapLayerSpecs({
+        selectedPlaceId,
+        highlightedClusterId,
+      }),
+    [selectedPlaceId, highlightedClusterId]
   );
 
   const reportViewport = useCallback(() => {
@@ -422,13 +425,8 @@ export default function PlacesMap({
       longitude = camera.lng;
       latitude = camera.lat;
     }
-    if (flyEndHandlerRef.current) {
-      map.off('moveend', flyEndHandlerRef.current);
-      flyEndHandlerRef.current = null;
-    }
     flightTagRef.current = flyRequest.exactZoom ? 'preset' : 'place';
     const onFlyEnd = () => {
-      flyEndHandlerRef.current = null;
       flightTagRef.current = null;
       if (detailsOpenRef.current) return;
       const live = mapRef.current?.getMap();
@@ -441,22 +439,21 @@ export default function PlacesMap({
       });
     };
     // mapbox-gl 3.33 flyTo() stop()s any in-flight camera first and fires
-    // moveend synchronously. Attach the listener after flyTo so that interrupt
-    // does not consume this flight's cleanup. Preset flights also pass
-    // retainPadding: false (supported in 3.33) so global padding stays 0.
-    flyToThenOnMoveend(
+    // moveend synchronously. startCameraAnimation attaches after start so the
+    // interrupt does not consume this flight's cleanup. Preset flights also
+    // pass retainPadding: false (supported in 3.33) so global padding stays 0.
+    startCameraAnimation(
       map,
-      {
+      flyEndHandlerRef,
+      'flyTo',
+      cameraFlyOptions({
         center: [longitude, latitude],
         zoom,
-        duration: flyRequest.exactZoom ? CAMERA_DURATION.preset : CAMERA_DURATION.place,
-        easing: easeOutCubic,
         padding,
         retainPadding: flyRequest.exactZoom ? false : undefined,
-      },
+      }),
       onFlyEnd
     );
-    flyEndHandlerRef.current = onFlyEnd;
     onFlyComplete();
   }, [collapseList, flyRequest, location, onFlyComplete, onUserCameraMove, panelOpen]);
 
@@ -467,7 +464,12 @@ export default function PlacesMap({
       clearPaddingKeepView(map);
     }
     onUserCameraMove?.();
-    map.zoomTo(map.getZoom() + delta, { duration: CAMERA_DURATION.zoom, easing: easeOutCubic });
+    startCameraAnimation(
+      map,
+      flyEndHandlerRef,
+      'easeTo',
+      cameraEaseOptions(CAMERA_DURATION.zoom, { zoom: map.getZoom() + delta })
+    );
   };
 
   const locateMe = () => {
@@ -479,12 +481,17 @@ export default function PlacesMap({
     navigator.geolocation.getCurrentPosition(
       (position) => {
         onUserCameraMove?.();
-        mapRef.current?.flyTo({
-          center: [position.coords.longitude, position.coords.latitude],
-          zoom: 11,
-          duration: CAMERA_DURATION.locate,
-          easing: easeOutCubic,
-        });
+        const live = mapRef.current?.getMap();
+        if (!live) return;
+        startCameraAnimation(
+          live,
+          flyEndHandlerRef,
+          'flyTo',
+          cameraFlyOptions({
+            center: [position.coords.longitude, position.coords.latitude],
+            zoom: 11,
+          })
+        );
       },
       (err) => {
         setLocateError(
@@ -515,12 +522,17 @@ export default function PlacesMap({
           clearPaddingKeepView(map);
         }
         onUserCameraMove?.();
-        mapRef.current?.easeTo({
-          center: clusterCenter,
-          zoom,
-          duration: CAMERA_DURATION.cluster,
-          easing: easeOutCubic,
-        });
+        const live = mapRef.current?.getMap();
+        if (!live) return;
+        startCameraAnimation(
+          live,
+          flyEndHandlerRef,
+          'easeTo',
+          cameraEaseOptions(CAMERA_DURATION.cluster, {
+            center: clusterCenter,
+            zoom,
+          })
+        );
       });
       return;
     }
@@ -658,9 +670,11 @@ export default function PlacesMap({
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
         minZoom={0}
         projection="mercator"
-        mapStyle="mapbox://styles/mapbox/light-v11"
+        mapStyle={MAPBOX_STREETS_STYLE}
         mapboxAccessToken={accessToken}
         attributionControl
+        renderWorldCopies
+        {...{ fadeDuration: MAP_FADE_DURATION_MS }}
         style={{ width: '100%', height: '100%' }}
         interactiveLayerIds={
           imagesReady
@@ -694,11 +708,7 @@ export default function PlacesMap({
             clusterRadius={60}
             promoteId="place_id"
           >
-            {placesMapLayerSpecs({
-              hoveredPlaceId,
-              selectedPlaceId,
-              highlightedClusterId,
-            }).map((layer) => (
+            {layerSpecs.map((layer) => (
               <Layer
                 key={layer.id}
                 id={layer.id}

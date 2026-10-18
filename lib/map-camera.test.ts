@@ -11,9 +11,14 @@ import {
   PANEL_PADDING_RIGHT,
   WORLDWIDE_COMFORT_LNG,
   ZERO_PADDING,
+  CAMERA_FLY,
+  cameraEaseOptions,
+  cameraFlyOptions,
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
+  isShortCameraHop,
+  startCameraAnimation,
   MERCATOR_TILE_SIZE,
   defaultCompactList,
   hideListForWorldwidePreset,
@@ -315,27 +320,30 @@ class InterruptibleMap {
     }
   }
 
+  easeTo(options: { padding?: Partial<typeof ZERO_PADDING> }) {
+    this.flyTo(options);
+  }
+
   endFlight() {
     this.flying = false;
     this.emitMoveend();
   }
 }
 
-/** Mirrors PlacesMap: off the previous handler, then flyToThenOnMoveend, then store the new one. */
+/** Mirrors PlacesMap: replace in-flight cameras through startCameraAnimation. */
 function startPlacesMapFlight(
   map: InterruptibleMap,
   handlerRef: { current: (() => void) | null }
 ) {
-  if (handlerRef.current) {
-    map.off('moveend', handlerRef.current);
-    handlerRef.current = null;
-  }
-  const onFlyEnd = () => {
-    handlerRef.current = null;
-    map.padding = { ...ZERO_PADDING };
-  };
-  flyToThenOnMoveend(map, { padding: { ...ZERO_PADDING, left: 396 } }, onFlyEnd);
-  handlerRef.current = onFlyEnd;
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    { padding: { ...ZERO_PADDING, left: 396 } },
+    () => {
+      map.padding = { ...ZERO_PADDING };
+    }
+  );
 }
 
 test('easeOutCubic is 0 at start, 1 at end, and faster early', () => {
@@ -353,4 +361,46 @@ test('preset change mid-flight leaves padding at 0', () => {
   assert.equal(map.getPadding().left, 396);
   map.endFlight();
   assert.deepEqual(map.getPadding(), ZERO_PADDING);
+});
+
+test('replacing an in-flight camera animation cancels the previous onEnd', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  let first = 0;
+  let second = 0;
+  startCameraAnimation(map, handlerRef, 'flyTo', { center: [0, 0] }, () => {
+    first += 1;
+  });
+  startCameraAnimation(map, handlerRef, 'easeTo', { center: [1, 1] }, () => {
+    second += 1;
+  });
+  map.endFlight();
+  assert.equal(first, 0);
+  assert.equal(second, 1);
+});
+
+test('flyTo uses speed/curve; short hops use easeTo duration', () => {
+  const fly = cameraFlyOptions({ center: [1, 2], zoom: 4 });
+  assert.equal(fly.speed, CAMERA_FLY.speed);
+  assert.equal(fly.curve, CAMERA_FLY.curve);
+  assert.equal(fly.duration, undefined);
+  assert.equal(fly.easing, easeOutCubic);
+  const ease = cameraEaseOptions(720, { zoom: 8 });
+  assert.equal(ease.duration, 720);
+  assert.equal(ease.speed, undefined);
+  assert.equal(isShortCameraHop('cluster'), true);
+  assert.equal(isShortCameraHop('zoom'), true);
+  assert.equal(isShortCameraHop('preset'), false);
+  assert.equal(isShortCameraHop('place'), false);
+});
+
+test('flyToThenOnMoveend still attaches after start', () => {
+  const map = new InterruptibleMap();
+  let ended = 0;
+  flyToThenOnMoveend(map, { padding: ZERO_PADDING }, () => {
+    ended += 1;
+  });
+  assert.equal(ended, 0);
+  map.endFlight();
+  assert.equal(ended, 1);
 });

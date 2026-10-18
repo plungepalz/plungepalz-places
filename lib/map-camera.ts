@@ -237,19 +237,54 @@ export interface WorldwideFraming {
 
 export const ZERO_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
 
-/** Camera timings. Preset flights still use retainPadding: false + clearPaddingKeepView. */
+/** Camera timings for short hops (easeTo). Longer flights use CAMERA_FLY speed/curve. */
 export const CAMERA_DURATION = {
-  preset: 900,
-  place: 760,
-  cluster: 560,
-  zoom: 220,
-  locate: 900,
+  preset: 1400,
+  place: 1100,
+  cluster: 720,
+  zoom: 280,
+  locate: 1200,
 } as const;
+
+/**
+ * flyTo average speed / zoom curve. Lower speed = longer, smoother flights.
+ * Mapbox ignores `speed` when `duration` is also set — do not mix them.
+ */
+export const CAMERA_FLY = {
+  speed: 0.85,
+  curve: 1.42,
+} as const;
+
+export type CameraMethod = 'flyTo' | 'easeTo';
 
 /** Cubic ease-out: quick start, gentle settle. */
 export function easeOutCubic(t: number): number {
   const x = Math.min(1, Math.max(0, t));
   return 1 - (1 - x) ** 3;
+}
+
+export function cameraFlyOptions(partial: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    speed: CAMERA_FLY.speed,
+    curve: CAMERA_FLY.curve,
+    easing: easeOutCubic,
+    ...partial,
+  };
+}
+
+export function cameraEaseOptions(
+  duration: number,
+  partial: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    duration,
+    easing: easeOutCubic,
+    ...partial,
+  };
+}
+
+export function isShortCameraHop(kind: 'preset' | 'place' | 'cluster' | 'zoom' | 'locate'): boolean {
+  return kind === 'cluster' || kind === 'zoom';
 }
 
 /**
@@ -301,6 +336,47 @@ export function flyToThenOnMoveend(
 ): void {
   map.flyTo(options);
   map.once('moveend', onMoveend);
+}
+
+export interface CameraHandlerRef {
+  current: (() => void) | null;
+}
+
+export interface CameraControllerMap {
+  flyTo: (options: Record<string, unknown>) => unknown;
+  easeTo: (options: Record<string, unknown>) => unknown;
+  once: (event: string, handler: () => void) => unknown;
+  off: (event: string, handler: () => void) => unknown;
+}
+
+/**
+ * Cancel the previous moveend handler, start flyTo or easeTo, then attach
+ * the new listener. Same interrupt rule as flyToThenOnMoveend: attach after
+ * start so mapbox-gl's synchronous stop()/moveend does not consume it.
+ */
+export function startCameraAnimation(
+  map: CameraControllerMap,
+  handlerRef: CameraHandlerRef,
+  method: CameraMethod,
+  options: Record<string, unknown>,
+  onEnd: () => void = () => undefined
+): void {
+  if (handlerRef.current) {
+    map.off('moveend', handlerRef.current);
+    handlerRef.current = null;
+  }
+  const onMoveEnd = () => {
+    if (handlerRef.current !== onMoveEnd) return;
+    handlerRef.current = null;
+    onEnd();
+  };
+  if (method === 'flyTo') {
+    map.flyTo(options);
+  } else {
+    map.easeTo(options);
+  }
+  map.once('moveend', onMoveEnd);
+  handlerRef.current = onMoveEnd;
 }
 
 /** Screen X of a longitude when `centerLng` sits in the middle of the visible gap. */

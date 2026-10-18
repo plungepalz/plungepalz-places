@@ -31,3 +31,88 @@ body {
 .mapboxgl-ctrl-attrib {
   opacity: 0.7;
 }
+
+.places-list-slot {
+  transition: top 200ms ease;
+}
+
+.place-card {
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease;
+}
+
+.places-list-chevron {
+  transition: transform 200ms ease;
+}
+
+.places-list-body-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  flex: 1;
+  opacity: 1;
+  transition:
+    grid-template-rows 280ms ease,
+    opacity 200ms ease;
+}
+
+.places-list-body-wrap-collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.places-list-body-wrap > .places-list-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.places-list-body-wrap-expanded > .places-list-body {
+  overflow-y: auto;
+}
+
+.places-loading-bar {
+  height: 100%;
+  width: 40%;
+  background: var(--brand-orange);
+  animation: places-loading-slide 1.1s ease-in-out infinite;
+}
+
+.drawer-panel {
+  animation: drawer-in 280ms ease;
+  transition: top 200ms ease;
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes places-loading-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .place-card,
+  .places-list-chevron,
+  .places-list-body-wrap,
+  .drawer-panel,
+  .places-loading-bar {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

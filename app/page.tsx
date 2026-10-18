@@ -24,6 +24,7 @@ import {
   worldwideMapHeightCap,
 } from '@/lib/map-camera';
 import { mergeLocalPlaces } from '@/lib/merge-local-places';
+import { searchAfterViewportChange, searchDebounceMs } from '@/lib/search-debounce';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import { formatBbox, wrapLng } from '@/lib/types';
@@ -104,10 +105,15 @@ export default function HomePage() {
     [searchQuery, mapBounds, selectedPlaceTypes, selectedActivities, approvedOnly]
   );
 
-  const { places, extraCount } = useMemo(
+  const merged = useMemo(
     () => mergeLocalPlaces(serverPlaces, localPlaces, localFilters),
     [serverPlaces, localPlaces, localFilters]
   );
+  const extraCount = merged.extraCount;
+  const placesKey = merged.places.map((place) => place.place_id).join('\0');
+  // Membership key only — keep the previous array so hover / filter typing
+  // does not rebuild 82 card elements.
+  const places = useMemo(() => merged.places, [placesKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const displayTotal = total + extraCount;
 
   const buildParams = useCallback(
@@ -172,11 +178,6 @@ export default function HomePage() {
       } catch (err) {
         if (requestId !== headingMachineRef.current.requestId) return;
         setError(isPlacesApiError(err) ? err.message : 'Search failed');
-        if (!append) {
-          setServerPlaces([]);
-          setTotal(0);
-          setHasMore(false);
-        }
       } finally {
         if (requestId === headingMachineRef.current.requestId) setIsLoading(false);
       }
@@ -191,18 +192,18 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (!leftPreset) {
-      lastPresetBoundsKeyRef.current = mapBoundsKey(mapBounds);
-      const handle = window.setTimeout(() => {
-        performSearch(0, false, null);
-      }, 200);
-      return () => window.clearTimeout(handle);
+    const decision = searchAfterViewportChange({
+      leftPreset,
+      boundsKey: mapBoundsKey(mapBounds),
+      lastPresetKey: lastPresetBoundsKeyRef.current,
+    });
+    if (decision.action === 'skip') return;
+    if (decision.nextPresetKey != null) {
+      lastPresetBoundsKeyRef.current = decision.nextPresetKey;
     }
-    const key = mapBoundsKey(mapBounds);
-    if (!key || key === lastPresetBoundsKeyRef.current) return;
     const handle = window.setTimeout(() => {
-      performSearch(0, false, mapBounds);
-    }, 450);
+      performSearch(0, false, decision.action === 'moveend' ? mapBounds : null);
+    }, searchDebounceMs(decision.action));
     return () => window.clearTimeout(handle);
   }, [performSearch, leftPreset, mapBounds]);
 
@@ -233,7 +234,7 @@ export default function HomePage() {
     }
   };
 
-  const handleSelectFromList = (placeId: string) => {
+  const handleSelectFromList = useCallback((placeId: string) => {
     const place = places.find((item) => item.place_id === placeId);
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
@@ -242,7 +243,7 @@ export default function HomePage() {
       setLeftPreset(true);
       setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
     }
-  };
+  }, [places]);
 
   const handleSelectFromMap = (placeId: string) => {
     setSelectedPlaceId(placeId);
@@ -297,14 +298,14 @@ export default function HomePage() {
     setSuccessMessage('Place submitted. It is pending review and is not approved yet.');
   };
 
-  const handleToggleFavorite = (placeId: string) => {
+  const handleToggleFavorite = useCallback((placeId: string) => {
     setFavorites((prev) => {
       const next = new Set(prev);
       if (next.has(placeId)) next.delete(placeId);
       else next.add(placeId);
       return next;
     });
-  };
+  }, []);
 
   const headingText = listHeadingText(heading, extraCount);
   const chipLabel = heading?.chipLabel ?? location.label;
@@ -397,10 +398,10 @@ export default function HomePage() {
         <div
           ref={listSlotRef}
           data-places-list-slot
-          className={`absolute left-4 w-[min(100%-2rem,380px)] ${
+          className={`places-list-slot absolute left-4 w-[min(100%-2rem,380px)] ${
             hideListForDrawer ? 'hidden' : 'pointer-events-auto'
           } ${listCollapsed ? '' : 'bottom-4'}`}
-          style={{ top: chromeTop, transition: 'top 200ms ease' }}
+          style={{ top: chromeTop }}
           aria-hidden={hideListForDrawer}
         >
           <PlacesList
