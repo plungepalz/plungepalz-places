@@ -21,6 +21,7 @@ import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
 import {
   defaultCompactList,
   shouldCollapseList,
+  shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
   type SizeBox,
 } from '@/lib/map-camera';
@@ -392,8 +393,12 @@ export default function HomePage() {
       const next = { width: window.innerWidth, height: window.innerHeight };
       setViewportWidth(next.width);
       setViewportHeight(next.height);
-      if (shouldReapplyPresetOnSizeChange(leftPresetRef.current, prevViewportRef.current, next)) {
-        const loc = locationRef.current;
+      const loc = locationRef.current;
+      const left = leftPresetRef.current;
+      if (
+        shouldReapplyPresetOnSizeChange(left, prevViewportRef.current, next) ||
+        shouldReapplyNarrowWorldwide(left, loc.id, prevViewportRef.current, next)
+      ) {
         setFlyRequest({
           nonce: Date.now(),
           longitude: loc.lng,
@@ -461,8 +466,8 @@ export default function HomePage() {
           mapboxToken={mapboxToken}
           collapseList={collapseList}
           fitTop={fitTop}
-          layoutEpoch={listExpanded ? 1 : 0}
-          leftPreset={leftPreset}
+          viewportWidth={viewportWidth}
+          viewportHeight={viewportHeight}
           location={location}
         />
       </div>

@@ -90,19 +90,19 @@ export function worldwideMapHeightCap(canvasWidth: number, availableHeight: numb
   return Math.min(availableHeight, canvasWidth);
 }
 
-/**
- * Narrow Worldwide only: width-fit zoom is below Mapbox's height clamp, so the
- * canvas must be no taller than the viewport width.
- */
-export function shouldCapWorldwideCanvas(
-  width: number,
-  height: number,
-  isWorldwide: boolean,
-  leftPreset: boolean
-): boolean {
-  if (leftPreset || !isWorldwide || !isNarrowViewport(width)) return false;
-  const widthFitZoom = Math.log2(Math.max(width, 1) / MERCATOR_TILE_SIZE);
-  return widthFitZoom < mapboxHeightMinZoom(height) - 1e-9;
+/** Inset so edge clusters (r≈30) sit fully inside the canvas. */
+export const WORLD_FIT_EDGE_PAD = 32;
+
+/** Width-fit zoom with a little horizontal padding for edge clusters. */
+export function narrowWidthFitZoom(canvasWidth: number): number {
+  const fit = Math.max(canvasWidth - 2 * WORLD_FIT_EDGE_PAD, 1);
+  return Math.log2(fit / MERCATOR_TILE_SIZE);
+}
+
+/** Narrow viewport whose width-fit zoom is below the full-height Mapbox clamp. */
+export function needsLowZoomCanvas(width: number, height: number): boolean {
+  if (!isNarrowViewport(width)) return false;
+  return narrowWidthFitZoom(width) < mapboxHeightMinZoom(height) - 1e-9;
 }
 
 export interface CanvasBox {
@@ -111,21 +111,55 @@ export interface CanvasBox {
 }
 
 /**
- * Position the Mapbox canvas so a narrow Worldwide view can reach
- * `log2(w/512)`. Height is about the viewport width; `fitTop` offsets it so
- * the populated world sits in the visible area below the bars. Other widths
- * stay full-bleed.
+ * Canvas height that can still show `zoom` (≤ 512·2^zoom). Once zoom reaches
+ * the full-container clamp the canvas is full-bleed. Pinned to the bottom so
+ * attribution stays on the visible map / screen edge.
  */
-export function worldwideCanvasLayout(
-  viewport: SizeBox,
-  opts: { isWorldwide: boolean; leftPreset: boolean; fitTop: number }
-): CanvasBox {
-  if (!shouldCapWorldwideCanvas(viewport.width, viewport.height, opts.isWorldwide, opts.leftPreset)) {
+export function canvasHeightForLiveZoom(zoom: number, containerHeight: number): number {
+  const height = Math.max(containerHeight, 1);
+  const clamp = mapboxHeightMinZoom(height);
+  if (zoom >= clamp - 1e-9) return height;
+  return Math.min(height, mercatorWorldPx(zoom));
+}
+
+/**
+ * Shortened canvas is tied to the camera, not the Worldwide chip or the list.
+ * Show/Hide list and a pan at the same zoom must not change this box.
+ */
+export function lowZoomCanvasLayout(viewport: SizeBox, zoom: number): CanvasBox {
+  if (!isNarrowViewport(viewport.width)) {
     return { top: 0, height: Math.max(viewport.height, 1) };
   }
-  const fitTop = Math.max(0, Math.min(opts.fitTop, Math.max(viewport.height - 1, 0)));
-  const height = Math.min(viewport.width, Math.max(viewport.height - fitTop, 1));
-  return { top: fitTop, height };
+  const height = canvasHeightForLiveZoom(zoom, viewport.height);
+  return { top: Math.max(0, viewport.height - height), height };
+}
+
+/** List open / fitTop must not remesasure or shrink the canvas. */
+export function canvasLayoutIgnoresList(viewport: SizeBox, zoom: number): CanvasBox {
+  return lowZoomCanvasLayout(viewport, zoom);
+}
+
+/** Pan keeps zoom and therefore the canvas height — never a camera jump. */
+export function canvasLayoutAfterPan(
+  viewport: SizeBox,
+  zoom: number
+): { layout: CanvasBox; zoom: number } {
+  return { layout: lowZoomCanvasLayout(viewport, zoom), zoom };
+}
+
+/**
+ * Re-apply Worldwide framing when the viewport *becomes* narrow enough that
+ * width-fit sits below the height clamp (1280→768). Not after the user left
+ * the preset, and not for other chips.
+ */
+export function shouldReapplyNarrowWorldwide(
+  leftPreset: boolean,
+  locationId: string,
+  prev: SizeBox | null,
+  next: SizeBox
+): boolean {
+  if (leftPreset || locationId !== 'worldwide' || !prev) return false;
+  return !needsLowZoomCanvas(prev.width, prev.height) && needsLowZoomCanvas(next.width, next.height);
 }
 
 export type RgbaColor = [number, number, number, number];
@@ -803,8 +837,10 @@ export function worldwideFraming(
   const rightPadding = insets?.right ?? 0;
   const gap = Math.max(canvasWidth - panelRight - rightPadding, 1);
   const heightMinZoom = mapboxHeightMinZoom(canvasHeight);
-  const widthFitZoom = Math.log2(gap / MERCATOR_TILE_SIZE);
   const narrowFullWidth = panelRight <= 0 && canvasWidth <= NARROW_VIEWPORT;
+  const widthFitZoom = narrowFullWidth
+    ? narrowWidthFitZoom(gap)
+    : Math.log2(gap / MERCATOR_TILE_SIZE);
   // Narrow full-width: size zoom to the canvas width so 360° fits, even when
   // the canvas is taller than one world (Mapbox height floor is ~0.814 at 900px).
   const minZoomFloor = narrowFullWidth ? 0 : heightMinZoom;
