@@ -11,8 +11,11 @@ import {
   canvasReadyForFlight,
   clearPaddingKeepView,
   createCanvasMachine,
+  paddingIsZero,
+  shouldClearPaddingAfterFlight,
   easeOutCubic,
   flyPadding,
+  isUserGestureEvent,
   NARROW_VIEWPORT,
   mapControlsRightPx,
   pinHintCenterX,
@@ -279,6 +282,7 @@ export default function PlacesMap({
   const clearPaddingProgrammatic = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return false;
+    if (paddingIsZero(map.getPadding())) return false;
     flightTagRef.current = 'resize';
     return clearPaddingKeepView(map);
   }, []);
@@ -557,7 +561,12 @@ export default function PlacesMap({
     const onFlyEnd = () => {
       const endedZoom = mapRef.current?.getMap()?.getZoom() ?? zoom;
       commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
-      if (!detailsOpenRef.current && !keepFitPadding) {
+      const live = mapRef.current?.getMap();
+      const shouldClear =
+        !detailsOpenRef.current &&
+        !keepFitPadding &&
+        shouldClearPaddingAfterFlight(padding, live?.getPadding());
+      if (shouldClear) {
         clearPaddingProgrammatic();
       } else {
         flightTagRef.current = null;
@@ -757,7 +766,10 @@ export default function PlacesMap({
       const prevZoom = liveZoomRef.current;
       liveZoomRef.current = nextZoom;
       const tag = flightTagRef.current;
-      if (tag === 'preset' || tag === 'resize' || tag === 'programmatic' || tag === 'place') {
+      const programmaticFlight =
+        (tag === 'preset' || tag === 'resize' || tag === 'programmatic' || tag === 'place') &&
+        !isUserGestureEvent(event as { originalEvent?: unknown });
+      if (programmaticFlight) {
         commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightProgress', zoom: nextZoom }));
         return;
       }
