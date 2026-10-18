@@ -31,6 +31,7 @@ import {
   WORLD_FIT_EDGE_PAD,
   canvasLayoutAfterPan,
   canvasLayoutIgnoresList,
+  createCanvasMachine,
   cssColorFromPaint,
   evaluatePaintColor,
   formatCssRgb,
@@ -54,6 +55,7 @@ import {
   pinHintCenterX,
   presetCamera,
   readMapWaterColor,
+  reduceCanvasMachine,
   scheduleMapResize,
   shouldCollapseList,
   shouldReapplyNarrowWorldwide,
@@ -459,6 +461,85 @@ test('shortened canvas follows zoom, not the Worldwide chip, and a pan keeps zoo
 
   const pastClamp = lowZoomCanvasLayout(viewport, mapboxHeightMinZoom(900));
   assert.deepEqual(pastClamp, { top: 0, height: 900 });
+});
+
+test('canvas machine keeps a 3.4→0.585 flight short the whole way', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  let state = createCanvasMachine(viewport);
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: target });
+  assert.equal(state.shortened, true);
+  assert.equal(state.flightLocked, true);
+  const short = state.box.height;
+  assert.ok(short < 900);
+  assert.ok(mapboxHeightMinZoom(short) <= target + 1e-9);
+  for (const zoom of [3.4, 2.4, 1.6, 1.1, 0.9, 0.7, target]) {
+    state = reduceCanvasMachine(state, { type: 'flightProgress', zoom });
+    assert.equal(state.box.height, short, `canvas grew at live zoom ${zoom}`);
+  }
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  assert.equal(state.flightLocked, false);
+  assert.equal(state.box.height, short);
+  assert.ok(state.shortened);
+});
+
+test('canvas machine: a drag keeps the short canvas', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: target,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  const short = state.box.height;
+  state = reduceCanvasMachine(state, { type: 'pan', zoom: target });
+  state = reduceCanvasMachine(state, { type: 'pan', zoom: target });
+  assert.equal(state.box.height, short);
+  assert.equal(state.shortened, true);
+});
+
+test('canvas machine: wheel zoom past the clamp grows the canvas once', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  const clamp = mapboxHeightMinZoom(900);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: target,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  const short = state.box.height;
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 0.7 });
+  assert.ok(state.box.height < 900);
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: clamp });
+  assert.equal(state.box.height, 900);
+  assert.equal(state.shortened, false);
+  state = reduceCanvasMachine(state, { type: 'userZoom', zoom: 2 });
+  assert.equal(state.box.height, 900);
+  assert.ok(short < 900);
+});
+
+test('canvas machine: resize 1280→768 shrinks then lands at the narrow fit', () => {
+  const desktop = { width: 1280, height: 900 };
+  const compact = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  let state = createCanvasMachine(desktop);
+  assert.equal(state.box.height, 900);
+  state = reduceCanvasMachine(state, { type: 'resizeNarrowFit', viewport: compact, targetZoom: target });
+  assert.equal(state.viewport.width, 768);
+  assert.ok(state.box.height < 900);
+  assert.ok(mapboxHeightMinZoom(state.box.height) <= target + 1e-9);
+  state = reduceCanvasMachine(state, { type: 'flightProgress', zoom: 0.814 });
+  assert.ok(state.box.height < 900);
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  assert.ok(state.shortened);
+  assert.ok(Math.abs((state.anchorZoom ?? 0) - target) < 1e-9);
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    768,
+    900,
+    { left: 0, right: 0 }
+  );
+  assert.ok(Math.abs(camera.zoom - target) < 1e-9);
 });
 
 test('Show list does not remesasure or shrink the 768 Worldwide canvas', () => {

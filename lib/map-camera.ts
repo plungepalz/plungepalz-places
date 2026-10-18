@@ -147,6 +147,143 @@ export function canvasLayoutAfterPan(
   return { layout: lowZoomCanvasLayout(viewport, zoom), zoom };
 }
 
+export interface CanvasMachineState {
+  viewport: SizeBox;
+  /** Canvas is shortened so a sub-clamp zoom can land. */
+  shortened: boolean;
+  /** Programmatic flight in progress — never grow. */
+  flightLocked: boolean;
+  /** After unlock, grow once live zoom has reached the full-height clamp. */
+  growArmed: boolean;
+  /** Zoom the short canvas is sized for. */
+  anchorZoom: number | null;
+  box: CanvasBox;
+}
+
+export type CanvasMachineEvent =
+  | { type: 'viewport'; viewport: SizeBox }
+  | { type: 'prepareFlight'; targetZoom: number; viewport?: SizeBox }
+  | { type: 'flightProgress'; zoom: number }
+  | { type: 'flightEnd'; zoom: number }
+  | { type: 'pan'; zoom: number }
+  | { type: 'userZoom'; zoom: number }
+  | { type: 'resizeNarrowFit'; viewport: SizeBox; targetZoom: number };
+
+export function fullCanvasBox(viewport: SizeBox): CanvasBox {
+  return { top: 0, height: Math.max(viewport.height, 1) };
+}
+
+export function createCanvasMachine(viewport: SizeBox): CanvasMachineState {
+  return {
+    viewport,
+    shortened: false,
+    flightLocked: false,
+    growArmed: false,
+    anchorZoom: null,
+    box: fullCanvasBox(viewport),
+  };
+}
+
+function withBox(state: CanvasMachineState): CanvasMachineState {
+  if (!state.shortened || state.anchorZoom == null || !isNarrowViewport(state.viewport.width)) {
+    return { ...state, shortened: false, anchorZoom: null, box: fullCanvasBox(state.viewport) };
+  }
+  return { ...state, box: lowZoomCanvasLayout(state.viewport, state.anchorZoom) };
+}
+
+/**
+ * Hysteresis canvas: shrink *before* a low-target programmatic flight and
+ * keep that height until a user zoom-in (or a high-target flight) reaches
+ * the full-height clamp. Live zoom during a flight never grows the canvas.
+ */
+export function reduceCanvasMachine(
+  state: CanvasMachineState,
+  event: CanvasMachineEvent
+): CanvasMachineState {
+  switch (event.type) {
+    case 'viewport': {
+      if (!isNarrowViewport(event.viewport.width)) {
+        return {
+          ...state,
+          viewport: event.viewport,
+          shortened: false,
+          flightLocked: false,
+          growArmed: false,
+          anchorZoom: null,
+          box: fullCanvasBox(event.viewport),
+        };
+      }
+      return withBox({ ...state, viewport: event.viewport });
+    }
+    case 'prepareFlight': {
+      const viewport = event.viewport ?? state.viewport;
+      const clamp = mapboxHeightMinZoom(viewport.height);
+      const belowClamp = isNarrowViewport(viewport.width) && event.targetZoom < clamp - 1e-9;
+      if (belowClamp) {
+        return {
+          viewport,
+          shortened: true,
+          flightLocked: true,
+          growArmed: false,
+          anchorZoom: event.targetZoom,
+          box: lowZoomCanvasLayout(viewport, event.targetZoom),
+        };
+      }
+      return {
+        ...state,
+        viewport,
+        flightLocked: true,
+        growArmed: state.shortened,
+        box: state.shortened
+          ? lowZoomCanvasLayout(viewport, state.anchorZoom ?? event.targetZoom)
+          : fullCanvasBox(viewport),
+      };
+    }
+    case 'flightProgress':
+      return state;
+    case 'flightEnd': {
+      const unlocked = { ...state, flightLocked: false };
+      const clamp = mapboxHeightMinZoom(state.viewport.height);
+      if (state.growArmed && event.zoom >= clamp - 1e-9) {
+        return {
+          ...unlocked,
+          shortened: false,
+          growArmed: false,
+          anchorZoom: null,
+          box: fullCanvasBox(state.viewport),
+        };
+      }
+      return withBox(unlocked);
+    }
+    case 'pan':
+      return state;
+    case 'userZoom': {
+      if (state.flightLocked) return state;
+      if (!state.shortened || !isNarrowViewport(state.viewport.width)) return state;
+      const clamp = mapboxHeightMinZoom(state.viewport.height);
+      if (event.zoom >= clamp - 1e-9) {
+        return {
+          ...state,
+          shortened: false,
+          growArmed: false,
+          anchorZoom: null,
+          box: fullCanvasBox(state.viewport),
+        };
+      }
+      const grown = lowZoomCanvasLayout(state.viewport, event.zoom);
+      if (grown.height > state.box.height) {
+        return { ...state, anchorZoom: event.zoom, box: grown };
+      }
+      return state;
+    }
+    case 'resizeNarrowFit':
+      return reduceCanvasMachine(
+        { ...state, viewport: event.viewport },
+        { type: 'prepareFlight', targetZoom: event.targetZoom, viewport: event.viewport }
+      );
+  }
+}
+
 /**
  * Re-apply Worldwide framing when the viewport *becomes* narrow enough that
  * width-fit sits below the height clamp (1280→768). Not after the user left
