@@ -128,7 +128,250 @@ export function worldwideCanvasLayout(
   return { top: fitTop, height };
 }
 
-/** Pull a CSS color out of a Mapbox paint value (constant or expression). */
+export type RgbaColor = [number, number, number, number];
+
+function clampChannel(value: number, max = 255): number {
+  return Math.min(max, Math.max(0, value));
+}
+
+function splitColorArgs(inner: string): string[] {
+  const [main, alpha] = inner.split('/');
+  const parts = main.split(/[\s,]+/).map((part) => part.trim()).filter(Boolean);
+  if (alpha?.trim()) parts.push(alpha.trim());
+  return parts;
+}
+
+function parseChannel(raw: string, max: number): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.endsWith('%')) {
+    const pct = Number.parseFloat(trimmed.slice(0, -1));
+    return Number.isFinite(pct) ? (pct / 100) * max : null;
+  }
+  const n = Number.parseFloat(trimmed);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseAlpha(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed.endsWith('%')) {
+    const pct = Number.parseFloat(trimmed.slice(0, -1));
+    return Number.isFinite(pct) ? clampChannel(pct / 100, 1) : null;
+  }
+  const n = Number.parseFloat(trimmed);
+  return Number.isFinite(n) ? clampChannel(n, 1) : null;
+}
+
+function parseHue(raw: string): number | null {
+  const trimmed = raw.trim().toLowerCase();
+  const match = trimmed.match(/^(-?[\d.]+)(deg|rad|turn|grad)?$/);
+  if (!match) return null;
+  const n = Number.parseFloat(match[1]);
+  if (!Number.isFinite(n)) return null;
+  switch (match[2]) {
+    case 'rad':
+      return (n * 180) / Math.PI;
+    case 'turn':
+      return n * 360;
+    case 'grad':
+      return (n * 9) / 10;
+    default:
+      return n;
+  }
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const sat = clampChannel(s, 1);
+  const light = clampChannel(l, 1);
+  const hue = ((h % 360) + 360) % 360;
+  const chroma = (1 - Math.abs(2 * light - 1)) * sat;
+  const huePrime = hue / 60;
+  const x = chroma * (1 - Math.abs((huePrime % 2) - 1));
+  const m = light - chroma / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (huePrime < 1) [r, g, b] = [chroma, x, 0];
+  else if (huePrime < 2) [r, g, b] = [x, chroma, 0];
+  else if (huePrime < 3) [r, g, b] = [0, chroma, x];
+  else if (huePrime < 4) [r, g, b] = [0, x, chroma];
+  else if (huePrime < 5) [r, g, b] = [x, 0, chroma];
+  else [r, g, b] = [chroma, 0, x];
+  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+}
+
+/** Parse a CSS / Mapbox color string to RGBA 0–255 / 0–1. */
+export function parseCssColor(value: string): RgbaColor | null {
+  const v = value.trim();
+  if (!v || v.toLowerCase() === 'transparent') return null;
+  if (v.charAt(0) === '#') {
+    const hex = v.slice(1);
+    if (hex.length === 3 || hex.length === 4) {
+      const r = Number.parseInt(hex[0] + hex[0], 16);
+      const g = Number.parseInt(hex[1] + hex[1], 16);
+      const b = Number.parseInt(hex[2] + hex[2], 16);
+      const a = hex.length === 4 ? Number.parseInt(hex[3] + hex[3], 16) / 255 : 1;
+      if ([r, g, b, a].some((n) => Number.isNaN(n))) return null;
+      return [r, g, b, a];
+    }
+    if (hex.length === 6 || hex.length === 8) {
+      const r = Number.parseInt(hex.slice(0, 2), 16);
+      const g = Number.parseInt(hex.slice(2, 4), 16);
+      const b = Number.parseInt(hex.slice(4, 6), 16);
+      const a = hex.length === 8 ? Number.parseInt(hex.slice(6, 8), 16) / 255 : 1;
+      if ([r, g, b, a].some((n) => Number.isNaN(n))) return null;
+      return [r, g, b, a];
+    }
+    return null;
+  }
+  const lower = v.toLowerCase();
+  const rgb = lower.match(/^rgba?\(\s*([\s\S]+)\)$/);
+  if (rgb) {
+    const parts = splitColorArgs(rgb[1]);
+    if (parts.length < 3) return null;
+    const r = parseChannel(parts[0], 255);
+    const g = parseChannel(parts[1], 255);
+    const b = parseChannel(parts[2], 255);
+    const a = parts[3] != null ? parseAlpha(parts[3]) : 1;
+    if (r == null || g == null || b == null || a == null) return null;
+    return [clampChannel(r), clampChannel(g), clampChannel(b), a];
+  }
+  const hsl = lower.match(/^hsla?\(\s*([\s\S]+)\)$/);
+  if (hsl) {
+    const parts = splitColorArgs(hsl[1]);
+    if (parts.length < 3) return null;
+    const h = parseHue(parts[0]);
+    const s = parseChannel(parts[1], 1);
+    const l = parseChannel(parts[2], 1);
+    const a = parts[3] != null ? parseAlpha(parts[3]) : 1;
+    if (h == null || s == null || l == null || a == null) return null;
+    const [r, g, b] = hslToRgb(h, s, l);
+    return [r, g, b, a];
+  }
+  return null;
+}
+
+export function formatCssRgb([r, g, b, a]: RgbaColor): string {
+  const red = Math.round(clampChannel(r));
+  const green = Math.round(clampChannel(g));
+  const blue = Math.round(clampChannel(b));
+  if (a < 1 - 1e-6) {
+    const alpha = Math.round(clampChannel(a, 1) * 1000) / 1000;
+    return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+  }
+  return `rgb(${red}, ${green}, ${blue})`;
+}
+
+function interpolationT(kind: unknown, input: number, lower: number, upper: number): number {
+  if (upper === lower) return 0;
+  const linear = (input - lower) / (upper - lower);
+  if (!Array.isArray(kind) || kind[0] !== 'exponential') return linear;
+  const base = Number(kind[1]);
+  if (!Number.isFinite(base) || base === 1) return linear;
+  return (base ** (input - lower) - 1) / (base ** (upper - lower) - 1);
+}
+
+function evaluateNumber(value: unknown, zoom: number): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) {
+    if (value[0] === 'zoom') return zoom;
+    if (value[0] === 'literal' && typeof value[1] === 'number') return value[1];
+  }
+  return null;
+}
+
+function lerpRgba(a: RgbaColor, b: RgbaColor, t: number): RgbaColor {
+  const u = clampChannel(t, 1);
+  return [
+    a[0] + (b[0] - a[0]) * u,
+    a[1] + (b[1] - a[1]) * u,
+    a[2] + (b[2] - a[2]) * u,
+    a[3] + (b[3] - a[3]) * u,
+  ];
+}
+
+function rgbaFromPaint(value: unknown, zoom: number): RgbaColor | null {
+  const css = evaluatePaintColor(value, zoom);
+  return css ? parseCssColor(css) : null;
+}
+
+/**
+ * Evaluate a Mapbox paint color (constant or zoom-interpolated expression)
+ * at `zoom`. streets-v12 water is an `interpolate` on `["zoom"]`.
+ */
+export function evaluatePaintColor(value: unknown, zoom: number): string | null {
+  if (typeof value === 'string') {
+    const parsed = parseCssColor(value);
+    return parsed ? formatCssRgb(parsed) : cssColorFromPaint(value);
+  }
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const op = value[0];
+  if (op === 'literal') return evaluatePaintColor(value[1], zoom);
+  if (op === 'to-color') return evaluatePaintColor(value[1], zoom);
+  if (op === 'rgb' || op === 'rgba') {
+    const r = evaluateNumber(value[1], zoom);
+    const g = evaluateNumber(value[2], zoom);
+    const b = evaluateNumber(value[3], zoom);
+    const a = op === 'rgba' ? evaluateNumber(value[4], zoom) : 1;
+    if (r == null || g == null || b == null || a == null) return null;
+    return formatCssRgb([r, g, b, a]);
+  }
+  if (op === 'hsl' || op === 'hsla') {
+    const h = evaluateNumber(value[1], zoom);
+    const s = evaluateNumber(value[2], zoom);
+    const l = evaluateNumber(value[3], zoom);
+    const a = op === 'hsla' ? evaluateNumber(value[4], zoom) : 1;
+    if (h == null || s == null || l == null || a == null) return null;
+    const sat = s > 1 ? s / 100 : s;
+    const light = l > 1 ? l / 100 : l;
+    const [r, g, b] = hslToRgb(h, sat, light);
+    return formatCssRgb([r, g, b, a]);
+  }
+  if (op === 'step') {
+    const input = evaluateNumber(value[1], zoom);
+    if (input == null || value.length < 3) return null;
+    let chosen: unknown = value[2];
+    for (let i = 3; i < value.length - 1; i += 2) {
+      const stop = evaluateNumber(value[i], zoom);
+      if (stop == null) continue;
+      if (input >= stop) chosen = value[i + 1];
+    }
+    return evaluatePaintColor(chosen, zoom);
+  }
+  if (op === 'interpolate' || op === 'interpolate-hcl' || op === 'interpolate-lab') {
+    const input = evaluateNumber(value[2], zoom);
+    if (input == null) return null;
+    const stops: Array<{ stop: number; output: unknown }> = [];
+    for (let i = 3; i < value.length - 1; i += 2) {
+      const stop = evaluateNumber(value[i], zoom);
+      if (stop == null) return null;
+      stops.push({ stop, output: value[i + 1] });
+    }
+    if (stops.length === 0) return null;
+    if (input <= stops[0].stop) return evaluatePaintColor(stops[0].output, zoom);
+    const last = stops[stops.length - 1];
+    if (input >= last.stop) return evaluatePaintColor(last.output, zoom);
+    for (let i = 1; i < stops.length; i += 1) {
+      if (input <= stops[i].stop) {
+        const from = stops[i - 1];
+        const to = stops[i];
+        const t = interpolationT(value[1], input, from.stop, to.stop);
+        const a = rgbaFromPaint(from.output, zoom);
+        const b = rgbaFromPaint(to.output, zoom);
+        if (!a || !b) return evaluatePaintColor(from.output, zoom);
+        return formatCssRgb(lerpRgba(a, b, t));
+      }
+    }
+    return evaluatePaintColor(last.output, zoom);
+  }
+  for (let i = value.length - 1; i >= 0; i -= 1) {
+    const found = evaluatePaintColor(value[i], zoom);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Pull a CSS color out of a Mapbox paint value (constant or last expression stop). */
 export function cssColorFromPaint(value: unknown): string | null {
   if (typeof value === 'string') {
     const v = value.trim();
@@ -143,13 +386,91 @@ export function cssColorFromPaint(value: unknown): string | null {
   return null;
 }
 
+/** Open-ocean lng/lats used to sample the Streets canvas after render. */
+export const OCEAN_SAMPLE_LNG_LATS: ReadonlyArray<[number, number]> = [
+  [-150, 0],
+  [-140, -25],
+  [-20, -30],
+  [70, -20],
+];
+
+const GL_RGBA = 0x1908;
+const GL_UNSIGNED_BYTE = 0x1401;
+
+/** Streets ocean is blue-dominant; reject land / empty / pin pixels. */
+export function isPlausibleOceanColor([r, g, b, a]: RgbaColor): boolean {
+  return a >= 0.5 && b >= 180 && b >= g && g >= r && r <= 180 && g <= 240;
+}
+
+export interface WebGlPixelSource {
+  drawingBufferWidth: number;
+  drawingBufferHeight: number;
+  readPixels: (
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    format: number,
+    type: number,
+    pixels: ArrayBufferView
+  ) => void;
+}
+
+/** WebGL origin is bottom-left; `x`/`y` are drawing-buffer pixels from the top-left. */
+export function readWebGlRgba(gl: WebGlPixelSource, x: number, y: number): RgbaColor | null {
+  const px = Math.floor(x);
+  const py = Math.floor(gl.drawingBufferHeight - y - 1);
+  if (px < 0 || py < 0 || px >= gl.drawingBufferWidth || py >= gl.drawingBufferHeight) {
+    return null;
+  }
+  const pixel = new Uint8Array(4);
+  gl.readPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+  if (pixel[0] === 0 && pixel[1] === 0 && pixel[2] === 0 && pixel[3] === 0) return null;
+  return [pixel[0], pixel[1], pixel[2], pixel[3] / 255];
+}
+
+export interface OceanSampleMap {
+  getCanvas: () => HTMLCanvasElement;
+  project: (lngLat: [number, number]) => { x: number; y: number };
+}
+
+/** Sample one open-ocean canvas pixel so the leftover fill matches Streets as drawn. */
+export function sampleMapOceanColor(map: OceanSampleMap): string | null {
+  const canvas = map.getCanvas();
+  const gl =
+    (canvas.getContext('webgl2') as WebGlPixelSource | null) ||
+    (canvas.getContext('webgl') as WebGlPixelSource | null);
+  if (!gl) return null;
+  const scaleX = canvas.width / Math.max(canvas.clientWidth || canvas.width, 1);
+  const scaleY = canvas.height / Math.max(canvas.clientHeight || canvas.height, 1);
+  for (const lngLat of OCEAN_SAMPLE_LNG_LATS) {
+    const point = map.project(lngLat);
+    const pixel = readWebGlRgba(gl, point.x * scaleX, point.y * scaleY);
+    if (pixel && isPlausibleOceanColor(pixel)) return formatCssRgb(pixel);
+  }
+  return null;
+}
+
 /**
  * Map water / background fill from the loaded style — not page beige.
- * Tries `water` then `background`.
+ * Tries `water` then `background`. Pass `zoom` (`map.getZoom()`) so
+ * zoom-interpolated streets water matches the ocean as rendered.
+ * Prefer a sampled ocean pixel when the canvas has finished drawing:
+ * streets-v12 water can be a constant while the ocean at this zoom is darker.
  */
 export function readMapWaterColor(
-  getPaint: (layer: string, prop: string) => unknown
+  getPaint: (layer: string, prop: string) => unknown,
+  zoom?: number,
+  sample?: () => string | null
 ): string | null {
+  if (sample) {
+    try {
+      const sampled = sample();
+      if (sampled) return sampled;
+    } catch {
+      /* WebGL buffer may be empty until the first idle/zoomend */
+    }
+  }
   const attempts: Array<[string, string]> = [
     ['water', 'fill-color'],
     ['water', 'background-color'],
@@ -157,7 +478,9 @@ export function readMapWaterColor(
   ];
   for (const [layer, prop] of attempts) {
     try {
-      const css = cssColorFromPaint(getPaint(layer, prop));
+      const value = getPaint(layer, prop);
+      const css =
+        zoom == null ? cssColorFromPaint(value) : evaluatePaintColor(value, zoom);
       if (css) return css;
     } catch {
       /* layer may be missing until the style loads */

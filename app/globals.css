@@ -81,23 +81,32 @@ body {
 
 .places-list[data-collapsible='true'] .places-list-body-wrap {
   transition:
+    height 280ms ease,
     max-height 280ms ease,
     opacity 200ms ease;
 }
 
 .places-list-body-wrap-collapsed {
+  height: 0;
   max-height: 0;
   opacity: 0;
   pointer-events: none;
 }
 
 .places-list-body-wrap-expanded {
+  height: auto;
   max-height: min(var(--places-list-max, 100%), 100%);
+}
+
+.places-list[data-collapsible='true'] .places-list-body-wrap-expanded {
+  height: var(--places-list-max, 100%);
+  max-height: var(--places-list-max, 100%);
 }
 
 .places-list-body-wrap > .places-list-body {
   min-height: 0;
   height: 100%;
+  max-height: var(--places-list-max, 100%);
 }
 
 .places-list-body-wrap-expanded > .places-list-body {
@@ -106,6 +115,7 @@ body {
 
 .places-list-body-wrap-collapsed > .places-list-body {
   overflow: hidden;
+  max-height: 0;
 }
 
 .places-loading-bar {

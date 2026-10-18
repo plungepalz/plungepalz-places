@@ -29,6 +29,12 @@ import {
   LIST_EXPAND_MS,
   LIST_EXPAND_RESIZE_MS,
   cssColorFromPaint,
+  evaluatePaintColor,
+  formatCssRgb,
+  isPlausibleOceanColor,
+  parseCssColor,
+  readWebGlRgba,
+  sampleMapOceanColor,
   defaultCompactList,
   hideListForWorldwidePreset,
   isUserMapMove,
@@ -440,6 +446,107 @@ test('readMapWaterColor prefers the water layer over beige', () => {
     '#f8f4f0'
   );
   assert.notEqual(readMapWaterColor((layer, prop) => paint[layer]?.[prop]), '#e8e4dc');
+});
+
+test('evaluatePaintColor uses the water interpolate at the current zoom', () => {
+  const worldwideZoom = Math.log2(768 / MERCATOR_TILE_SIZE);
+  const streetsWater = [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    0,
+    'rgb(97, 202, 255)',
+    8,
+    'rgb(153, 221, 255)',
+  ];
+  assert.equal(cssColorFromPaint(streetsWater), 'rgb(153, 221, 255)');
+  assert.equal(evaluatePaintColor(streetsWater, 8), 'rgb(153, 221, 255)');
+  assert.equal(evaluatePaintColor(streetsWater, 0), 'rgb(97, 202, 255)');
+
+  const atWorldwide = evaluatePaintColor(streetsWater, worldwideZoom);
+  const parsed = atWorldwide ? parseCssColor(atWorldwide) : null;
+  assert.ok(parsed);
+  const lastStop = parseCssColor('rgb(153, 221, 255)');
+  assert.ok(lastStop);
+  assert.ok(parsed[0] < 120, `worldwide red ${parsed[0]} should stay near the ocean stop`);
+  assert.ok(parsed[1] <= 207, `worldwide green ${parsed[1]} should stay near the ocean stop`);
+  assert.equal(parsed[2], 255);
+  assert.ok(
+    lastStop[0] - parsed[0] >= 30,
+    'last-stop fill would leave a light-blue seam against Streets ocean'
+  );
+
+  const hslStops = [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    0,
+    'hsl(200, 100%, 69%)',
+    8,
+    'hsl(200, 100%, 80%)',
+  ];
+  const hslWorldwide = parseCssColor(evaluatePaintColor(hslStops, worldwideZoom) ?? '');
+  assert.ok(hslWorldwide);
+  assert.ok(hslWorldwide[0] >= 97 && hslWorldwide[0] <= 114);
+  assert.ok(hslWorldwide[1] >= 202 && hslWorldwide[1] <= 207);
+  assert.equal(hslWorldwide[2], 255);
+
+  const paint: Record<string, Record<string, unknown>> = {
+    water: { 'fill-color': streetsWater },
+  };
+  const zoomed = readMapWaterColor((layer, prop) => paint[layer]?.[prop], worldwideZoom);
+  const last = readMapWaterColor((layer, prop) => paint[layer]?.[prop]);
+  assert.equal(zoomed, atWorldwide);
+  assert.equal(last, 'rgb(153, 221, 255)');
+  assert.notEqual(zoomed, last);
+  assert.deepEqual(formatCssRgb([97.2, 202.4, 255, 1]), 'rgb(97, 202, 255)');
+
+  const sampledOcean = 'rgb(104, 204, 255)';
+  assert.equal(
+    readMapWaterColor((layer, prop) => paint[layer]?.[prop], worldwideZoom, () => sampledOcean),
+    sampledOcean
+  );
+  assert.equal(
+    isPlausibleOceanColor([104, 204, 255, 1]),
+    true
+  );
+  assert.equal(isPlausibleOceanColor([153, 221, 255, 1]), true);
+  assert.equal(isPlausibleOceanColor([80, 140, 70, 1]), false);
+
+  const buffer = new Uint8Array(4);
+  const gl = {
+    drawingBufferWidth: 768,
+    drawingBufferHeight: 768,
+    readPixels: (
+      _x: number,
+      _y: number,
+      _w: number,
+      _h: number,
+      _format: number,
+      _type: number,
+      pixels: ArrayBufferView
+    ) => {
+      const out = pixels as Uint8Array;
+      out[0] = 104;
+      out[1] = 204;
+      out[2] = 255;
+      out[3] = 255;
+      buffer.set(out);
+    },
+  };
+  assert.deepEqual(readWebGlRgba(gl, 10, 10), [104, 204, 255, 1]);
+  const canvas = {
+    width: 768,
+    height: 768,
+    clientWidth: 768,
+    clientHeight: 768,
+    getContext: (type: string) => (type === 'webgl2' || type === 'webgl' ? gl : null),
+  } as unknown as HTMLCanvasElement;
+  const sampled = sampleMapOceanColor({
+    getCanvas: () => canvas,
+    project: () => ({ x: 120, y: 200 }),
+  });
+  assert.equal(sampled, 'rgb(104, 204, 255)');
 });
 
 test('768x1024 Worldwide zoom fits 360° of longitude in the canvas width', () => {

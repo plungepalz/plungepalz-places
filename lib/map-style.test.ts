@@ -217,6 +217,10 @@ test('list max-height is clamped to the viewport, not content height', () => {
   const slot = placesListSlotMaxHeightPx(900, 122);
   assert.ok(122 + slot <= 900);
   assert.ok(PLACE_CARD_MIN_HEIGHT_PX >= 96);
+  const hideInner = placesListMaxHeightPx(768, 96);
+  const contentHeight = 82 * 74;
+  assert.ok(contentHeight > 6000);
+  assert.ok(hideInner < 700, 'Hide list inner box must stay viewport-clamped, not ~6081px content');
 });
 
 test('list scroll and hover sync no-op without a list root', () => {

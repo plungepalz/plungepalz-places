@@ -18,6 +18,7 @@ import {
   pinHintCenterX,
   presetCamera,
   readMapWaterColor,
+  sampleMapOceanColor,
   scheduleMapResize,
   startCameraAnimation,
   worldwideCanvasLayout,
@@ -277,10 +278,16 @@ export default function PlacesMap({
   const applyWaterColor = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
-    const color = readMapWaterColor((layer, prop) =>
-      map.getPaintProperty(layer, prop as never)
-    );
-    if (color) setWaterColor(color);
+    const apply = () => {
+      const color = readMapWaterColor(
+        (layer, prop) => map.getPaintProperty(layer, prop as never),
+        map.getZoom(),
+        () => sampleMapOceanColor(map)
+      );
+      if (color) setWaterColor((prev) => (prev === color ? prev : color));
+    };
+    apply();
+    requestAnimationFrame(apply);
   }, []);
 
   useLayoutEffect(() => {
@@ -789,7 +796,7 @@ export default function PlacesMap({
         mapboxAccessToken={accessToken}
         attributionControl
         renderWorldCopies
-        {...{ fadeDuration: MAP_FADE_DURATION_MS }}
+        {...{ fadeDuration: MAP_FADE_DURATION_MS, preserveDrawingBuffer: true }}
         style={{ width: '100%', height: '100%' }}
         interactiveLayerIds={
           imagesReady
@@ -804,6 +811,7 @@ export default function PlacesMap({
         }
         cursor="auto"
         onLoad={handleLoad}
+        onZoomEnd={applyWaterColor}
         onMoveEnd={handleMoveEnd}
         onClick={handleMapClick}
         onMouseMove={handleMouseMove}
