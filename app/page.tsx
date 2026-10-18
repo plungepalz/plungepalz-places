@@ -14,6 +14,7 @@ import {
   listHeadingText,
   mapBoundsKey,
   settleListHeadingRequest,
+  shouldApplySettledSearch,
   startListHeadingRequest,
   type ListHeadingSnapshot,
 } from '@/lib/list-heading-state';
@@ -167,7 +168,7 @@ export default function HomePage() {
           context
         );
         headingMachineRef.current = settled;
-        if (settled.pending) return;
+        if (!shouldApplySettledSearch(requestId, headingMachineRef.current)) return;
         const returnedIds = new Set(response.places.map((place) => place.place_id));
         setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
         setServerPlaces((prev) => (append ? [...prev, ...response.places] : response.places));

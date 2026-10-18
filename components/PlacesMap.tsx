@@ -334,7 +334,9 @@ export default function PlacesMap({
     flightTagRef.current = 'resize';
     map.jumpTo({ center: [camera.lng, camera.lat], zoom: camera.zoom });
     liveZoomRef.current = camera.zoom;
-  }, []);
+    commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: camera.zoom }));
+    flightTagRef.current = null;
+  }, [commitCanvas]);
 
   const requestMapResize = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -630,11 +632,10 @@ export default function PlacesMap({
         padding: ZERO_PADDING,
       });
     };
-    // mapbox-gl 3.33 flyTo() stop()s any in-flight camera first and fires
-    // moveend synchronously. Attach the listener after flyTo so that interrupt
-    // does not consume this flight's cleanup. Preset flights also pass
-    // retainPadding: false (supported in 3.33) so global padding stays 0,
-    // unless a compact-chrome fitTop is holding the Worldwide height floor.
+    // Instant flights (duration 0 / reduced motion) finish inside flyTo and
+    // must run onFlyEnd now. Animated flights attach after flyTo so stop()
+    // from an interrupt does not consume this cleanup.
+    flyEndHandlerRef.current = onFlyEnd;
     flyToThenOnMoveend(
       map,
       {
@@ -651,7 +652,6 @@ export default function PlacesMap({
       },
       onFlyEnd
     );
-    flyEndHandlerRef.current = onFlyEnd;
     onFlyComplete();
   }, [
     collapseList,

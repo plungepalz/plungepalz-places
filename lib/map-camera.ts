@@ -630,17 +630,25 @@ export function worldwideFraming(
  * mapbox-gl 3.33 `flyTo()` calls `stop()` first. If a flight is already running,
  * that fires `moveend` synchronously. A `once('moveend')` attached *before*
  * `flyTo` is consumed by the interrupt and never sees the new flight end.
- * Always call `flyTo` first, then attach the listener.
+ * Call `flyTo` first, then attach the listener — unless the camera is already
+ * idle (`duration: 0` or `prefers-reduced-motion` → `jumpTo`), in which case
+ * `moveend` already fired inside `flyTo` and we must run the handler now.
  */
 export function flyToThenOnMoveend(
   map: {
     flyTo: (options: Record<string, unknown>) => unknown;
     once: (event: string, handler: () => void) => unknown;
+    isMoving?: () => boolean;
   },
   options: Record<string, unknown>,
   onMoveend: () => void
 ): void {
   map.flyTo(options);
+  const alreadyIdle = map.isMoving ? !map.isMoving() : options.duration === 0;
+  if (alreadyIdle) {
+    onMoveend();
+    return;
+  }
   map.once('moveend', onMoveend);
 }
 

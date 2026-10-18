@@ -1,5 +1,4 @@
 import type { LocationPreset } from './locations';
-import type { PlaceSearchResult } from './types';
 
 /** Viewport is tight enough that naming a city is reasonable. */
 export const CITY_SCALE_ZOOM = 9;
@@ -19,9 +18,6 @@ export function listLocationName({
   location,
   leftPreset = false,
 }: {
-  hasMap: boolean;
-  zoom: number | null;
-  places: Pick<PlaceSearchResult, 'city'>[];
   location: LocationPreset;
   /** True after a user-initiated pan/zoom away from the selected preset. */
   leftPreset?: boolean;

@@ -70,27 +70,22 @@ export default function PlacesList({
     }
   }, [hoveredPlaceId, selectedPlaceId]);
 
-  const headerInner = (
-    <>
-      <h2 className="text-base font-semibold text-gray-900">{title}</h2>
-      {collapsible ? (
-        <span className="ml-3 flex shrink-0 items-center gap-1 text-sm font-medium text-gray-500">
-          {expanded ? 'Hide list' : 'Show list'}
-          <svg
-            className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            aria-hidden
-          >
-            <path
-              fillRule="evenodd"
-              d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-              clipRule="evenodd"
-            />
-          </svg>
-        </span>
-      ) : null}
-    </>
+  const toggleLabel = (
+    <span className="ml-3 flex shrink-0 items-center gap-1 text-sm font-medium text-gray-500">
+      {expanded ? 'Hide list' : 'Show list'}
+      <svg
+        className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
+        viewBox="0 0 20 20"
+        fill="currentColor"
+        aria-hidden
+      >
+        <path
+          fillRule="evenodd"
+          d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+          clipRule="evenodd"
+        />
+      </svg>
+    </span>
   );
 
   return (
@@ -105,26 +100,31 @@ export default function PlacesList({
         style={filterHeaderInset ? { paddingTop: FILTER_OVERLAY_HEADER_INSET } : undefined}
       >
         {collapsible ? (
-          <button
-            type="button"
-            className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
-            aria-expanded={expanded}
-            aria-controls="places-list-body"
-            onClick={onToggleExpanded}
-          >
-            {headerInner}
-          </button>
+          <div className="flex w-full items-center justify-between px-4 py-3">
+            <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+            <button
+              type="button"
+              className="-mr-2 rounded-lg px-2 py-1 text-left hover:bg-gray-50"
+              aria-expanded={expanded}
+              aria-controls="places-list-body"
+              onClick={onToggleExpanded}
+            >
+              {toggleLabel}
+            </button>
+          </div>
         ) : (
-          <div className="px-4 py-3">{headerInner}</div>
+          <div className="px-4 py-3">
+            <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+          </div>
         )}
       </div>
 
-      {compact ? null : (
-        <div
-          id="places-list-body"
-          ref={scrollRef}
-          className="flex-1 space-y-1 overflow-y-auto px-2 py-2"
-        >
+      <div
+        id="places-list-body"
+        ref={scrollRef}
+        hidden={compact}
+        className="flex-1 space-y-1 overflow-y-auto px-2 py-2"
+      >
           {error && (
             <div className="m-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
           )}
@@ -169,8 +169,7 @@ export default function PlacesList({
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand border-t-transparent" />
             </div>
           )}
-        </div>
-      )}
+      </div>
     </div>
   );
 }

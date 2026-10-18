@@ -697,6 +697,8 @@ test('Worldwide framing subtracts drawer right padding from the visible gap', ()
  */
 class InterruptibleMap {
   padding = { ...ZERO_PADDING };
+  /** When true, flyTo finishes synchronously like prefers-reduced-motion → jumpTo. */
+  reducedMotion = false;
   private flying = false;
   private pending: Array<() => void> = [];
 
@@ -717,15 +719,26 @@ class InterruptibleMap {
     for (const handler of handlers) handler();
   }
 
-  flyTo(options: { padding?: Partial<typeof ZERO_PADDING> }) {
+  flyTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
     if (this.flying) {
       this.flying = false;
       this.emitMoveend();
     }
-    this.flying = true;
     if (options.padding) {
       this.padding = { ...ZERO_PADDING, ...options.padding };
     }
+    // mapbox-gl 3.33: duration 0 (and reduced-motion jumpTo) fires moveend
+    // inside flyTo(), before a listener attached afterward can see it.
+    if (options.duration === 0 || this.reducedMotion) {
+      this.flying = false;
+      this.emitMoveend();
+      return;
+    }
+    this.flying = true;
+  }
+
+  isMoving() {
+    return this.flying;
   }
 
   endFlight() {
@@ -747,8 +760,8 @@ function startPlacesMapFlight(
     handlerRef.current = null;
     map.padding = { ...ZERO_PADDING };
   };
-  flyToThenOnMoveend(map, { padding: { ...ZERO_PADDING, left: 396 } }, onFlyEnd);
   handlerRef.current = onFlyEnd;
+  flyToThenOnMoveend(map, { padding: { ...ZERO_PADDING, left: 396 } }, onFlyEnd);
 }
 
 test('easeOutCubic is 0 at start, 1 at end, and faster early', () => {
@@ -766,4 +779,31 @@ test('preset change mid-flight leaves padding at 0', () => {
   assert.equal(map.getPadding().left, 396);
   map.endFlight();
   assert.deepEqual(map.getPadding(), ZERO_PADDING);
+});
+
+test('instant flyTo (duration 0) runs the end handler even when moveend is synchronous', () => {
+  const map = new InterruptibleMap();
+  let ended = 0;
+  flyToThenOnMoveend(map, { duration: 0, padding: { ...ZERO_PADDING, left: 396 } }, () => {
+    ended += 1;
+    map.padding = { ...ZERO_PADDING };
+  });
+  assert.equal(ended, 1);
+  assert.equal(map.isMoving(), false);
+  assert.deepEqual(map.getPadding(), ZERO_PADDING);
+  map.endFlight();
+  assert.equal(ended, 1);
+});
+
+test('prefers-reduced-motion flyTo (sync moveend, duration > 0) still runs the end handler', () => {
+  const map = new InterruptibleMap();
+  map.reducedMotion = true;
+  let ended = 0;
+  flyToThenOnMoveend(map, { duration: 900 }, () => {
+    ended += 1;
+  });
+  assert.equal(ended, 1);
+  assert.equal(map.isMoving(), false);
+  map.endFlight();
+  assert.equal(ended, 1);
 });
