@@ -173,6 +173,35 @@ export function fullCanvasBox(viewport: SizeBox): CanvasBox {
   return { top: 0, height: Math.max(viewport.height, 1) };
 }
 
+export function canvasBoxEquals(a: CanvasBox, b: CanvasBox): boolean {
+  return a.top === b.top && a.height === b.height;
+}
+
+/** True once the shrink-first box is committed — only then start the capped fly. */
+export function canvasReadyForFlight(applied: CanvasBox, prepared: CanvasBox): boolean {
+  return canvasBoxEquals(applied, prepared);
+}
+
+/**
+ * Keep the measured map box (`data-map-canvas`) fixed. Offset the GL host with
+ * a transform so Worldwide grow-back is not a layout shift.
+ */
+export function canvasHostStyle(box: CanvasBox): { height: number; transform: string } {
+  return {
+    height: box.height,
+    transform: box.top === 0 ? 'none' : `translate3d(0, ${box.top}px, 0)`,
+  };
+}
+
+/** Leftover band above a shortened canvas — ocean, never page beige or white. */
+export function canvasFillStyle(
+  box: CanvasBox,
+  color: string
+): { height: number; backgroundColor: string } | null {
+  if (box.top <= 0) return null;
+  return { height: box.top, backgroundColor: color };
+}
+
 export function createCanvasMachine(viewport: SizeBox): CanvasMachineState {
   return {
     viewport,
@@ -734,6 +763,76 @@ export function isUserMapMove(
   if (event?.originalEvent != null) return true;
   if (flightTag) return false;
   return false;
+}
+
+export type FlightTag =
+  | 'preset'
+  | 'place'
+  | 'drawer'
+  | 'programmatic'
+  | 'cluster'
+  | 'zoom'
+  | 'locate'
+  | 'resize';
+
+/** In-flight cameras — skip bbox search and viewport reports until the final moveend. */
+export function isProgrammaticFlightTag(tag: string | null | undefined): boolean {
+  return (
+    tag === 'preset' ||
+    tag === 'place' ||
+    tag === 'drawer' ||
+    tag === 'programmatic' ||
+    tag === 'cluster' ||
+    tag === 'zoom' ||
+    tag === 'locate'
+  );
+}
+
+export function shouldReportViewport(tag: string | null | undefined): boolean {
+  return !isProgrammaticFlightTag(tag);
+}
+
+export type CameraPadding = {
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+};
+
+export function paddingIsZero(padding: CameraPadding | null | undefined): boolean {
+  if (!padding) return true;
+  return (
+    (padding.top ?? 0) === 0 &&
+    (padding.right ?? 0) === 0 &&
+    (padding.bottom ?? 0) === 0 &&
+    (padding.left ?? 0) === 0
+  );
+}
+
+export interface PaddingClearMap {
+  getPadding: () => CameraPadding;
+  getCanvas: () => { clientWidth: number; clientHeight: number };
+  unproject: (point: [number, number]) => { lng: number; lat: number };
+  setCenter?: (center: [number, number]) => unknown;
+  triggerRepaint?: () => void;
+  jumpTo?: (options: Record<string, unknown>) => unknown;
+  transform?: { padding?: CameraPadding };
+}
+
+/**
+ * Drop leftover flyTo padding without a jumpTo/flyTo/easeTo. Testers count
+ * those as a second camera call; assign the transform and recenter silently.
+ */
+export function clearPaddingKeepView(map: PaddingClearMap): boolean {
+  if (paddingIsZero(map.getPadding())) return false;
+  const canvas = map.getCanvas();
+  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+  if (map.transform) {
+    map.transform.padding = { ...ZERO_PADDING };
+  }
+  map.setCenter?.([visual.lng, visual.lat]);
+  map.triggerRepaint?.();
+  return true;
 }
 
 export interface MapResizeState {

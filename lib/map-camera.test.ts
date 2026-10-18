@@ -21,16 +21,23 @@ import {
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
+  isProgrammaticFlightTag,
   isShortCameraHop,
   isShortPlaceHop,
+  paddingIsZero,
   pickCameraAnimation,
   startCameraAnimation,
   MERCATOR_TILE_SIZE,
   LIST_EXPAND_MS,
   LIST_EXPAND_RESIZE_MS,
   WORLD_FIT_EDGE_PAD,
+  canvasBoxEquals,
+  canvasFillStyle,
+  canvasHostStyle,
   canvasLayoutAfterPan,
   canvasLayoutIgnoresList,
+  canvasReadyForFlight,
+  clearPaddingKeepView,
   createCanvasMachine,
   cssColorFromPaint,
   evaluatePaintColor,
@@ -58,6 +65,7 @@ import {
   reduceCanvasMachine,
   scheduleMapResize,
   shouldCollapseList,
+  shouldReportViewport,
   shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
   worldwideFraming,
@@ -518,6 +526,39 @@ test('canvas machine: wheel zoom past the clamp grows the canvas once', () => {
   assert.ok(short < 900);
 });
 
+test('768 Worldwide shrink-first lands at 0.459 / 704px / top 196', () => {
+  const viewport = { width: 768, height: 900 };
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    768,
+    900,
+    { left: 0, right: 0 }
+  );
+  const target = narrowWidthFitZoom(768);
+  assert.ok(Math.abs(camera.zoom - target) < 1e-9);
+  assert.ok(Math.abs(camera.zoom - 0.459) < 0.002);
+  const state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: camera.zoom,
+    viewport,
+  });
+  assert.equal(state.box.height, 704);
+  assert.equal(state.box.top, 196);
+  assert.ok(mapboxHeightMinZoom(state.box.height) <= camera.zoom + 1e-9);
+  assert.ok(canvasReadyForFlight(state.box, state.box));
+  assert.equal(canvasReadyForFlight({ top: 0, height: 900 }, state.box), false);
+  const host = canvasHostStyle(state.box);
+  assert.equal(host.height, 704);
+  assert.equal(host.transform, 'translate3d(0, 196px, 0)');
+  const fill = canvasFillStyle(state.box, STREETS_LOW_ZOOM_OCEAN);
+  assert.deepEqual(fill, { height: 196, backgroundColor: STREETS_LOW_ZOOM_OCEAN });
+  assert.equal(canvasFillStyle({ top: 0, height: 900 }, STREETS_LOW_ZOOM_OCEAN), null);
+  const grown = canvasHostStyle({ top: 0, height: 900 });
+  assert.equal(grown.transform, 'none');
+  assert.equal(grown.height, 900);
+  assert.equal(canvasBoxEquals(state.box, { top: 196, height: 704 }), true);
+});
+
 test('canvas machine: resize 1280→768 shrinks then lands at the narrow fit', () => {
   const desktop = { width: 1280, height: 900 };
   const compact = { width: 768, height: 900 };
@@ -795,6 +836,55 @@ test('flyTo options use a gentle curve and an explicit duration cap', () => {
   assert.equal(isShortCameraHop('place'), false);
 });
 
+test('clearPaddingKeepView does not issue jumpTo/flyTo/easeTo', () => {
+  const calls = { jumpTo: 0, flyTo: 0, easeTo: 0, setCenter: 0 };
+  const zeroMap = {
+    getPadding: () => ({ ...ZERO_PADDING }),
+    getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
+    unproject: () => ({ lng: 1, lat: 2 }),
+    jumpTo: () => {
+      calls.jumpTo += 1;
+    },
+    flyTo: () => {
+      calls.flyTo += 1;
+    },
+    easeTo: () => {
+      calls.easeTo += 1;
+    },
+    setCenter: () => {
+      calls.setCenter += 1;
+    },
+    transform: { padding: { ...ZERO_PADDING } },
+  };
+  assert.equal(paddingIsZero(ZERO_PADDING), true);
+  assert.equal(clearPaddingKeepView(zeroMap), false);
+  assert.deepEqual(calls, { jumpTo: 0, flyTo: 0, easeTo: 0, setCenter: 0 });
+
+  const padded = {
+    ...zeroMap,
+    getPadding: () => ({ ...ZERO_PADDING, left: 396 }),
+    transform: { padding: { ...ZERO_PADDING, left: 396 } },
+  };
+  assert.equal(clearPaddingKeepView(padded), true);
+  assert.equal(calls.jumpTo, 0);
+  assert.equal(calls.flyTo, 0);
+  assert.equal(calls.easeTo, 0);
+  assert.equal(calls.setCenter, 1);
+  assert.deepEqual(padded.transform.padding, ZERO_PADDING);
+});
+
+test('in-flight tags suppress viewport reports until the final moveend', () => {
+  assert.equal(isProgrammaticFlightTag('preset'), true);
+  assert.equal(isProgrammaticFlightTag('place'), true);
+  assert.equal(isProgrammaticFlightTag('cluster'), true);
+  assert.equal(isProgrammaticFlightTag('resize'), false);
+  assert.equal(shouldReportViewport('preset'), false);
+  assert.equal(shouldReportViewport('place'), false);
+  assert.equal(shouldReportViewport('cluster'), false);
+  assert.equal(shouldReportViewport('resize'), true);
+  assert.equal(shouldReportViewport(null), true);
+});
+
 test('a preset produces exactly one capped camera call', () => {
   const flyToCalls: Array<Record<string, unknown>> = [];
   const easeToCalls: Array<Record<string, unknown>> = [];
@@ -834,6 +924,46 @@ test('a preset produces exactly one capped camera call', () => {
   assert.equal(flyToCalls[0].speed, undefined);
   assert.ok(move.duration + 200 <= 2600);
   assert.equal(claimFlyNonce(started, nonce + 1), true);
+});
+
+test('preset cleanup does not add a jumpTo after the single flyTo', () => {
+  const flyToCalls: Array<Record<string, unknown>> = [];
+  const jumpToCalls: Array<Record<string, unknown>> = [];
+  const map = {
+    padding: { ...ZERO_PADDING, left: 396 },
+    flyTo: (options: Record<string, unknown>) => {
+      flyToCalls.push(options);
+    },
+    easeTo: () => undefined,
+    jumpTo: (options: Record<string, unknown>) => {
+      jumpToCalls.push(options);
+    },
+    once: () => undefined,
+    off: () => undefined,
+    getPadding: () => ({ ...ZERO_PADDING, left: 396 }),
+    getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
+    unproject: () => ({ lng: -20, lat: 20 }),
+    setCenter: () => undefined,
+    transform: { padding: { ...ZERO_PADDING, left: 396 } },
+  };
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [-20, 20],
+      zoom: 1.15,
+      duration: 1800,
+      padding: { ...ZERO_PADDING, left: 396 },
+      retainPadding: true,
+    }),
+    () => {
+      clearPaddingKeepView(map);
+    }
+  );
+  assert.equal(flyToCalls.length, 1);
+  assert.equal(jumpToCalls.length, 0);
 });
 
 test('place and preset flights stay inside the 1.2–1.8s / 2.2s caps', () => {

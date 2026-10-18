@@ -19,9 +19,14 @@ export function searchAfterViewportChange(input: {
   leftPreset: boolean;
   boundsKey: string;
   lastPresetKey: string;
+  /** Programmatic fly / ease — do not search on interrupt or mid-flight moveend. */
+  cameraBusy?: boolean;
 }): { action: SearchTrigger; nextPresetKey?: string } {
   if (!input.leftPreset) {
     return { action: 'filters', nextPresetKey: input.boundsKey };
+  }
+  if (input.cameraBusy) {
+    return { action: 'skip' };
   }
   if (!input.boundsKey || input.boundsKey === input.lastPresetKey) {
     return { action: 'skip' };

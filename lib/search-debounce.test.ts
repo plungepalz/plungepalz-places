@@ -42,6 +42,36 @@ test('user map moves debounce on moveend; preset chips search without bbox', () 
   );
 });
 
+test('programmatic camera suppresses moveend search so the header stays old→final', () => {
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'tempe',
+      lastPresetKey: 'us',
+      cameraBusy: true,
+    }),
+    { action: 'skip' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: 'tokyo',
+      lastPresetKey: 'us',
+      cameraBusy: true,
+    }),
+    { action: 'filters', nextPresetKey: 'tokyo' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'tempe',
+      lastPresetKey: 'us',
+      cameraBusy: false,
+    }),
+    { action: 'moveend' }
+  );
+});
+
 test('createDebounced cancels overlapping calls and only invokes the last', async () => {
   const seen: number[] = [];
   const debounced = createDebounced((value: number) => {

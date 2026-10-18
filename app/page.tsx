@@ -220,6 +220,7 @@ export default function HomePage() {
       leftPreset,
       boundsKey: mapBoundsKey(leftPreset ? bounds : null),
       lastPresetKey: lastPresetBoundsKeyRef.current,
+      cameraBusy: Boolean(flyRequest),
     });
     if (decision.action === 'skip') return;
     if (decision.nextPresetKey != null) {
@@ -229,7 +230,7 @@ export default function HomePage() {
       performSearch(0, false, decision.action === 'moveend' ? bounds : null);
     }, searchDebounceMs(decision.action));
     return () => window.clearTimeout(handle);
-  }, [performSearch, leftPreset, searchIdentity]);
+  }, [flyRequest, performSearch, leftPreset, searchIdentity]);
 
   useEffect(() => {
     if (!successMessage) return;
