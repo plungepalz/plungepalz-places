@@ -856,8 +856,8 @@ export function paddingIsZero(padding: CameraPadding | null | undefined): boolea
 
 export interface PaddingClearMap {
   getPadding: () => CameraPadding;
-  getCanvas: () => { clientWidth: number; clientHeight: number };
-  unproject: (point: [number, number]) => { lng: number; lat: number };
+  getCanvas?: () => { clientWidth: number; clientHeight: number };
+  unproject?: (point: [number, number]) => { lng: number; lat: number };
   setCenter?: (center: [number, number]) => unknown;
   triggerRepaint?: () => void;
   jumpTo?: (options: Record<string, unknown>) => unknown;
