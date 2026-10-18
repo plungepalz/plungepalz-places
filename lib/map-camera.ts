@@ -23,6 +23,8 @@ export const WORLDWIDE_COMFORT_LNG = -20;
 export const WORLDWIDE_LAT = 20;
 /** Hide/collapse the list while framing Worldwide so the whole world can fit. */
 export const NARROW_VIEWPORT = 768;
+/** List expand/collapse settle time before a follow-up `map.resize()`. */
+export const LIST_EXPAND_RESIZE_MS = 220;
 
 export function wrapLng(lng: number): number {
   return ((((lng + 180) % 360) + 360) % 360) - 180;
@@ -77,8 +79,9 @@ export function defaultCompactList(canvasWidth: number): boolean {
 }
 
 /**
- * Cap the map canvas so Mapbox can actually reach a width-fit Worldwide zoom.
- * A 900–1024px-tall canvas floors zoom at ~0.81–1.0 no matter what minZoom is.
+ * Height at which Mapbox can reach a width-fit Worldwide zoom.
+ * The live map no longer shrinks its container to this cap — it fills behind
+ * the chrome and uses `fitTop` padding so the void is map, not page beige.
  */
 export function worldwideMapHeightCap(canvasWidth: number, availableHeight: number): number {
   if (!isNarrowViewport(canvasWidth)) return availableHeight;
@@ -164,7 +167,8 @@ export function flyPadding(
   panelOpen: boolean,
   exactZoom: boolean | undefined,
   size: { width: number; height: number },
-  forceCollapse = false
+  forceCollapse = false,
+  fitTop = 0
 ) {
   const insets = layoutInsets(size.width, panelOpen, forceCollapse);
   const maxVertical = Math.max(0, size.height - 80);
@@ -180,7 +184,7 @@ export function flyPadding(
     left = insets.listRight;
   }
   return {
-    top: exactZoom ? 0 : Math.min(96, Math.floor(maxVertical * 0.25)),
+    top: exactZoom ? Math.max(0, fitTop) : Math.min(96, Math.floor(maxVertical * 0.25)),
     bottom: exactZoom ? 0 : Math.min(48, Math.floor(maxVertical * 0.15)),
     left,
     right,
@@ -203,17 +207,58 @@ export function pinHintCenterX(canvasWidth: number, panelOpen: boolean, forceCol
 }
 
 /**
- * User-initiated camera change vs a programmatic flight.
+ * User-initiated camera change vs a programmatic flight / resize.
  * Mapbox `moveend` sets `originalEvent` for drag / scroll / pinch.
- * Preset and place flights pass a flight tag and omit originalEvent.
+ * Window resize and our own camera tags must never flip the chip to Map area.
  */
 export function isUserMapMove(
   event: { originalEvent?: unknown } | null | undefined,
   flightTag?: string | null
 ): boolean {
+  if (flightTag === 'resize' || flightTag === 'programmatic') return false;
+  const orig = event?.originalEvent as { type?: string } | undefined;
+  if (orig && (orig.type === 'resize' || orig.type === 'orientationchange')) return false;
   if (event?.originalEvent != null) return true;
   if (flightTag) return false;
   return false;
+}
+
+export interface MapResizeState {
+  rafId: number | null;
+}
+
+/** Coalesce map.resize() to one call per animation frame. */
+export function scheduleMapResize(
+  map: { resize: () => void } | null | undefined,
+  state: MapResizeState,
+  raf: (cb: FrameRequestCallback) => number,
+  cancel: (id: number) => void
+): void {
+  if (!map) return;
+  if (state.rafId != null) cancel(state.rafId);
+  state.rafId = raf(() => {
+    state.rafId = null;
+    map.resize();
+  });
+}
+
+export interface SizeBox {
+  width: number;
+  height: number;
+}
+
+/**
+ * Re-apply the active preset camera after a container / breakpoint change.
+ * Never when the user has already left the preset (chip is Map area).
+ */
+export function shouldReapplyPresetOnSizeChange(
+  leftPreset: boolean,
+  prev: SizeBox | null,
+  next: SizeBox
+): boolean {
+  if (leftPreset) return false;
+  if (!prev) return false;
+  return prev.width !== next.width || prev.height !== next.height;
 }
 
 /**

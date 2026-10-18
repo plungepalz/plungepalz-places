@@ -15,6 +15,7 @@ import {
   flyPadding,
   flyToThenOnMoveend,
   MERCATOR_TILE_SIZE,
+  LIST_EXPAND_RESIZE_MS,
   defaultCompactList,
   hideListForWorldwidePreset,
   isUserMapMove,
@@ -25,7 +26,9 @@ import {
   mapboxHeightMinZoom,
   pinHintCenterX,
   presetCamera,
+  scheduleMapResize,
   shouldCollapseList,
+  shouldReapplyPresetOnSizeChange,
   worldwideFraming,
   worldwideMapHeightCap,
   zoomToFitRadiusKm,
@@ -178,6 +181,93 @@ test('isUserMapMove uses originalEvent or a flight tag', () => {
   assert.equal(isUserMapMove({}), false);
   assert.equal(isUserMapMove(null, 'preset'), false);
   assert.equal(isUserMapMove(undefined), false);
+});
+
+test('resize and programmatic camera never count as a user move', () => {
+  assert.equal(isUserMapMove({ originalEvent: { type: 'resize' } }), false);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'resize' } }, 'preset'), false);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'orientationchange' } }), false);
+  assert.equal(isUserMapMove({}, 'resize'), false);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'mouseup' } }, 'resize'), false);
+  assert.equal(isUserMapMove({}, 'programmatic'), false);
+  assert.equal(isUserMapMove({ originalEvent: { type: 'wheel' } }), true);
+});
+
+test('resize does not flip the chip to Map area', () => {
+  let leftPreset = false;
+  const onUserCameraMove = () => {
+    leftPreset = true;
+  };
+  for (const event of [
+    { originalEvent: { type: 'resize' } as { type: string }, tag: null as string | null },
+    { originalEvent: undefined as { type: string } | undefined, tag: 'resize' },
+    { originalEvent: { type: 'resize' }, tag: 'preset' },
+    { originalEvent: undefined, tag: 'programmatic' },
+  ]) {
+    if (isUserMapMove({ originalEvent: event.originalEvent }, event.tag)) onUserCameraMove();
+  }
+  assert.equal(leftPreset, false);
+  if (isUserMapMove({ originalEvent: { type: 'mouseup' } })) onUserCameraMove();
+  assert.equal(leftPreset, true);
+});
+
+test('scheduleMapResize coalesces to one map.resize() per frame', () => {
+  const calls: string[] = [];
+  const map = { resize: () => calls.push('resize') };
+  const state = { rafId: null as number | null };
+  let nextId = 1;
+  const pending = new Map<number, FrameRequestCallback>();
+  const raf = (cb: FrameRequestCallback) => {
+    const id = nextId++;
+    pending.set(id, cb);
+    return id;
+  };
+  const cancel = (id: number) => {
+    pending.delete(id);
+  };
+  scheduleMapResize(map, state, raf, cancel);
+  scheduleMapResize(map, state, raf, cancel);
+  scheduleMapResize(map, state, raf, cancel);
+  assert.equal(pending.size, 1);
+  assert.equal(calls.length, 0);
+  const cb = [...pending.values()][0];
+  cb(0);
+  assert.equal(calls.length, 1);
+  assert.equal(state.rafId, null);
+  scheduleMapResize(null, state, raf, cancel);
+  assert.equal(calls.length, 1);
+});
+
+test('shouldReapplyPresetOnSizeChange on breakpoint but not after leaving the preset', () => {
+  const compact = { width: 768, height: 900 };
+  const desktop = { width: 1280, height: 900 };
+  assert.equal(shouldReapplyPresetOnSizeChange(false, compact, desktop), true);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, desktop, compact), true);
+  assert.equal(shouldReapplyPresetOnSizeChange(true, compact, desktop), false);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, null, desktop), false);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, compact, compact), false);
+  assert.equal(shouldReapplyPresetOnSizeChange(false, compact, { width: 768, height: 1024 }), true);
+});
+
+test('presetCamera re-frames Worldwide when the breakpoint changes', () => {
+  const loc = { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 };
+  const at768 = presetCamera(loc, 768, 900, { left: 0, right: 0 });
+  const at1280 = presetCamera(loc, 1280, 900);
+  assert.ok(Math.abs(at768.zoom - Math.log2(768 / 512)) < 1e-9);
+  assert.equal(at768.lng, WORLDWIDE_COMFORT_LNG);
+  assert.ok(at1280.zoom > at768.zoom);
+  assert.notEqual(at1280.lng, at768.lng);
+  assert.equal(LIST_EXPAND_RESIZE_MS, 220);
+});
+
+test('flyPadding exactZoom uses fitTop so the map can fill behind the chrome', () => {
+  const padded = flyPadding(false, true, { width: 768, height: 900 }, true, 179);
+  assert.equal(padded.top, 179);
+  assert.equal(padded.left, 0);
+  assert.equal(padded.right, 0);
+  const desktop = flyPadding(false, true, { width: 1280, height: 900 }, false, 0);
+  assert.equal(desktop.top, 0);
+  assert.equal(desktop.left, LIST_PANEL_RIGHT);
 });
 
 test('1280x900 uses the height min zoom and a Pacific seam, not a gap-fit zoom', () => {

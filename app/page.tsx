@@ -21,7 +21,8 @@ import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
 import {
   defaultCompactList,
   shouldCollapseList,
-  worldwideMapHeightCap,
+  shouldReapplyPresetOnSizeChange,
+  type SizeBox,
 } from '@/lib/map-camera';
 import { mergeLocalPlaces } from '@/lib/merge-local-places';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
@@ -68,7 +69,6 @@ export default function HomePage() {
   const [mapZoom, setMapZoom] = useState<number | null>(null);
   const [leftPreset, setLeftPreset] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(1280);
-  const [viewportHeight, setViewportHeight] = useState(900);
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const lastPresetBoundsKeyRef = useRef('');
   const headingMachineRef = useRef(createListHeadingMachine());
@@ -85,12 +85,17 @@ export default function HomePage() {
   const [listExpanded, setListExpanded] = useState(false);
   const listSlotRef = useRef<HTMLDivElement>(null);
   const [compactBarHeight, setCompactBarHeight] = useState(56);
+  const leftPresetRef = useRef(leftPreset);
+  const locationRef = useRef(location);
+  const prevViewportRef = useRef<SizeBox | null>(null);
 
   const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
 
   useEffect(() => {
     searchContextRef.current = { hasMap, location, leftPreset, mapZoom };
+    leftPresetRef.current = leftPreset;
+    locationRef.current = location;
   }, [hasMap, location, leftPreset, mapZoom]);
 
   const localFilters = useMemo(
@@ -315,17 +320,26 @@ export default function HomePage() {
   const hideListForDrawer = shouldCollapseList(viewportWidth, panelOpen);
   const listCollapsed = narrowViewport && !listExpanded;
   const collapseList = hideListForDrawer || listCollapsed;
-  const worldwideCompact = listCollapsed && location.id === 'worldwide' && !leftPreset;
-  const mapTop = listCollapsed && !hideListForDrawer ? chromeTop + compactBarHeight + 8 : 0;
-  const availableMapHeight = Math.max(viewportHeight - mapTop, 1);
-  const mapHeight = worldwideCompact
-    ? worldwideMapHeightCap(viewportWidth, availableMapHeight)
-    : undefined;
+  const compactChrome = listCollapsed && !hideListForDrawer;
+  const fitTop = compactChrome ? chromeTop + compactBarHeight : 0;
+  const pinHintTop = compactChrome ? chromeTop + compactBarHeight + 8 : chromeTop;
 
   useLayoutEffect(() => {
     const onResize = () => {
-      setViewportWidth(window.innerWidth);
-      setViewportHeight(window.innerHeight);
+      const next = { width: window.innerWidth, height: window.innerHeight };
+      setViewportWidth(next.width);
+      if (shouldReapplyPresetOnSizeChange(leftPresetRef.current, prevViewportRef.current, next)) {
+        const loc = locationRef.current;
+        setFlyRequest({
+          nonce: Date.now(),
+          longitude: loc.lng,
+          latitude: loc.lat,
+          zoom: loc.zoom,
+          exactZoom: true,
+          programmatic: true,
+        });
+      }
+      prevViewportRef.current = next;
     };
     onResize();
     window.addEventListener('resize', onResize);
@@ -362,14 +376,7 @@ export default function HomePage() {
 
   return (
     <div className="relative h-screen overflow-hidden bg-[#e8e4dc] text-gray-900">
-      <div
-        className="absolute inset-x-0"
-        style={
-          mapHeight != null
-            ? { top: mapTop, height: mapHeight }
-            : { top: mapTop, bottom: 0 }
-        }
-      >
+      <div className="absolute inset-0">
         <PlacesMap
           places={places}
           selectedPlaceId={selectedPlaceId}
@@ -386,9 +393,10 @@ export default function HomePage() {
           onHoverPlace={setHoveredPlaceId}
           onViewportChange={handleViewportChange}
           onUserCameraMove={handleUserCameraMove}
-          hintTop={listCollapsed ? 8 : chromeTop}
+          hintTop={pinHintTop}
           mapboxToken={mapboxToken}
           collapseList={collapseList}
+          fitTop={fitTop}
           location={location}
         />
       </div>

@@ -7,6 +7,7 @@ import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
 import { BRAND } from '@/lib/brand';
 import {
   CAMERA_DURATION,
+  LIST_EXPAND_RESIZE_MS,
   ZERO_PADDING,
   easeOutCubic,
   flyPadding,
@@ -15,6 +16,8 @@ import {
   mapControlsRightPx,
   pinHintCenterX,
   presetCamera,
+  scheduleMapResize,
+  type MapResizeState,
 } from '@/lib/map-camera';
 import type { LocationPreset } from '@/lib/locations';
 import { clusterLeafHasPlace, placesMapLayerSpecs } from '@/lib/map-style';
@@ -48,6 +51,10 @@ interface PlacesMapProps {
   mapboxToken?: string;
   /** Collapse list occupancy (drawer collision or compact list at ≤768). */
   collapseList?: boolean;
+  /** Top chrome (filter + compact list) to keep out of an exactZoom fit. */
+  fitTop?: number;
+  /** Bump after list expand/collapse so the canvas is re-measured. */
+  layoutEpoch?: number;
   location?: LocationPreset;
 }
 
@@ -208,6 +215,8 @@ export default function PlacesMap({
   hintTop = 96,
   mapboxToken,
   collapseList = false,
+  fitTop = 0,
+  layoutEpoch = 0,
   location,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
@@ -226,16 +235,40 @@ export default function PlacesMap({
     width: typeof window === 'undefined' ? 1280 : window.innerWidth,
     height: typeof window === 'undefined' ? 800 : window.innerHeight,
   }));
+  const resizeStateRef = useRef<MapResizeState>({ rafId: null });
+
+  const requestMapResize = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    flightTagRef.current = 'resize';
+    scheduleMapResize(map, resizeStateRef.current, requestAnimationFrame, cancelAnimationFrame);
+  }, []);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const update = () => setCanvasSize({ width: el.clientWidth, height: el.clientHeight });
+    const update = () => {
+      setCanvasSize({ width: el.clientWidth, height: el.clientHeight });
+      requestMapResize();
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+    const resizeState = resizeStateRef.current;
+    return () => {
+      observer.disconnect();
+      if (resizeState.rafId != null) {
+        cancelAnimationFrame(resizeState.rafId);
+        resizeState.rafId = null;
+      }
+    };
+  }, [requestMapResize]);
+
+  useEffect(() => {
+    requestMapResize();
+    const handle = window.setTimeout(requestMapResize, LIST_EXPAND_RESIZE_MS);
+    return () => window.clearTimeout(handle);
+  }, [collapseList, fitTop, layoutEpoch, requestMapResize]);
 
   const geojson = useMemo(
     () => ({
@@ -276,6 +309,8 @@ export default function PlacesMap({
     const map = mapRef.current?.getMap();
     if (!map) return;
     map.setMinZoom(0);
+    flightTagRef.current = 'resize';
+    map.resize();
     void Promise.all([
       ensurePinImage(map, 'pin-place', pinSvg(BRAND.orange, true)),
       ensurePinImage(map, 'pin-place-active', pinSvg(BRAND.orangeSelected, true)),
@@ -390,15 +425,16 @@ export default function PlacesMap({
     const currentZoom = map.getZoom();
     const container = map.getContainer();
     const size = { width: container.clientWidth, height: container.clientHeight };
-    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size, collapseList);
+    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size, collapseList, fitTop);
     let zoom = resolveFlyZoom(currentZoom, flyRequest);
     let longitude = flyRequest.longitude;
     let latitude = flyRequest.latitude;
-    if (!flyRequest.exactZoom) {
+    if (!flyRequest.exactZoom && !flyRequest.programmatic) {
       onUserCameraMove?.();
     }
+    const cameraHeight = Math.max(size.height - (flyRequest.exactZoom ? fitTop : 0), 1);
     if (flyRequest.exactZoom && location) {
-      const camera = presetCamera(location, size.width, size.height, {
+      const camera = presetCamera(location, size.width, cameraHeight, {
         left: padding.left,
         right: padding.right,
       });
@@ -415,7 +451,7 @@ export default function PlacesMap({
           radiusKm: 20000,
         },
         size.width,
-        size.height,
+        cameraHeight,
         { left: padding.left, right: padding.right }
       );
       zoom = camera.zoom;
@@ -426,11 +462,13 @@ export default function PlacesMap({
       map.off('moveend', flyEndHandlerRef.current);
       flyEndHandlerRef.current = null;
     }
-    flightTagRef.current = flyRequest.exactZoom ? 'preset' : 'place';
+    const programmatic = Boolean(flyRequest.programmatic);
+    const keepFitPadding = Boolean(flyRequest.exactZoom && fitTop > 0);
+    flightTagRef.current = programmatic ? 'resize' : flyRequest.exactZoom ? 'preset' : 'place';
     const onFlyEnd = () => {
       flyEndHandlerRef.current = null;
       flightTagRef.current = null;
-      if (detailsOpenRef.current) return;
+      if (detailsOpenRef.current || keepFitPadding) return;
       const live = mapRef.current?.getMap();
       if (!live) return;
       const canvas = live.getCanvas();
@@ -443,22 +481,27 @@ export default function PlacesMap({
     // mapbox-gl 3.33 flyTo() stop()s any in-flight camera first and fires
     // moveend synchronously. Attach the listener after flyTo so that interrupt
     // does not consume this flight's cleanup. Preset flights also pass
-    // retainPadding: false (supported in 3.33) so global padding stays 0.
+    // retainPadding: false (supported in 3.33) so global padding stays 0,
+    // unless a compact-chrome fitTop is holding the Worldwide height floor.
     flyToThenOnMoveend(
       map,
       {
         center: [longitude, latitude],
         zoom,
-        duration: flyRequest.exactZoom ? CAMERA_DURATION.preset : CAMERA_DURATION.place,
+        duration: programmatic
+          ? 0
+          : flyRequest.exactZoom
+            ? CAMERA_DURATION.preset
+            : CAMERA_DURATION.place,
         easing: easeOutCubic,
         padding,
-        retainPadding: flyRequest.exactZoom ? false : undefined,
+        retainPadding: flyRequest.exactZoom ? keepFitPadding : undefined,
       },
       onFlyEnd
     );
     flyEndHandlerRef.current = onFlyEnd;
     onFlyComplete();
-  }, [collapseList, flyRequest, location, onFlyComplete, onUserCameraMove, panelOpen]);
+  }, [collapseList, fitTop, flyRequest, location, onFlyComplete, onUserCameraMove, panelOpen]);
 
   const zoomBy = (delta: number) => {
     const map = mapRef.current?.getMap();
@@ -600,8 +643,12 @@ export default function PlacesMap({
     (event: ViewStateChangeEvent) => {
       reportViewport();
       setClusterQueryTick((tick) => tick + 1);
-      if (isUserMapMove(event as { originalEvent?: unknown }, flightTagRef.current)) {
+      const tag = flightTagRef.current;
+      if (isUserMapMove(event as { originalEvent?: unknown }, tag)) {
         onUserCameraMove?.();
+      }
+      if (tag === 'resize') {
+        flightTagRef.current = null;
       }
     },
     [onUserCameraMove, reportViewport]
