@@ -7,12 +7,12 @@ import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
 import { BRAND } from '@/lib/brand';
 import {
   CAMERA_DURATION,
+  cameraMoveendEffects,
   canvasReadyForFlight,
   clearPaddingKeepView,
   createCanvasMachine,
   easeOutCubic,
   flyPadding,
-  isUserMapMove,
   NARROW_VIEWPORT,
   mapControlsRightPx,
   pinHintCenterX,
@@ -276,6 +276,13 @@ export default function PlacesMap({
     [flyRequest, location, slotSize.height, slotSize.width]
   );
 
+  const clearPaddingProgrammatic = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return false;
+    flightTagRef.current = 'resize';
+    return clearPaddingKeepView(map);
+  }, []);
+
   const requestMapResize = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
@@ -396,8 +403,8 @@ export default function PlacesMap({
     if (detailsOpen) return;
     const map = mapRef.current?.getMap();
     if (!map) return;
-    clearPaddingKeepView(map);
-  }, [detailsOpen]);
+    clearPaddingProgrammatic();
+  }, [clearPaddingProgrammatic, detailsOpen]);
 
   useEffect(() => {
     const map = mapRef.current?.getMap();
@@ -479,12 +486,12 @@ export default function PlacesMap({
   useEffect(() => {
     if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;
     const map = mapRef.current.getMap();
-    clearPaddingKeepView(map);
+    clearPaddingProgrammatic();
     // Visual canvas center, not Mapbox's padded getCenter() leftover from flyTo.
     const canvas = map.getCanvas();
     const point = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
     onMapCenter({ lat: point.lat, lng: point.lng });
-  }, [mapCenterRequest, onMapCenter]);
+  }, [clearPaddingProgrammatic, mapCenterRequest, onMapCenter]);
 
   useEffect(() => {
     if (!flyRequest || !mapRef.current) return;
@@ -544,15 +551,16 @@ export default function PlacesMap({
     const keepFitPadding = Boolean(flyRequest.exactZoom && flyFitTop > 0);
     flightTagRef.current = programmatic ? 'resize' : flyRequest.exactZoom ? 'preset' : 'place';
     // Shrink-first box is on screen. Resize, then one camera call — same path
-    // for animated and prefers-reduced-motion. Padding clear is silent (no jumpTo).
+    // for animated and prefers-reduced-motion. Padding clear may add one
+    // jumpTo so the visual centre stays put and moveend reports bounds.
     map.resize();
     const onFlyEnd = () => {
       const endedZoom = mapRef.current?.getMap()?.getZoom() ?? zoom;
       commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
-      flightTagRef.current = null;
-      const live = mapRef.current?.getMap();
-      if (live && !detailsOpenRef.current && !keepFitPadding) {
-        clearPaddingKeepView(live);
+      if (!detailsOpenRef.current && !keepFitPadding) {
+        clearPaddingProgrammatic();
+      } else {
+        flightTagRef.current = null;
       }
     };
     startCameraAnimation(
@@ -581,6 +589,7 @@ export default function PlacesMap({
     flyFitTop,
     flyRequest,
     location,
+    clearPaddingProgrammatic,
     onFlyComplete,
     onUserCameraMove,
     panelOpen,
@@ -591,7 +600,7 @@ export default function PlacesMap({
     const map = mapRef.current?.getMap();
     if (!map) return;
     if (!detailsOpen) {
-      clearPaddingKeepView(map);
+      clearPaddingProgrammatic();
     }
     onUserCameraMove?.();
     startCameraAnimation(
@@ -651,7 +660,7 @@ export default function PlacesMap({
         if (error || zoom == null) return;
         const map = mapRef.current?.getMap();
         if (map && !detailsOpen) {
-          clearPaddingKeepView(map);
+          clearPaddingProgrammatic();
         }
         onUserCameraMove?.();
         const live = mapRef.current?.getMap();
@@ -770,10 +779,11 @@ export default function PlacesMap({
   const handleMoveEnd = useCallback(
     (event: ViewStateChangeEvent) => {
       handleMove(event);
-      reportViewport();
-      setClusterQueryTick((tick) => tick + 1);
       const tag = flightTagRef.current;
-      if (isUserMapMove(event as { originalEvent?: unknown }, tag)) {
+      const effects = cameraMoveendEffects(event as { originalEvent?: unknown }, tag);
+      if (effects.reportBounds) reportViewport();
+      setClusterQueryTick((tick) => tick + 1);
+      if (effects.leavePreset) {
         onUserCameraMove?.();
       }
       if (tag === 'resize') {

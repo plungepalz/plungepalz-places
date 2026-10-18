@@ -524,6 +524,25 @@ export function isUserMapMove(
   return false;
 }
 
+/**
+ * moveend from a padding-clear jumpTo is programmatic (no chip flip) but
+ * must still refresh bounds / search / header.
+ */
+export function shouldReportViewport(flightTag?: string | null): boolean {
+  void flightTag;
+  return true;
+}
+
+export function cameraMoveendEffects(
+  event: { originalEvent?: unknown } | null | undefined,
+  flightTag?: string | null
+): { leavePreset: boolean; reportBounds: boolean } {
+  return {
+    leavePreset: isUserMapMove(event, flightTag),
+    reportBounds: shouldReportViewport(flightTag),
+  };
+}
+
 export interface MapResizeState {
   rafId: number | null;
 }
@@ -741,20 +760,25 @@ export function paddingIsZero(padding: CameraPadding | null | undefined): boolea
 
 export interface PaddingClearMap {
   getPadding: () => CameraPadding;
-  triggerRepaint?: () => void;
-  transform?: { padding?: CameraPadding };
+  getCanvas: () => { clientWidth: number; clientHeight: number };
+  unproject: (point: [number, number]) => { lng: number; lat: number };
+  jumpTo: (options: { center: [number, number]; padding: CameraPadding }) => unknown;
 }
 
 /**
- * Drop leftover flyTo padding without a camera call. `setCenter` / `jumpTo`
- * are camera methods (Mapbox `setCenter` runs `jumpTo` internally).
+ * Drop leftover flyTo padding without shifting what is on screen.
+ * Unproject the canvas centre (visual centre), then jumpTo that point with
+ * zero padding. Never write Mapbox's private `transform.padding` — that
+ * shifts the view by half the padding and fires no moveend.
  */
 export function clearPaddingKeepView(map: PaddingClearMap): boolean {
   if (paddingIsZero(map.getPadding())) return false;
-  if (map.transform) {
-    map.transform.padding = { ...ZERO_PADDING };
-  }
-  map.triggerRepaint?.();
+  const canvas = map.getCanvas();
+  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+  map.jumpTo({
+    center: [visual.lng, visual.lat],
+    padding: ZERO_PADDING,
+  });
   return true;
 }
 
