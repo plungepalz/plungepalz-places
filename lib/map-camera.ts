@@ -166,7 +166,7 @@ export type CanvasMachineEvent =
   | { type: 'flightProgress'; zoom: number }
   | { type: 'flightEnd'; zoom: number }
   | { type: 'pan'; zoom: number }
-  | { type: 'userZoom'; zoom: number }
+  | { type: 'userZoom'; zoom: number; prevZoom?: number }
   | { type: 'resizeNarrowFit'; viewport: SizeBox; targetZoom: number };
 
 export function fullCanvasBox(viewport: SizeBox): CanvasBox {
@@ -289,6 +289,11 @@ export function reduceCanvasMachine(
     case 'userZoom': {
       if (state.flightLocked) return state;
       if (!state.shortened || !isNarrowViewport(state.viewport.width)) return state;
+      const prevZoom = event.prevZoom ?? event.zoom;
+      // Zoom-out must never grow the canvas — stay short until a zoom-in
+      // reaches the full-height clamp. Growing on the way out jumps the
+      // map (top 177→0) and then Mapbox clamps the live zoom to ~0.814.
+      if (event.zoom <= prevZoom + 1e-9) return state;
       const clamp = mapboxHeightMinZoom(state.viewport.height);
       if (event.zoom >= clamp - 1e-9) {
         return {
@@ -326,6 +331,46 @@ export function shouldReapplyNarrowWorldwide(
 ): boolean {
   if (leftPreset || locationId !== 'worldwide' || !prev) return false;
   return !needsLowZoomCanvas(prev.width, prev.height) && needsLowZoomCanvas(next.width, next.height);
+}
+
+/**
+ * After a shrink + `map.resize()`, the live zoom is often still the
+ * full-height clamp (~0.814). Jump (or short ease) to the narrow width-fit
+ * whenever Worldwide is still selected — every breakpoint shrink, not only
+ * the first one.
+ */
+export function shouldJumpToNarrowWorldwideFit(
+  leftPreset: boolean,
+  locationId: string,
+  viewport: SizeBox,
+  liveZoom: number
+): boolean {
+  if (leftPreset || locationId !== 'worldwide') return false;
+  if (!needsLowZoomCanvas(viewport.width, viewport.height)) return false;
+  return liveZoom > narrowWidthFitZoom(viewport.width) + 1e-4;
+}
+
+/**
+ * Post-`map.resize()` gate: only jump once the shortened canvas is on
+ * screen. A width-only ResizeObserver tick can still see a 900px box.
+ */
+export function shouldApplyNarrowWorldwideAfterResize(input: {
+  pending: boolean;
+  leftPreset: boolean;
+  locationId: string;
+  viewport: SizeBox;
+  canvasHeight: number;
+  liveZoom: number;
+}): boolean {
+  if (!input.pending) return false;
+  if (input.leftPreset || input.locationId !== 'worldwide') return false;
+  if (input.canvasHeight >= input.viewport.height - 1) return false;
+  return shouldJumpToNarrowWorldwideFit(
+    input.leftPreset,
+    input.locationId,
+    input.viewport,
+    input.liveZoom
+  );
 }
 
 export type RgbaColor = [number, number, number, number];
@@ -844,13 +889,15 @@ export function scheduleMapResize(
   map: { resize: () => void } | null | undefined,
   state: MapResizeState,
   raf: (cb: FrameRequestCallback) => number,
-  cancel: (id: number) => void
+  cancel: (id: number) => void,
+  afterResize?: () => void
 ): void {
   if (!map) return;
   if (state.rafId != null) cancel(state.rafId);
   state.rafId = raf(() => {
     state.rafId = null;
     map.resize();
+    afterResize?.();
   });
 }
 
