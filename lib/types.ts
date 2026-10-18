@@ -132,6 +132,10 @@ export interface FlyRequest {
   /** Padding-aware easeTo (map pin + drawer) — keep zoom, do not mark as a user pan. */
   ease?: boolean;
   keepZoom?: boolean;
+  /**
+   * Breakpoint / container resize re-apply. Instant, and never a user move.
+   */
+  programmatic?: boolean;
 }
 
 function clamp(value: number, min: number, max: number): number {
