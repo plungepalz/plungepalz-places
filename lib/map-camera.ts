@@ -1137,20 +1137,39 @@ export function worldwideFraming(
 }
 
 /**
+ * Instant / reduced-motion cameras fire `moveend` inside flyTo/easeTo.
+ * Prefer `isMoving()`; fall back to `duration === 0` when the map stub
+ * does not expose it.
+ */
+function cameraMoveAlreadyIdle(
+  map: { isMoving?: () => boolean },
+  options: Record<string, unknown>
+): boolean {
+  return map.isMoving ? !map.isMoving() : options.duration === 0;
+}
+
+/**
  * mapbox-gl 3.33 `flyTo()` calls `stop()` first. If a flight is already running,
  * that fires `moveend` synchronously. A `once('moveend')` attached *before*
  * `flyTo` is consumed by the interrupt and never sees the new flight end.
- * Always call `flyTo` first, then attach the listener.
+ * Call `flyTo` first, then attach the listener — unless the camera is already
+ * idle (`duration: 0` or `prefers-reduced-motion` → `jumpTo`), in which case
+ * `moveend` already fired inside `flyTo` and we must run the handler now.
  */
 export function flyToThenOnMoveend(
   map: {
     flyTo: (options: Record<string, unknown>) => unknown;
     once: (event: string, handler: () => void) => unknown;
+    isMoving?: () => boolean;
   },
   options: Record<string, unknown>,
   onMoveend: () => void
 ): void {
   map.flyTo(options);
+  if (cameraMoveAlreadyIdle(map, options)) {
+    onMoveend();
+    return;
+  }
   map.once('moveend', onMoveend);
 }
 
@@ -1163,12 +1182,15 @@ export interface CameraControllerMap {
   easeTo: (options: Record<string, unknown>) => unknown;
   once: (event: string, handler: () => void) => unknown;
   off: (event: string, handler: () => void) => unknown;
+  isMoving?: () => boolean;
 }
 
 /**
  * Cancel the previous moveend handler, start flyTo or easeTo, then attach
  * the new listener. Same interrupt rule as flyToThenOnMoveend: attach after
  * start so mapbox-gl's synchronous stop()/moveend does not consume it.
+ * Duration 0 / reduced-motion already fired moveend inside the camera call,
+ * so run onEnd now and do not leave a second listener.
  */
 export function startCameraAnimation(
   map: CameraControllerMap,
@@ -1191,8 +1213,12 @@ export function startCameraAnimation(
   } else {
     map.easeTo(options);
   }
-  map.once('moveend', onMoveEnd);
   handlerRef.current = onMoveEnd;
+  if (cameraMoveAlreadyIdle(map, options)) {
+    onMoveEnd();
+    return;
+  }
+  map.once('moveend', onMoveEnd);
 }
 
 /** Screen X of a longitude when `centerLng` sits in the middle of the visible gap. */

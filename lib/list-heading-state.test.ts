@@ -5,6 +5,7 @@ import {
   headingZoomForSearch,
   listHeadingText,
   settleListHeadingRequest,
+  shouldApplySettledSearch,
   startListHeadingRequest,
 } from './list-heading-state';
 import { LOCATION_PRESETS } from './locations';
@@ -78,6 +79,36 @@ test('never pairs a new preset label with a stale count', () => {
   assert.ok(pendingText);
   assert.equal(pendingText.includes('United States'), false);
   assert.equal(pendingText, '7 places in Salt Lake City');
+});
+
+test('newest-first then older-second does not apply the stale list', () => {
+  let state = createListHeadingMachine();
+  state = startListHeadingRequest(state); // worldwide, id 1
+  state = startListHeadingRequest(state); // US, id 2
+
+  state = settleListHeadingRequest(
+    state,
+    2,
+    { shown: 59, total: 59, hasMore: false, places: usScalePlaces() },
+    { hasMap: true, zoom: unitedStates.zoom, location: unitedStates, leftPreset: false }
+  );
+  assert.equal(state.pending, false);
+  assert.equal(shouldApplySettledSearch(2, state), true);
+  assert.equal(listHeadingText(state.heading), '59 places in United States');
+
+  const afterStale = settleListHeadingRequest(
+    state,
+    1,
+    { shown: 82, total: 82, hasMore: false, places: placesIn('Scottsdale', 10) },
+    { hasMap: true, zoom: worldwide.zoom, location: worldwide, leftPreset: false }
+  );
+  // The old `if (settled.pending) return` guard lets this through: newest
+  // already settled, so pending is still false. The page must gate on id.
+  assert.equal(afterStale.pending, false);
+  assert.equal(shouldApplySettledSearch(1, afterStale), false);
+  assert.equal(listHeadingText(afterStale.heading), '59 places in United States');
+  assert.equal(afterStale.heading?.shown, 59);
+  assert.equal(afterStale.heading?.chipLabel, 'United States');
 });
 
 test('out-of-order responses are ignored; the latest request wins', () => {

@@ -59,9 +59,6 @@ export function settleListHeadingRequest(
     return state;
   }
   const locationName = listLocationName({
-    hasMap: context.hasMap,
-    zoom: context.zoom,
-    places: result.places,
     location: context.location,
     leftPreset: context.leftPreset,
   });
@@ -76,6 +73,18 @@ export function settleListHeadingRequest(
       hasMore: result.hasMore,
     },
   };
+}
+
+/**
+ * Apply list + heading only when this response is still the latest.
+ * `pending` is not enough: if the newest request settles first, a late
+ * older response leaves `pending === false` and would overwrite the list.
+ */
+export function shouldApplySettledSearch(
+  requestId: number,
+  machine: Pick<ListHeadingMachine, 'requestId'>
+): boolean {
+  return requestId === machine.requestId;
 }
 
 export function listHeadingText(snapshot: ListHeadingSnapshot | null, extraCount = 0): string | null {

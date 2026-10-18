@@ -879,6 +879,8 @@ test('Worldwide framing subtracts drawer right padding from the visible gap', ()
  */
 class InterruptibleMap {
   padding = { ...ZERO_PADDING };
+  /** When true, flyTo finishes synchronously like prefers-reduced-motion → jumpTo. */
+  reducedMotion = false;
   private flying = false;
   private pending: Array<() => void> = [];
 
@@ -899,18 +901,29 @@ class InterruptibleMap {
     for (const handler of handlers) handler();
   }
 
-  flyTo(options: { padding?: Partial<typeof ZERO_PADDING> }) {
+  flyTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
     if (this.flying) {
       this.flying = false;
       this.emitMoveend();
     }
-    this.flying = true;
     if (options.padding) {
       this.padding = { ...ZERO_PADDING, ...options.padding };
     }
+    // mapbox-gl 3.33: duration 0 (and reduced-motion jumpTo) fires moveend
+    // inside flyTo(), before a listener attached afterward can see it.
+    if (options.duration === 0 || this.reducedMotion) {
+      this.flying = false;
+      this.emitMoveend();
+      return;
+    }
+    this.flying = true;
   }
 
-  easeTo(options: { padding?: Partial<typeof ZERO_PADDING> }) {
+  isMoving() {
+    return this.flying;
+  }
+
+  easeTo(options: { padding?: Partial<typeof ZERO_PADDING>; duration?: number }) {
     this.flyTo(options);
   }
 
@@ -1166,4 +1179,68 @@ test('flyToThenOnMoveend still attaches after start', () => {
   assert.equal(ended, 0);
   map.endFlight();
   assert.equal(ended, 1);
+});
+
+test('instant flyTo (duration 0) runs the end handler even when moveend is synchronous', () => {
+  const map = new InterruptibleMap();
+  let ended = 0;
+  flyToThenOnMoveend(map, { duration: 0, padding: { ...ZERO_PADDING, left: 396 } }, () => {
+    ended += 1;
+    map.padding = { ...ZERO_PADDING };
+  });
+  assert.equal(ended, 1);
+  assert.equal(map.isMoving(), false);
+  assert.deepEqual(map.getPadding(), ZERO_PADDING);
+  map.endFlight();
+  assert.equal(ended, 1);
+});
+
+test('prefers-reduced-motion flyTo (sync moveend, duration > 0) still runs the end handler', () => {
+  const map = new InterruptibleMap();
+  map.reducedMotion = true;
+  let ended = 0;
+  flyToThenOnMoveend(map, { duration: 900 }, () => {
+    ended += 1;
+  });
+  assert.equal(ended, 1);
+  assert.equal(map.isMoving(), false);
+  map.endFlight();
+  assert.equal(ended, 1);
+});
+
+test('camera end handler fires exactly once for instant and animated moves', () => {
+  const handlerRef: { current: (() => void) | null } = { current: null };
+
+  const instant = new InterruptibleMap();
+  let instantEnds = 0;
+  startCameraAnimation(instant, handlerRef, 'flyTo', { duration: 0, center: [0, 0] }, () => {
+    instantEnds += 1;
+  });
+  assert.equal(instantEnds, 1);
+  assert.equal(instant.isMoving(), false);
+  instant.endFlight();
+  assert.equal(instantEnds, 1);
+
+  const reduced = new InterruptibleMap();
+  reduced.reducedMotion = true;
+  let reducedEnds = 0;
+  startCameraAnimation(reduced, handlerRef, 'easeTo', { duration: 560, center: [1, 1] }, () => {
+    reducedEnds += 1;
+  });
+  assert.equal(reducedEnds, 1);
+  assert.equal(reduced.isMoving(), false);
+  reduced.endFlight();
+  assert.equal(reducedEnds, 1);
+
+  const animated = new InterruptibleMap();
+  let animatedEnds = 0;
+  startCameraAnimation(animated, handlerRef, 'flyTo', { duration: 1800, center: [-20, 20] }, () => {
+    animatedEnds += 1;
+  });
+  assert.equal(animatedEnds, 0);
+  assert.equal(animated.isMoving(), true);
+  animated.endFlight();
+  assert.equal(animatedEnds, 1);
+  animated.endFlight();
+  assert.equal(animatedEnds, 1);
 });

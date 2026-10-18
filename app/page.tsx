@@ -14,6 +14,7 @@ import {
   listHeadingText,
   mapBoundsKey,
   settleListHeadingRequest,
+  shouldApplySettledSearch,
   startListHeadingRequest,
   type ListHeadingSnapshot,
 } from '@/lib/list-heading-state';
@@ -188,7 +189,7 @@ export default function HomePage() {
           context
         );
         headingMachineRef.current = settled;
-        if (settled.pending) return;
+        if (!shouldApplySettledSearch(requestId, headingMachineRef.current)) return;
         const returnedIds = new Set(response.places.map((place) => place.place_id));
         setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
         setServerPlaces((prev) => (append ? [...prev, ...response.places] : response.places));
@@ -198,10 +199,10 @@ export default function HomePage() {
         setHeading(settled.heading);
         setError(null);
       } catch (err) {
-        if (requestId !== headingMachineRef.current.requestId) return;
+        if (!shouldApplySettledSearch(requestId, headingMachineRef.current)) return;
         setError(isPlacesApiError(err) ? err.message : 'Search failed');
       } finally {
-        if (requestId === headingMachineRef.current.requestId) setIsLoading(false);
+        if (shouldApplySettledSearch(requestId, headingMachineRef.current)) setIsLoading(false);
       }
     },
     [buildParams]

@@ -345,7 +345,9 @@ export default function PlacesMap({
     flightTagRef.current = 'resize';
     map.jumpTo({ center: [camera.lng, camera.lat], zoom: camera.zoom });
     liveZoomRef.current = camera.zoom;
-  }, []);
+    commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: camera.zoom }));
+    flightTagRef.current = null;
+  }, [commitCanvas]);
 
   const requestMapResize = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -671,6 +673,9 @@ export default function PlacesMap({
           padding,
           retainPadding: keepFitPadding || !paddingIsZero(padding),
         };
+    // Instant flights (duration 0 / reduced motion) finish inside flyTo/easeTo
+    // and startCameraAnimation runs onFlyEnd now. Animated flights attach after
+    // start so stop() from an interrupt does not consume this cleanup.
     // Shrink-first already resized the short canvas. One capped move — padding
     // clear is silent (no jumpTo). onFlyComplete waits for the real moveend
     // so mid-flight stop()/resize cannot search.
