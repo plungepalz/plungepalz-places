@@ -34,11 +34,12 @@ import {
   cssColorFromPaint,
   evaluatePaintColor,
   formatCssRgb,
-  isPlausibleOceanColor,
   parseCssColor,
-  readWebGlRgba,
-  sampleMapOceanColor,
+  claimFlyNonce,
   defaultCompactList,
+  STREETS_LOW_ZOOM_OCEAN,
+  STREETS_LOW_ZOOM_OCEAN_MAX,
+  resolveWaterFillCss,
   hideListForWorldwidePreset,
   isUserMapMove,
   layoutInsets,
@@ -541,57 +542,20 @@ test('evaluatePaintColor uses the water interpolate at the current zoom', () => 
   };
   const zoomed = readMapWaterColor((layer, prop) => paint[layer]?.[prop], worldwideZoom);
   const last = readMapWaterColor((layer, prop) => paint[layer]?.[prop]);
-  assert.equal(zoomed, atWorldwide);
+  assert.equal(zoomed, STREETS_LOW_ZOOM_OCEAN);
   assert.equal(last, 'rgb(153, 221, 255)');
   assert.notEqual(zoomed, last);
   assert.deepEqual(formatCssRgb([97.2, 202.4, 255, 1]), 'rgb(97, 202, 255)');
-
-  const sampledOcean = 'rgb(104, 204, 255)';
-  assert.equal(
-    readMapWaterColor((layer, prop) => paint[layer]?.[prop], worldwideZoom, () => sampledOcean),
-    sampledOcean
-  );
-  assert.equal(
-    isPlausibleOceanColor([104, 204, 255, 1]),
-    true
-  );
-  assert.equal(isPlausibleOceanColor([153, 221, 255, 1]), true);
-  assert.equal(isPlausibleOceanColor([80, 140, 70, 1]), false);
-
-  const buffer = new Uint8Array(4);
-  const gl = {
-    drawingBufferWidth: 768,
-    drawingBufferHeight: 768,
-    readPixels: (
-      _x: number,
-      _y: number,
-      _w: number,
-      _h: number,
-      _format: number,
-      _type: number,
-      pixels: ArrayBufferView
-    ) => {
-      const out = pixels as Uint8Array;
-      out[0] = 104;
-      out[1] = 204;
-      out[2] = 255;
-      out[3] = 255;
-      buffer.set(out);
-    },
+  assert.equal(resolveWaterFillCss('rgb(153, 221, 255)', 0.58), STREETS_LOW_ZOOM_OCEAN);
+  assert.equal(resolveWaterFillCss('rgb(153, 221, 255)', STREETS_LOW_ZOOM_OCEAN_MAX), STREETS_LOW_ZOOM_OCEAN);
+  assert.equal(resolveWaterFillCss('rgb(153, 221, 255)', 11), 'rgb(153, 221, 255)');
+  const constantWater: Record<string, Record<string, unknown>> = {
+    water: { 'fill-color': 'hsl(200, 100%, 80%)' },
   };
-  assert.deepEqual(readWebGlRgba(gl, 10, 10), [104, 204, 255, 1]);
-  const canvas = {
-    width: 768,
-    height: 768,
-    clientWidth: 768,
-    clientHeight: 768,
-    getContext: (type: string) => (type === 'webgl2' || type === 'webgl' ? gl : null),
-  } as unknown as HTMLCanvasElement;
-  const sampled = sampleMapOceanColor({
-    getCanvas: () => canvas,
-    project: () => ({ x: 120, y: 200 }),
-  });
-  assert.equal(sampled, 'rgb(104, 204, 255)');
+  assert.equal(
+    readMapWaterColor((layer, prop) => constantWater[layer]?.[prop], worldwideZoom),
+    STREETS_LOW_ZOOM_OCEAN
+  );
 });
 
 test('768x1024 Worldwide zoom fits 360° of longitude in the canvas width', () => {
@@ -748,6 +712,47 @@ test('flyTo options use a gentle curve and an explicit duration cap', () => {
   assert.equal(isShortCameraHop('drawer'), true);
   assert.equal(isShortCameraHop('preset'), false);
   assert.equal(isShortCameraHop('place'), false);
+});
+
+test('a preset produces exactly one capped camera call', () => {
+  const flyToCalls: Array<Record<string, unknown>> = [];
+  const easeToCalls: Array<Record<string, unknown>> = [];
+  const map = {
+    flyTo: (options: Record<string, unknown>) => {
+      flyToCalls.push(options);
+    },
+    easeTo: (options: Record<string, unknown>) => {
+      easeToCalls.push(options);
+    },
+    once: () => undefined,
+    off: () => undefined,
+  };
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const started: { current: number | null } = { current: null };
+  const tokyo = { lng: 139.6503, lat: 35.6762, zoom: 11 };
+  const worldwide = { lng: -20, lat: 20, zoom: 0.585 };
+  const nonce = 42;
+  assert.equal(claimFlyNonce(started, nonce), true);
+  const move = pickCameraAnimation('preset', tokyo, worldwide);
+  assert.equal(move.method, 'flyTo');
+  assert.ok(move.duration <= CAMERA_DURATION_CAP.presetMax);
+  startCameraAnimation(
+    map,
+    handlerRef,
+    move.method,
+    cameraFlyOptions({
+      center: [worldwide.lng, worldwide.lat],
+      zoom: worldwide.zoom,
+      duration: move.duration,
+    })
+  );
+  assert.equal(claimFlyNonce(started, nonce), false);
+  assert.equal(flyToCalls.length, 1);
+  assert.equal(easeToCalls.length, 0);
+  assert.equal(flyToCalls[0].duration, move.duration);
+  assert.equal(flyToCalls[0].speed, undefined);
+  assert.ok(move.duration + 200 <= 2600);
+  assert.equal(claimFlyNonce(started, nonce + 1), true);
 });
 
 test('place and preset flights stay inside the 1.2–1.8s / 2.2s caps', () => {

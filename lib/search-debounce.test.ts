@@ -5,6 +5,7 @@ import {
   createDebounced,
   searchAfterViewportChange,
   searchDebounceMs,
+  viewportSearchIdentity,
 } from './search-debounce';
 
 test('moveend search waits longer than filter search', () => {
@@ -13,6 +14,13 @@ test('moveend search waits longer than filter search', () => {
   assert.equal(searchDebounceMs('moveend'), 450);
   assert.equal(searchDebounceMs('filters'), 200);
   assert.equal(searchDebounceMs('skip'), 0);
+});
+
+test('preset chip search ignores bbox churn so the header can settle with the flight', () => {
+  assert.equal(viewportSearchIdentity(false, 'tokyo-bounds'), 'preset-chip');
+  assert.equal(viewportSearchIdentity(false, 'worldwide-bounds'), 'preset-chip');
+  assert.equal(viewportSearchIdentity(true, 'a'), 'a');
+  assert.notEqual(viewportSearchIdentity(true, 'a'), viewportSearchIdentity(true, 'b'));
 });
 
 test('user map moves debounce on moveend; preset chips search without bbox', () => {

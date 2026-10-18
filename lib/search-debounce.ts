@@ -7,6 +7,14 @@ export const SEARCH_DEBOUNCE_MS = {
 
 export type SearchTrigger = 'skip' | 'filters' | 'moveend';
 
+/**
+ * While a location chip is active, ignore bbox churn from the preset flight
+ * so the header can settle with the chip search (fly + 200ms ≤ ~2.6s).
+ */
+export function viewportSearchIdentity(leftPreset: boolean, boundsKey: string): string {
+  return leftPreset ? boundsKey : 'preset-chip';
+}
+
 export function searchAfterViewportChange(input: {
   leftPreset: boolean;
   boundsKey: string;

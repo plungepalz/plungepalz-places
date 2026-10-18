@@ -420,91 +420,31 @@ export function cssColorFromPaint(value: unknown): string | null {
   return null;
 }
 
-/** Open-ocean lng/lats used to sample the Streets canvas after render. */
-export const OCEAN_SAMPLE_LNG_LATS: ReadonlyArray<[number, number]> = [
-  [-150, 0],
-  [-140, -25],
-  [-20, -30],
-  [70, -20],
-];
+/**
+ * streets-v12 `water` fill-color is a constant light stop (153, 221, 255).
+ * At Worldwide / low zoom the rendered Pacific is darker — measured
+ * (105, 204, 255). Do not ReadPixels; that stalls the GPU.
+ */
+export const STREETS_LOW_ZOOM_OCEAN = 'rgb(105, 204, 255)';
+/** water-depth in streets-v12 is active below zoom 8; darker ocean below 6. */
+export const STREETS_LOW_ZOOM_OCEAN_MAX = 6;
 
-const GL_RGBA = 0x1908;
-const GL_UNSIGNED_BYTE = 0x1401;
-
-/** Streets ocean is blue-dominant; reject land / empty / pin pixels. */
-export function isPlausibleOceanColor([r, g, b, a]: RgbaColor): boolean {
-  return a >= 0.5 && b >= 180 && b >= g && g >= r && r <= 180 && g <= 240;
-}
-
-export interface WebGlPixelSource {
-  drawingBufferWidth: number;
-  drawingBufferHeight: number;
-  readPixels: (
-    x: number,
-    y: number,
-    width: number,
-    height: number,
-    format: number,
-    type: number,
-    pixels: ArrayBufferView
-  ) => void;
-}
-
-/** WebGL origin is bottom-left; `x`/`y` are drawing-buffer pixels from the top-left. */
-export function readWebGlRgba(gl: WebGlPixelSource, x: number, y: number): RgbaColor | null {
-  const px = Math.floor(x);
-  const py = Math.floor(gl.drawingBufferHeight - y - 1);
-  if (px < 0 || py < 0 || px >= gl.drawingBufferWidth || py >= gl.drawingBufferHeight) {
-    return null;
-  }
-  const pixel = new Uint8Array(4);
-  gl.readPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-  if (pixel[0] === 0 && pixel[1] === 0 && pixel[2] === 0 && pixel[3] === 0) return null;
-  return [pixel[0], pixel[1], pixel[2], pixel[3] / 255];
-}
-
-export interface OceanSampleMap {
-  getCanvas: () => HTMLCanvasElement;
-  project: (lngLat: [number, number]) => { x: number; y: number };
-}
-
-/** Sample one open-ocean canvas pixel so the leftover fill matches Streets as drawn. */
-export function sampleMapOceanColor(map: OceanSampleMap): string | null {
-  const canvas = map.getCanvas();
-  const gl =
-    (canvas.getContext('webgl2') as WebGlPixelSource | null) ||
-    (canvas.getContext('webgl') as WebGlPixelSource | null);
-  if (!gl) return null;
-  const scaleX = canvas.width / Math.max(canvas.clientWidth || canvas.width, 1);
-  const scaleY = canvas.height / Math.max(canvas.clientHeight || canvas.height, 1);
-  for (const lngLat of OCEAN_SAMPLE_LNG_LATS) {
-    const point = map.project(lngLat);
-    const pixel = readWebGlRgba(gl, point.x * scaleX, point.y * scaleY);
-    if (pixel && isPlausibleOceanColor(pixel)) return formatCssRgb(pixel);
-  }
-  return null;
+/** Fill behind a shortened canvas: evaluate at zoom, then the low-zoom constant. */
+export function resolveWaterFillCss(evaluated: string | null, zoom: number): string | null {
+  if (zoom <= STREETS_LOW_ZOOM_OCEAN_MAX) return STREETS_LOW_ZOOM_OCEAN;
+  return evaluated;
 }
 
 /**
  * Map water / background fill from the loaded style — not page beige.
  * Tries `water` then `background`. Pass `zoom` (`map.getZoom()`) so
- * zoom-interpolated streets water matches the ocean as rendered.
- * Prefer a sampled ocean pixel when the canvas has finished drawing:
- * streets-v12 water can be a constant while the ocean at this zoom is darker.
+ * zoom-interpolated water is evaluated at the current camera, and the
+ * streets low-zoom ocean constant covers the Worldwide leftover band.
  */
 export function readMapWaterColor(
   getPaint: (layer: string, prop: string) => unknown,
-  zoom?: number,
-  sample?: () => string | null
+  zoom?: number
 ): string | null {
-  if (sample) {
-    try {
-      const sampled = sample();
-      if (sampled) return sampled;
-    } catch {
-      /* WebGL buffer may be empty until the first idle/zoomend */
-    }
-  }
   const attempts: Array<[string, string]> = [
     ['water', 'fill-color'],
     ['water', 'background-color'],
@@ -513,8 +453,9 @@ export function readMapWaterColor(
   for (const [layer, prop] of attempts) {
     try {
       const value = getPaint(layer, prop);
-      const css =
+      const evaluated =
         zoom == null ? cssColorFromPaint(value) : evaluatePaintColor(value, zoom);
+      const css = zoom == null ? evaluated : resolveWaterFillCss(evaluated, zoom);
       if (css) return css;
     } catch {
       /* layer may be missing until the style loads */
@@ -816,6 +757,13 @@ export function pickCameraAnimation(
     return { method: 'easeTo', duration: CAMERA_DURATION.placeShort };
   }
   return { method: 'flyTo', duration: cappedFlyDuration(kind, separation) };
+}
+
+/** True once per flyRequest.nonce so a layout/zoom rerender cannot start a second camera. */
+export function claimFlyNonce(started: { current: number | null }, nonce: number): boolean {
+  if (started.current === nonce) return false;
+  started.current = nonce;
+  return true;
 }
 
 /**

@@ -33,7 +33,11 @@ import {
   syncMapHoveredCard,
 } from '@/lib/map-style';
 import { createPlaceHoverController } from '@/lib/place-hover';
-import { searchAfterViewportChange, searchDebounceMs } from '@/lib/search-debounce';
+import {
+  searchAfterViewportChange,
+  searchDebounceMs,
+  viewportSearchIdentity,
+} from '@/lib/search-debounce';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import { formatBbox, wrapLng } from '@/lib/types';
@@ -208,10 +212,13 @@ export default function HomePage() {
     setMapZoom(zoom);
   }, []);
 
+  const searchIdentity = viewportSearchIdentity(leftPreset, mapBoundsKey(mapBounds));
+
   useEffect(() => {
+    const bounds = mapBoundsRef.current;
     const decision = searchAfterViewportChange({
       leftPreset,
-      boundsKey: mapBoundsKey(mapBounds),
+      boundsKey: mapBoundsKey(leftPreset ? bounds : null),
       lastPresetKey: lastPresetBoundsKeyRef.current,
     });
     if (decision.action === 'skip') return;
@@ -219,10 +226,10 @@ export default function HomePage() {
       lastPresetBoundsKeyRef.current = decision.nextPresetKey;
     }
     const handle = window.setTimeout(() => {
-      performSearch(0, false, decision.action === 'moveend' ? mapBounds : null);
+      performSearch(0, false, decision.action === 'moveend' ? bounds : null);
     }, searchDebounceMs(decision.action));
     return () => window.clearTimeout(handle);
-  }, [performSearch, leftPreset, mapBounds]);
+  }, [performSearch, leftPreset, searchIdentity]);
 
   useEffect(() => {
     if (!successMessage) return;

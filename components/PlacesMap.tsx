@@ -10,6 +10,7 @@ import {
   ZERO_PADDING,
   cameraEaseOptions,
   cameraFlyOptions,
+  claimFlyNonce,
   flyPadding,
   isUserMapMove,
   NARROW_VIEWPORT,
@@ -19,7 +20,6 @@ import {
   pinHintCenterX,
   presetCamera,
   readMapWaterColor,
-  sampleMapOceanColor,
   scheduleMapResize,
   startCameraAnimation,
   worldwideFraming,
@@ -243,6 +243,7 @@ export default function PlacesMap({
   const mapBoxRef = useRef<HTMLDivElement>(null);
   const flyEndHandlerRef = useRef<(() => void) | null>(null);
   const flightTagRef = useRef<string | null>(null);
+  const startedFlyNonceRef = useRef<number | null>(null);
   const [imagesReady, setImagesReady] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
   const [highlightedClusterId, setHighlightedClusterId] = useState<number | null>(null);
@@ -284,6 +285,7 @@ export default function PlacesMap({
   const requestMapResize = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    if (flightTagRef.current === 'preset') return;
     flightTagRef.current = 'resize';
     scheduleMapResize(map, resizeStateRef.current, requestAnimationFrame, cancelAnimationFrame);
   }, []);
@@ -291,16 +293,11 @@ export default function PlacesMap({
   const applyWaterColor = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
-    const apply = () => {
-      const color = readMapWaterColor(
-        (layer, prop) => map.getPaintProperty(layer, prop as never),
-        map.getZoom(),
-        () => sampleMapOceanColor(map)
-      );
-      if (color) setWaterColor((prev) => (prev === color ? prev : color));
-    };
-    apply();
-    requestAnimationFrame(apply);
+    const color = readMapWaterColor(
+      (layer, prop) => map.getPaintProperty(layer, prop as never),
+      map.getZoom()
+    );
+    if (color) setWaterColor((prev) => (prev === color ? prev : color));
   }, []);
 
   useLayoutEffect(() => {
@@ -483,6 +480,7 @@ export default function PlacesMap({
 
   useEffect(() => {
     if (!flyRequest || !mapRef.current) return;
+    if (!claimFlyNonce(startedFlyNonceRef, flyRequest.nonce)) return;
     const map = mapRef.current.getMap();
     const currentZoom = map.getZoom();
     const planned = lowZoomCanvasLayout(slotSize, layoutZoom);
@@ -747,6 +745,8 @@ export default function PlacesMap({
   }, [imagesReady, locationPickMode, onHoverPlace]);
 
   const handleMove = useCallback((event: ViewStateChangeEvent) => {
+    const tag = flightTagRef.current;
+    if (tag === 'preset' || tag === 'programmatic' || tag === 'resize') return;
     const nextZoom = event.viewState.zoom;
     setLiveZoom((prev) => (prev != null && Math.abs(prev - nextZoom) < 1e-6 ? prev : nextZoom));
   }, []);
@@ -833,7 +833,7 @@ export default function PlacesMap({
         mapboxAccessToken={accessToken}
         attributionControl
         renderWorldCopies
-        {...{ fadeDuration: MAP_FADE_DURATION_MS, preserveDrawingBuffer: true }}
+        {...{ fadeDuration: MAP_FADE_DURATION_MS }}
         style={{ width: '100%', height: '100%' }}
         interactiveLayerIds={
           imagesReady
