@@ -75,6 +75,7 @@ export default function HomePage() {
   const [mapCenterRequest, setMapCenterRequest] = useState<number | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [flyRequest, setFlyRequest] = useState<FlyRequest | null>(null);
+  const [mapCameraBusy, setMapCameraBusy] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
@@ -220,7 +221,7 @@ export default function HomePage() {
       leftPreset,
       boundsKey: mapBoundsKey(leftPreset ? bounds : null),
       lastPresetKey: lastPresetBoundsKeyRef.current,
-      cameraBusy: Boolean(flyRequest),
+      cameraBusy: Boolean(flyRequest) || mapCameraBusy,
     });
     if (decision.action === 'skip') return;
     if (decision.nextPresetKey != null) {
@@ -230,7 +231,7 @@ export default function HomePage() {
       performSearch(0, false, decision.action === 'moveend' ? bounds : null);
     }, searchDebounceMs(decision.action));
     return () => window.clearTimeout(handle);
-  }, [flyRequest, performSearch, leftPreset, searchIdentity]);
+  }, [flyRequest, mapCameraBusy, performSearch, leftPreset, searchIdentity]);
 
   useEffect(() => {
     if (!successMessage) return;
@@ -470,6 +471,7 @@ export default function HomePage() {
           onHoverPlace={handlePinHover}
           onViewportChange={handleViewportChange}
           onUserCameraMove={handleUserCameraMove}
+          onCameraBusy={setMapCameraBusy}
           hintTop={pinHintTop}
           mapboxToken={mapboxToken}
           collapseList={collapseList}

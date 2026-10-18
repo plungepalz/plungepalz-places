@@ -865,19 +865,71 @@ export interface PaddingClearMap {
 }
 
 /**
- * Drop leftover flyTo padding without a jumpTo/flyTo/easeTo. Testers count
- * those as a second camera call; assign the transform and recenter silently.
+ * Drop leftover flyTo padding without a camera call. `setCenter` / `jumpTo`
+ * are camera methods (Mapbox `setCenter` runs `jumpTo` internally).
  */
 export function clearPaddingKeepView(map: PaddingClearMap): boolean {
   if (paddingIsZero(map.getPadding())) return false;
-  const canvas = map.getCanvas();
-  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
   if (map.transform) {
     map.transform.padding = { ...ZERO_PADDING };
   }
-  map.setCenter?.([visual.lng, visual.lat]);
   map.triggerRepaint?.();
   return true;
+}
+
+/** Live container size after `map.resize()` — never a React width captured before the breakpoint. */
+export function readMeasuredViewport(
+  el: { clientWidth: number; clientHeight: number } | null | undefined,
+  fallback?: SizeBox | null
+): SizeBox | null {
+  if (el && el.clientWidth >= 2 && el.clientHeight >= 2) {
+    return { width: el.clientWidth, height: el.clientHeight };
+  }
+  return fallback ?? null;
+}
+
+export function mercatorYFromLat(lat: number): number {
+  const sin = Math.sin((lat * Math.PI) / 180);
+  return 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI);
+}
+
+export function mercatorLatFromY(y: number): number {
+  const n = Math.PI * (1 - 2 * y);
+  return (180 / Math.PI) * Math.atan(Math.sinh(n));
+}
+
+/**
+ * Mapbox padding puts `center` in the padded gap. Fly with zero padding to
+ * the matching unpadded center so the visual stays and no follow-up jumpTo
+ * / setCenter is required.
+ */
+export function unpaddedCenter(
+  center: { lng: number; lat: number },
+  zoom: number,
+  padding: CameraPadding
+): { lng: number; lat: number } {
+  const dx = ((padding.left ?? 0) - (padding.right ?? 0)) / 2;
+  const dy = ((padding.top ?? 0) - (padding.bottom ?? 0)) / 2;
+  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return { lng: center.lng, lat: center.lat };
+  const worldPx = mercatorWorldPx(zoom);
+  const lng = wrapLng(center.lng - (dx / worldPx) * 360);
+  const lat = mercatorLatFromY(mercatorYFromLat(center.lat) - dy / worldPx);
+  return { lng, lat };
+}
+
+/** Preset camera from the size measured after resize, folded into one unpadded fly. */
+export function presetFlyCamera(
+  location: { id: string; lat: number; lng: number; zoom: number; radiusKm: number },
+  viewport: SizeBox,
+  panelOpen = false
+): { zoom: number; lng: number; lat: number } {
+  const collapse = isNarrowViewport(viewport.width);
+  const padding = flyPadding(panelOpen, true, viewport, collapse, 0);
+  const framed = presetCamera(location, viewport.width, viewport.height, {
+    left: padding.left,
+    right: padding.right,
+  });
+  return { zoom: framed.zoom, ...unpaddedCenter(framed, framed.zoom, padding) };
 }
 
 export interface MapResizeState {

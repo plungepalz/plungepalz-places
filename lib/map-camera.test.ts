@@ -61,6 +61,9 @@ import {
   needsLowZoomCanvas,
   pinHintCenterX,
   presetCamera,
+  presetFlyCamera,
+  readMeasuredViewport,
+  unpaddedCenter,
   readMapWaterColor,
   reduceCanvasMachine,
   scheduleMapResize,
@@ -669,6 +672,42 @@ test('768→1280→768 re-applies the narrow Worldwide camera after resize settl
   assert.ok(Math.abs((state.anchorZoom ?? 0) - target) < 1e-9);
 });
 
+test('resize 768→1280→768→1440 yields each width\'s own camera', () => {
+  const loc = { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 };
+  const sequence = [
+    { width: 768, height: 900 },
+    { width: 1280, height: 900 },
+    { width: 768, height: 900 },
+    { width: 1440, height: 900 },
+  ];
+  const cameras = sequence.map((measured) => {
+    const afterResize = readMeasuredViewport(
+      { clientWidth: measured.width, clientHeight: measured.height },
+      sequence[0]
+    );
+    assert.ok(afterResize);
+    assert.equal(afterResize.width, measured.width);
+    return presetFlyCamera(loc, afterResize);
+  });
+  assert.equal(cameras[0].lng, WORLDWIDE_COMFORT_LNG);
+  assert.ok(Math.abs(cameras[0].zoom - narrowWidthFitZoom(768)) < 1e-9);
+  assert.ok(Math.abs(cameras[1].lng - -72.4) < 0.2, `1280 lng ${cameras[1].lng}`);
+  assert.deepEqual(
+    { lng: cameras[2].lng, lat: cameras[2].lat, zoom: cameras[2].zoom },
+    { lng: cameras[0].lng, lat: cameras[0].lat, zoom: cameras[0].zoom }
+  );
+  assert.ok(Math.abs(cameras[3].zoom - 1.028) < 0.01, `1440 zoom ${cameras[3].zoom}`);
+  assert.notEqual(cameras[3].lng, cameras[0].lng);
+  assert.notEqual(cameras[3].lng, cameras[1].lng);
+  const stale768At1280 = presetFlyCamera(loc, sequence[0]);
+  assert.notEqual(cameras[1].lng, stale768At1280.lng);
+  const padding1280 = flyPadding(false, true, sequence[1], false, 0);
+  const framed1280 = presetCamera(loc, 1280, 900, { left: padding1280.left, right: padding1280.right });
+  const visual1280 = unpaddedCenter(framed1280, framed1280.zoom, padding1280);
+  assert.ok(Math.abs(visual1280.lng - -72.4) < 0.2);
+  assert.ok(Math.abs(framed1280.lng - 6.8) < 0.2);
+});
+
 test('canvas machine: resize 1280→768 shrinks then lands at the narrow fit', () => {
   const desktop = { width: 1280, height: 900 };
   const compact = { width: 768, height: 900 };
@@ -979,7 +1018,7 @@ test('clearPaddingKeepView does not issue jumpTo/flyTo/easeTo', () => {
   assert.equal(calls.jumpTo, 0);
   assert.equal(calls.flyTo, 0);
   assert.equal(calls.easeTo, 0);
-  assert.equal(calls.setCenter, 1);
+  assert.equal(calls.setCenter, 0);
   assert.deepEqual(padded.transform.padding, ZERO_PADDING);
 });
 
@@ -995,23 +1034,37 @@ test('in-flight tags suppress viewport reports until the final moveend', () => {
   assert.equal(shouldReportViewport(null), true);
 });
 
-test('a preset produces exactly one capped camera call', () => {
-  const flyToCalls: Array<Record<string, unknown>> = [];
-  const easeToCalls: Array<Record<string, unknown>> = [];
+test('a preset produces exactly one camera method call including setCenter/jumpTo/easeTo', () => {
+  const methods: string[] = [];
   const map = {
     flyTo: (options: Record<string, unknown>) => {
-      flyToCalls.push(options);
+      methods.push('flyTo');
+      return options;
     },
-    easeTo: (options: Record<string, unknown>) => {
-      easeToCalls.push(options);
+    easeTo: () => {
+      methods.push('easeTo');
+    },
+    jumpTo: () => {
+      methods.push('jumpTo');
+    },
+    setCenter: () => {
+      methods.push('setCenter');
     },
     once: () => undefined,
     off: () => undefined,
+    getPadding: () => ({ ...ZERO_PADDING, left: 396 }),
+    getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
+    unproject: () => ({ lng: -20, lat: 20 }),
+    triggerRepaint: () => undefined,
+    transform: { padding: { ...ZERO_PADDING, left: 396 } },
   };
   const handlerRef: { current: (() => void) | null } = { current: null };
   const started: { current: number | null } = { current: null };
   const tokyo = { lng: 139.6503, lat: 35.6762, zoom: 11 };
-  const worldwide = { lng: -20, lat: 20, zoom: 0.585 };
+  const worldwide = presetFlyCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    { width: 1440, height: 900 }
+  );
   const nonce = 42;
   assert.equal(claimFlyNonce(started, nonce), true);
   const move = pickCameraAnimation('preset', tokyo, worldwide);
@@ -1025,13 +1078,15 @@ test('a preset produces exactly one capped camera call', () => {
       center: [worldwide.lng, worldwide.lat],
       zoom: worldwide.zoom,
       duration: move.duration,
-    })
+      padding: ZERO_PADDING,
+      retainPadding: false,
+    }),
+    () => {
+      clearPaddingKeepView(map);
+    }
   );
   assert.equal(claimFlyNonce(started, nonce), false);
-  assert.equal(flyToCalls.length, 1);
-  assert.equal(easeToCalls.length, 0);
-  assert.equal(flyToCalls[0].duration, move.duration);
-  assert.equal(flyToCalls[0].speed, undefined);
+  assert.deepEqual(methods, ['flyTo']);
   assert.ok(move.duration + 200 <= 2600);
   assert.equal(claimFlyNonce(started, nonce + 1), true);
 });
@@ -1053,7 +1108,9 @@ test('preset cleanup does not add a jumpTo after the single flyTo', () => {
     getPadding: () => ({ ...ZERO_PADDING, left: 396 }),
     getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
     unproject: () => ({ lng: -20, lat: 20 }),
-    setCenter: () => undefined,
+    setCenter: () => {
+      jumpToCalls.push({ setCenter: true });
+    },
     transform: { padding: { ...ZERO_PADDING, left: 396 } },
   };
   const handlerRef: { current: (() => void) | null } = { current: null };
@@ -1065,8 +1122,8 @@ test('preset cleanup does not add a jumpTo after the single flyTo', () => {
       center: [-20, 20],
       zoom: 1.15,
       duration: 1800,
-      padding: { ...ZERO_PADDING, left: 396 },
-      retainPadding: true,
+      padding: ZERO_PADDING,
+      retainPadding: false,
     }),
     () => {
       clearPaddingKeepView(map);

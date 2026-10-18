@@ -42,6 +42,27 @@ test('user map moves debounce on moveend; preset chips search without bbox', () 
   );
 });
 
+test('cluster expand is a programmatic camera and keeps the header old→final', () => {
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'cluster-mid',
+      lastPresetKey: 'us',
+      cameraBusy: true,
+    }),
+    { action: 'skip' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'cluster-final',
+      lastPresetKey: 'us',
+      cameraBusy: false,
+    }),
+    { action: 'moveend' }
+  );
+});
+
 test('programmatic camera suppresses moveend search so the header stays old→final', () => {
   assert.deepEqual(
     searchAfterViewportChange({
