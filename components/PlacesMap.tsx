@@ -17,8 +17,10 @@ import {
   pickCameraAnimation,
   pinHintCenterX,
   presetCamera,
+  readMapWaterColor,
   scheduleMapResize,
   startCameraAnimation,
+  worldwideCanvasLayout,
   type MapResizeState,
 } from '@/lib/map-camera';
 import type { LocationPreset } from '@/lib/locations';
@@ -65,6 +67,8 @@ interface PlacesMapProps {
   fitTop?: number;
   /** Bump after list expand/collapse so the canvas is re-measured. */
   layoutEpoch?: number;
+  /** False while a location chip is active; true after a user camera move. */
+  leftPreset?: boolean;
   location?: LocationPreset;
 }
 
@@ -230,10 +234,12 @@ export default function PlacesMap({
   collapseList = false,
   fitTop = 0,
   layoutEpoch = 0,
+  leftPreset = false,
   location,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const mapBoxRef = useRef<HTMLDivElement>(null);
   const flyEndHandlerRef = useRef<(() => void) | null>(null);
   const flightTagRef = useRef<string | null>(null);
   const [imagesReady, setImagesReady] = useState(false);
@@ -244,11 +250,22 @@ export default function PlacesMap({
     hover: null,
     selected: null,
   });
+  const [outerSize, setOuterSize] = useState(() => ({
+    width: typeof window === 'undefined' ? 1280 : window.innerWidth,
+    height: typeof window === 'undefined' ? 800 : window.innerHeight,
+  }));
   const [canvasSize, setCanvasSize] = useState(() => ({
     width: typeof window === 'undefined' ? 1280 : window.innerWidth,
     height: typeof window === 'undefined' ? 800 : window.innerHeight,
   }));
+  const [waterColor, setWaterColor] = useState<string | undefined>(undefined);
   const resizeStateRef = useRef<MapResizeState>({ rafId: null });
+  const canvasLayout = worldwideCanvasLayout(outerSize, {
+    isWorldwide: location?.id === 'worldwide',
+    leftPreset,
+    fitTop,
+  });
+  const flyFitTop = canvasLayout.top > 0 ? 0 : fitTop;
 
   const requestMapResize = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -257,8 +274,27 @@ export default function PlacesMap({
     scheduleMapResize(map, resizeStateRef.current, requestAnimationFrame, cancelAnimationFrame);
   }, []);
 
+  const applyWaterColor = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    const color = readMapWaterColor((layer, prop) =>
+      map.getPaintProperty(layer, prop as never)
+    );
+    if (color) setWaterColor(color);
+  }, []);
+
   useLayoutEffect(() => {
     const el = containerRef.current;
+    if (!el) return;
+    const update = () => setOuterSize({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = mapBoxRef.current;
     if (!el) return;
     const update = () => {
       setCanvasSize({ width: el.clientWidth, height: el.clientHeight });
@@ -275,13 +311,13 @@ export default function PlacesMap({
         resizeState.rafId = null;
       }
     };
-  }, [requestMapResize]);
+  }, [requestMapResize, canvasLayout.top, canvasLayout.height]);
 
   useEffect(() => {
     requestMapResize();
     const handle = window.setTimeout(requestMapResize, LIST_EXPAND_RESIZE_MS);
     return () => window.clearTimeout(handle);
-  }, [collapseList, fitTop, layoutEpoch, requestMapResize]);
+  }, [collapseList, fitTop, layoutEpoch, leftPreset, location?.id, requestMapResize]);
 
   const geojson = useMemo(() => placesToGeoJSON(places), [places]);
 
@@ -317,12 +353,14 @@ export default function PlacesMap({
     muteMotorwayLayers(map);
     flightTagRef.current = 'resize';
     map.resize();
+    applyWaterColor();
+    map.once('idle', applyWaterColor);
     void Promise.all([
       ensurePinImage(map, 'pin-place', pinSvg(BRAND.orange, true)),
       ensurePinImage(map, 'pin-place-active', pinSvg(BRAND.orangeSelected, true)),
     ]).finally(() => setImagesReady(true));
     reportViewport();
-  }, [reportViewport]);
+  }, [applyWaterColor, reportViewport]);
 
   const detailsOpen = panelOpen && !locationPickMode;
   const detailsOpenRef = useRef(detailsOpen);
@@ -431,14 +469,14 @@ export default function PlacesMap({
     const currentZoom = map.getZoom();
     const container = map.getContainer();
     const size = { width: container.clientWidth, height: container.clientHeight };
-    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size, collapseList, fitTop);
+    const padding = flyPadding(panelOpen, flyRequest.exactZoom, size, collapseList, flyFitTop);
     let zoom = flyRequest.keepZoom ? currentZoom : resolveFlyZoom(currentZoom, flyRequest);
     let longitude = flyRequest.longitude;
     let latitude = flyRequest.latitude;
     if (!flyRequest.exactZoom && !flyRequest.ease && !flyRequest.programmatic) {
       onUserCameraMove?.();
     }
-    const cameraHeight = Math.max(size.height - (flyRequest.exactZoom ? fitTop : 0), 1);
+    const cameraHeight = Math.max(size.height - (flyRequest.exactZoom ? flyFitTop : 0), 1);
     if (flyRequest.exactZoom && location) {
       const camera = presetCamera(location, size.width, cameraHeight, {
         left: padding.left,
@@ -465,7 +503,7 @@ export default function PlacesMap({
       latitude = camera.lat;
     }
     const programmatic = Boolean(flyRequest.programmatic);
-    const keepFitPadding = Boolean(flyRequest.exactZoom && fitTop > 0);
+    const keepFitPadding = Boolean(flyRequest.exactZoom && flyFitTop > 0);
     flightTagRef.current = programmatic
       ? 'resize'
       : flyRequest.exactZoom
@@ -516,7 +554,7 @@ export default function PlacesMap({
       onFlyEnd
     );
     onFlyComplete();
-  }, [collapseList, fitTop, flyRequest, location, onFlyComplete, onUserCameraMove, panelOpen]);
+  }, [collapseList, flyFitTop, flyRequest, location, onFlyComplete, onUserCameraMove, panelOpen]);
 
   const zoomBy = (delta: number) => {
     const map = mapRef.current?.getMap();
@@ -730,7 +768,18 @@ export default function PlacesMap({
   }
 
   return (
-    <div ref={containerRef} data-places-map className="relative h-full w-full">
+    <div
+      ref={containerRef}
+      data-places-map
+      className="relative h-full w-full"
+      style={waterColor ? { backgroundColor: waterColor } : undefined}
+    >
+      <div
+        ref={mapBoxRef}
+        data-map-canvas
+        className="absolute inset-x-0 overflow-hidden"
+        style={{ top: canvasLayout.top, height: canvasLayout.height }}
+      >
       <MapGL
         ref={mapRef}
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
@@ -795,6 +844,7 @@ export default function PlacesMap({
           </Marker>
         )}
       </MapGL>
+      </div>
 
       {pinHint}
       {zoomControls}

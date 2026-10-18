@@ -462,6 +462,7 @@ export default function HomePage() {
           collapseList={collapseList}
           fitTop={fitTop}
           layoutEpoch={listExpanded ? 1 : 0}
+          leftPreset={leftPreset}
           location={location}
         />
       </div>

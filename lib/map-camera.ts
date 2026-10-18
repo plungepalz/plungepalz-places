@@ -82,12 +82,88 @@ export function defaultCompactList(canvasWidth: number): boolean {
 
 /**
  * Height at which Mapbox can reach a width-fit Worldwide zoom.
- * The live map no longer shrinks its container to this cap — it fills behind
- * the chrome and uses `fitTop` padding so the void is map, not page beige.
+ * Used when the live canvas is shortened so `log2(h/512)` does not sit above
+ * `log2(w/512)`.
  */
 export function worldwideMapHeightCap(canvasWidth: number, availableHeight: number): number {
   if (!isNarrowViewport(canvasWidth)) return availableHeight;
   return Math.min(availableHeight, canvasWidth);
+}
+
+/**
+ * Narrow Worldwide only: width-fit zoom is below Mapbox's height clamp, so the
+ * canvas must be no taller than the viewport width.
+ */
+export function shouldCapWorldwideCanvas(
+  width: number,
+  height: number,
+  isWorldwide: boolean,
+  leftPreset: boolean
+): boolean {
+  if (leftPreset || !isWorldwide || !isNarrowViewport(width)) return false;
+  const widthFitZoom = Math.log2(Math.max(width, 1) / MERCATOR_TILE_SIZE);
+  return widthFitZoom < mapboxHeightMinZoom(height) - 1e-9;
+}
+
+export interface CanvasBox {
+  top: number;
+  height: number;
+}
+
+/**
+ * Position the Mapbox canvas so a narrow Worldwide view can reach
+ * `log2(w/512)`. Height is about the viewport width; `fitTop` offsets it so
+ * the populated world sits in the visible area below the bars. Other widths
+ * stay full-bleed.
+ */
+export function worldwideCanvasLayout(
+  viewport: SizeBox,
+  opts: { isWorldwide: boolean; leftPreset: boolean; fitTop: number }
+): CanvasBox {
+  if (!shouldCapWorldwideCanvas(viewport.width, viewport.height, opts.isWorldwide, opts.leftPreset)) {
+    return { top: 0, height: Math.max(viewport.height, 1) };
+  }
+  const fitTop = Math.max(0, Math.min(opts.fitTop, Math.max(viewport.height - 1, 0)));
+  const height = Math.min(viewport.width, Math.max(viewport.height - fitTop, 1));
+  return { top: fitTop, height };
+}
+
+/** Pull a CSS color out of a Mapbox paint value (constant or expression). */
+export function cssColorFromPaint(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const v = value.trim();
+    return v && v !== 'transparent' ? v : null;
+  }
+  if (Array.isArray(value)) {
+    for (let i = value.length - 1; i >= 0; i -= 1) {
+      const found = cssColorFromPaint(value[i]);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * Map water / background fill from the loaded style — not page beige.
+ * Tries `water` then `background`.
+ */
+export function readMapWaterColor(
+  getPaint: (layer: string, prop: string) => unknown
+): string | null {
+  const attempts: Array<[string, string]> = [
+    ['water', 'fill-color'],
+    ['water', 'background-color'],
+    ['background', 'background-color'],
+  ];
+  for (const [layer, prop] of attempts) {
+    try {
+      const css = cssColorFromPaint(getPaint(layer, prop));
+      if (css) return css;
+    } catch {
+      /* layer may be missing until the style loads */
+    }
+  }
+  return null;
 }
 
 /** Mapbox meters/pixel at zoom 0 on the equator, scaled by latitude. */
