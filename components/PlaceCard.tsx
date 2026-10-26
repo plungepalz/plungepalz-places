@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import { isApproved } from '@/lib/approval';
 import { formatLocation, formatPlaceType } from '@/lib/labels';
 import type { PlaceSearchResult } from '@/lib/types';
@@ -8,20 +9,18 @@ import CoverImage from './CoverImage';
 interface PlaceCardProps {
   place: PlaceSearchResult;
   isSelected: boolean;
-  isHovered?: boolean;
   isFavorited: boolean;
-  onSelect: () => void;
-  onHover: (hover: boolean) => void;
-  onToggleFavorite: () => void;
+  onSelectPlace: (placeId: string) => void;
+  onHoverPlace: (placeId: string | null) => void;
+  onToggleFavorite: (placeId: string) => void;
 }
 
-export default function PlaceCard({
+function PlaceCard({
   place,
   isSelected,
-  isHovered = false,
   isFavorited,
-  onSelect,
-  onHover,
+  onSelectPlace,
+  onHoverPlace,
   onToggleFavorite,
 }: PlaceCardProps) {
   const locationLine = formatLocation(place.city, place.state_province);
@@ -30,24 +29,23 @@ export default function PlaceCard({
       data-place-id={place.place_id}
       data-place-card
       data-selected={isSelected ? 'true' : 'false'}
-      data-hovered={isHovered ? 'true' : 'false'}
-      className={`relative rounded-2xl border bg-white transition-all duration-200 ${
-        isSelected
-          ? 'border-brand shadow-md ring-2 ring-brand-soft'
-          : isHovered
-            ? 'border-brand/50 bg-brand-soft/40 shadow-sm'
-            : 'border-transparent hover:border-gray-200 hover:shadow-sm'
+      className={`place-card relative min-h-[98px] rounded-2xl border bg-white ${
+        isSelected ? 'place-card-selected border-brand shadow-md ring-2 ring-brand-soft' : 'border-transparent'
       }`}
-      onMouseEnter={() => onHover(true)}
-      onMouseLeave={() => onHover(false)}
-      onFocus={() => onHover(true)}
+      onMouseEnter={() => onHoverPlace(place.place_id)}
+      onMouseLeave={() => onHoverPlace(null)}
+      onFocus={() => onHoverPlace(place.place_id)}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          onHover(false);
+          onHoverPlace(null);
         }
       }}
     >
-      <button type="button" onClick={onSelect} className="w-full cursor-pointer rounded-2xl p-3 text-left">
+      <button
+        type="button"
+        onClick={() => onSelectPlace(place.place_id)}
+        className="w-full cursor-pointer rounded-2xl p-3 text-left"
+      >
         <div className="flex gap-3 pr-8">
           <CoverImage
             src={place.cover_image}
@@ -72,7 +70,7 @@ export default function PlaceCard({
         type="button"
         aria-label={isFavorited ? 'Remove favorite' : 'Save favorite'}
         aria-pressed={isFavorited}
-        onClick={onToggleFavorite}
+        onClick={() => onToggleFavorite(place.place_id)}
         className="absolute right-2 top-2 rounded-full p-1 text-gray-400 hover:bg-brand-soft hover:text-brand"
       >
         <svg
@@ -92,3 +90,5 @@ export default function PlaceCard({
     </div>
   );
 }
+
+export default memo(PlaceCard);

@@ -5,12 +5,15 @@ import {
   listHeadingText,
   settleListHeadingRequest,
   shouldApplySettledSearch,
+  shouldCommitSearchUi,
   startListHeadingRequest,
 } from './list-heading-state';
 import { LOCATION_PRESETS } from './locations';
+import { lastKeyAfterLeavingPreset, searchAfterViewportChange } from './search-debounce';
 import {
   DRAWER_OCCUPIED,
   DRAWER_WIDTH,
+  DESKTOP_LIST_OVERLAP,
   LIST_PANEL_RIGHT,
   MAP_CONTROL_MARGIN,
   MAP_CONTROL_SIZE,
@@ -19,25 +22,72 @@ import {
   PANEL_PADDING_RIGHT,
   WORLDWIDE_COMFORT_LNG,
   ZERO_PADDING,
+  CAMERA_DURATION,
+  CAMERA_DURATION_CAP,
+  CAMERA_FLY,
+  clusterExpandCamera,
+  cameraEaseOptions,
+  cameraFlyOptions,
+  cameraReachedTarget,
+  cameraSeparation,
+  cappedFlyDuration,
+  attachPointerHoldClearListeners,
+  attachUserFlightInputListeners,
+  beginUserGesture,
+  classifyFlightEnd,
+  shouldApplyFlightEndToCanvas,
+  clusterPointerMoved,
+  createGestureBoundsState,
+  isGenuineClusterClick,
+  isGestureSearchPending,
+  shouldFlushGestureBounds,
+  shouldHoldPointerForFlight,
+  shouldReapplyNarrowFitAfterFlight,
+  shouldStampUserInputDuringFlight,
+  isCameraKey,
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
   cameraMoveendEffects,
-  canvasReadyForFlight,
-  clearPaddingKeepView,
+  isProgrammaticCanvasMove,
+  isProgrammaticFlightTag,
+  isMapControlTarget,
+  isMapboxKeyboardTarget,
   isUserGestureEvent,
+  isShortCameraHop,
+  isShortPlaceHop,
   paddingIsZero,
-  shouldClearPaddingAfterFlight,
+  pickCameraAnimation,
+  shouldGrowCanvasForZoom,
+  shouldQueueClusterExpand,
   shouldReportViewport,
+  shouldSearchOnUserMoveend,
+  abandonCameraAnimation,
   startCameraAnimation,
+  type CameraEndReason,
+  type FlightEndKind,
   MERCATOR_TILE_SIZE,
+  LIST_EXPAND_MS,
   LIST_EXPAND_RESIZE_MS,
   WORLD_FIT_EDGE_PAD,
+  canvasBoxEquals,
+  canvasFillStyle,
+  canvasHostStyle,
   canvasLayoutAfterPan,
   canvasLayoutIgnoresList,
+  canvasReadyForFlight,
+  clearPaddingKeepView,
   createCanvasMachine,
   cssColorFromPaint,
+  evaluatePaintColor,
+  formatCssRgb,
+  parseCssColor,
+  claimFlyNonce,
+  nextFlyNonce,
   defaultCompactList,
+  STREETS_LOW_ZOOM_OCEAN,
+  STREETS_LOW_ZOOM_OCEAN_MAX,
+  resolveWaterFillCss,
   hideListForWorldwidePreset,
   isUserMapMove,
   layoutInsets,
@@ -45,17 +95,27 @@ import {
   listPanelRightEdge,
   lowZoomCanvasLayout,
   mapControlsRightPx,
+  mapboxChromeInsetLeft,
+  mapboxChromeLayout,
+  mapboxChromeRects,
+  MAPBOX_ATTRIB,
+  MAPBOX_LOGO,
   mapboxHeightMinZoom,
+  mapNeedsResize,
   mercatorWorldPx,
   narrowWidthFitZoom,
   needsLowZoomCanvas,
   pinHintCenterX,
   presetCamera,
+  presetFlyCamera,
+  readMeasuredViewport,
+  unpaddedCenter,
   readMapWaterColor,
   reduceCanvasMachine,
   scheduleMapResize,
   shouldCollapseList,
   shouldApplyNarrowWorldwideAfterResize,
+  shouldClearPaddingAfterFlight,
   shouldJumpToNarrowWorldwideFit,
   shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
@@ -103,6 +163,48 @@ function assertPlacesInGap(
     );
   }
 }
+
+test('Mapbox chrome sits to the right of the open list panel', () => {
+  assert.equal(DESKTOP_LIST_OVERLAP, 1280);
+  assert.equal(mapboxChromeInsetLeft(1440, false), LIST_PANEL_RIGHT);
+  assert.equal(mapboxChromeInsetLeft(1280, false), LIST_PANEL_RIGHT);
+  assert.equal(mapboxChromeInsetLeft(1440, true), 0);
+  assert.equal(mapboxChromeInsetLeft(768, true), 0);
+  assert.deepEqual(mapboxChromeLayout({ canvasWidth: 1440, collapseList: false }), {
+    left: LIST_PANEL_RIGHT,
+    bottom: 0,
+  });
+  assert.ok(mapboxChromeInsetLeft(1440, false) >= 380);
+});
+
+test('Mapbox logo and attribution stay visible above the 768 list sheet', () => {
+  const height = 900;
+  const header = { left: 0, right: 768, top: 0, bottom: 112 };
+  const sheet = { left: 16, right: 16 + 380, top: 112, bottom: height - 16 };
+  const shown = mapboxChromeRects(768, height, false);
+  assert.ok(shown.logo.left >= sheet.right, '768 shown: logo sits in the visible map gap');
+  assert.ok(!rectsOverlap(shown.logo, sheet), '768 shown: logo vs sheet');
+  assert.ok(!rectsOverlap(shown.attrib, sheet), '768 shown: attrib vs sheet');
+  assert.ok(!rectsOverlap(shown.logo, shown.attrib), '768 shown: logo vs attribution');
+  assert.ok(!rectsOverlap(shown.logo, header), '768 shown: logo vs header');
+  assert.ok(!rectsOverlap(shown.attrib, header), '768 shown: attrib vs header');
+  assert.ok(mapboxChromeLayout({ canvasWidth: 768, collapseList: false }).bottom > 0);
+
+  const hidden = mapboxChromeRects(768, height, true);
+  assert.equal(hidden.logo.left, MAPBOX_LOGO.pad);
+  assert.ok(!rectsOverlap(hidden.logo, header), '768 hidden: logo vs header');
+  assert.ok(!rectsOverlap(hidden.logo, hidden.attrib), '768 hidden: logo vs attribution');
+
+  for (const width of [1280, 1440] as const) {
+    const desktop = mapboxChromeRects(width, height, false);
+    const desktopSheet = { left: 16, right: 16 + 380, top: 104, bottom: height - 16 };
+    assert.equal(desktop.logo.left, LIST_PANEL_RIGHT + MAPBOX_LOGO.pad);
+    assert.ok(!rectsOverlap(desktop.logo, desktopSheet), `${width}: logo vs list`);
+    assert.ok(!rectsOverlap(desktop.logo, desktop.attrib), `${width}: logo vs attrib`);
+    assert.equal(mapboxChromeLayout({ canvasWidth: width, collapseList: false }).bottom, 0);
+  }
+  assert.ok(MAPBOX_ATTRIB.width > 0);
+});
 
 test('list panel right edge matches the floating list (16 + 380)', () => {
   assert.equal(LIST_PANEL_RIGHT, 396);
@@ -175,6 +277,19 @@ for (const width of [768, 1280, 1440] as const) {
   });
 }
 
+test('pin-plus-drawer padding keeps the selected pin off the drawer edge', () => {
+  for (const width of [1280, 1440]) {
+    const padding = flyPadding(true, false, { width, height: 900 });
+    const drawerLeft = width - DRAWER_OCCUPIED;
+    const paddedRight = width - padding.right;
+    assert.ok(
+      drawerLeft - paddedRight >= 24,
+      `${width}: padded map should sit ≥24px left of the drawer (gap=${drawerLeft - paddedRight})`
+    );
+    assert.ok(padding.right >= DRAWER_OCCUPIED);
+  }
+});
+
 test('flyTo padding tracks collapsed list at 768 and full list at 1280/1440', () => {
   const narrow = flyPadding(true, false, { width: 768, height: 900 });
   assert.equal(narrow.left, 0);
@@ -218,9 +333,71 @@ test('resize and programmatic camera never count as a user move', () => {
   assert.equal(isUserMapMove({ originalEvent: { type: 'resize' } }, 'preset'), false);
   assert.equal(isUserMapMove({ originalEvent: { type: 'orientationchange' } }), false);
   assert.equal(isUserMapMove({}, 'resize'), false);
-  assert.equal(isUserMapMove({ originalEvent: { type: 'mouseup' } }, 'resize'), false);
   assert.equal(isUserMapMove({}, 'programmatic'), false);
   assert.equal(isUserMapMove({ originalEvent: { type: 'wheel' } }), true);
+});
+
+test('slow inertial wheel leaves the preset and reports bounds without originalEvent', () => {
+  const inertial = cameraMoveendEffects({}, null, { userInputActive: true, zoomChanged: true });
+  assert.equal(inertial.leavePreset, true);
+  assert.equal(inertial.reportBounds, true);
+  assert.equal(isUserMapMove({}, null, { zoomChanged: true }), false);
+  assert.equal(isUserMapMove({}, 'resize', { zoomChanged: true }), false);
+  assert.equal(isUserMapMove({}, 'resize', { userInputActive: true }), true);
+
+  const leftoverResize = cameraMoveendEffects({}, 'resize');
+  assert.equal(leftoverResize.leavePreset, false);
+
+  let lastKey = 'preset:united-states';
+  const ticks = ['bbox-a', 'bbox-b', 'bbox-c'];
+  const searches: string[] = [];
+  for (const boundsKey of ticks) {
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey,
+      lastPresetKey: lastKey,
+      cameraBusy: false,
+    });
+    if (decision.action === 'skip') continue;
+    lastKey = boundsKey;
+    searches.push(boundsKey);
+  }
+  assert.deepEqual(searches, ticks, 'none of the small moveends may be swallowed');
+});
+
+test('user wheel zoom-in leaves Worldwide and bounds-searches even with a leftover resize tag', () => {
+  const wheel = { originalEvent: { type: 'wheel' } };
+  const effects = cameraMoveendEffects(wheel, 'resize');
+  assert.equal(isUserMapMove(wheel, 'resize'), true);
+  assert.equal(isUserMapMove(wheel, 'programmatic'), true);
+  assert.equal(effects.leavePreset, true);
+  assert.equal(effects.reportBounds, true);
+
+  // The regrow's own resize-tagged jumpTo / map.resize() has no gesture.
+  const leaked = cameraMoveendEffects({}, 'resize');
+  assert.equal(leaked.leavePreset, false);
+  assert.equal(leaked.reportBounds, true);
+
+  let leftPreset = false;
+  if (effects.leavePreset) leftPreset = true;
+  assert.equal(leftPreset, true);
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset,
+      boundsKey: 'zoomed-16-places',
+      lastPresetKey: '',
+      cameraBusy: false,
+    }),
+    { action: 'moveend', nextPresetKey: 'zoomed-16-places' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: '',
+    }),
+    { action: 'filters', nextPresetKey: 'preset-chip' }
+  );
 });
 
 test('resize does not flip the chip to Map area', () => {
@@ -239,6 +416,15 @@ test('resize does not flip the chip to Map area', () => {
   assert.equal(leftPreset, false);
   if (isUserMapMove({ originalEvent: { type: 'mouseup' } })) onUserCameraMove();
   assert.equal(leftPreset, true);
+});
+
+test('mapNeedsResize is false when the canvas already matches the host', () => {
+  const canvas = { clientWidth: 768, clientHeight: 704 };
+  const host = { clientWidth: 768, clientHeight: 704 };
+  assert.equal(mapNeedsResize(canvas, host), false);
+  assert.equal(mapNeedsResize({ clientWidth: 768, clientHeight: 900 }, host), true);
+  assert.equal(mapNeedsResize(null, host), true);
+  assert.equal(mapNeedsResize({ clientWidth: 0, clientHeight: 0 }, host), true);
 });
 
 test('scheduleMapResize coalesces to one map.resize() per frame', () => {
@@ -288,7 +474,13 @@ test('presetCamera re-frames Worldwide when the breakpoint changes', () => {
   assert.equal(at768.lng, WORLDWIDE_COMFORT_LNG);
   assert.ok(at1280.zoom > at768.zoom);
   assert.notEqual(at1280.lng, at768.lng);
-  assert.equal(LIST_EXPAND_RESIZE_MS, 220);
+  assert.equal(LIST_EXPAND_MS, 280);
+  assert.ok(LIST_EXPAND_RESIZE_MS > LIST_EXPAND_MS);
+});
+
+test('Show/Hide map.resize() waits until after the max-height transition', () => {
+  assert.equal(LIST_EXPAND_MS, 280);
+  assert.ok(LIST_EXPAND_RESIZE_MS >= LIST_EXPAND_MS);
 });
 
 test('flyPadding exactZoom uses fitTop so the map can fill behind the chrome', () => {
@@ -498,6 +690,253 @@ test('canvas machine: wheel zoom past the clamp grows the canvas once', () => {
   assert.ok(short < 900);
 });
 
+test('programmatic non-Worldwide prepareFlight grows the short canvas immediately', () => {
+  const viewport = { width: 768, height: 900 };
+  const world = narrowWidthFitZoom(768);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: world,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: world });
+  assert.equal(state.shortened, true);
+  assert.equal(state.box.top, 196);
+  assert.equal(shouldGrowCanvasForZoom(11), true);
+  assert.equal(shouldGrowCanvasForZoom(world), false);
+
+  const locate = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: 11 });
+  assert.equal(locate.shortened, false);
+  assert.equal(locate.flightLocked, true);
+  assert.deepEqual(locate.box, { top: 0, height: 900 });
+  assert.ok(canvasReadyForFlight(locate.box, locate.box));
+
+  const card = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: 12 });
+  assert.deepEqual(card.box, { top: 0, height: 900 });
+
+  const cluster = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: 8 });
+  assert.deepEqual(cluster.box, { top: 0, height: 900 });
+
+  const zoomPastFloor = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: world + 1 });
+  assert.deepEqual(zoomPastFloor.box, { top: 0, height: 900 });
+});
+
+test('768 city then Worldwide mid-flight keeps the short canvas; one camera call; no snap', () => {
+  const viewport = { width: 768, height: 900 };
+  const london = LOCATION_PRESETS.find((item) => item.id === 'london')!;
+  const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
+  const cityCam = presetCamera(london, 768, 900, { left: 0, right: 0 });
+  const worldCam = presetCamera(worldwide, 768, 900, { left: 0, right: 0 });
+  assert.ok(cityCam.zoom > 1);
+  assert.ok(worldCam.zoom < mapboxHeightMinZoom(900));
+
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: cityCam.zoom,
+  });
+  assert.equal(state.shortened, false);
+  assert.deepEqual(state.box, { top: 0, height: 900 });
+
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: worldCam.zoom });
+  const short = state.box;
+  assert.equal(state.shortened, true);
+  assert.ok(short.height < 900);
+  assert.ok(short.top > 0);
+  assert.ok(mapboxHeightMinZoom(short.height) <= worldCam.zoom + 1e-9);
+  assert.equal(canvasReadyForFlight(short, short), true);
+
+  const map = new InterruptibleMap();
+  map.width = 768;
+  map.height = 900;
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const cityReasons: CameraEndReason[] = [];
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [cityCam.lng, cityCam.lat],
+      zoom: cityCam.zoom,
+      duration: 2000,
+      padding: ZERO_PADDING,
+    }),
+    (reason = 'complete') => {
+      cityReasons.push(reason);
+      const kind = classifyFlightEnd({ animationReason: reason, userInputActive: false });
+      assert.equal(kind, 'replaced');
+      assert.equal(shouldApplyFlightEndToCanvas(kind), false);
+      const grown = reduceCanvasMachine(state, { type: 'flightEnd', zoom: 4 });
+      assert.equal(grown.box.height, 900);
+      state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: 4, replaced: true });
+    }
+  );
+  assert.equal(map.methods.filter((method) => method === 'flyTo').length, 1);
+
+  const beforeWorldwide = map.methods.length;
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [worldCam.lng, worldCam.lat],
+      zoom: worldCam.zoom,
+      duration: 2000,
+      padding: ZERO_PADDING,
+    }),
+    (reason = 'complete') => {
+      const kind = classifyFlightEnd({ animationReason: reason, userInputActive: false });
+      assert.equal(kind, 'complete');
+      if (shouldApplyFlightEndToCanvas(kind)) {
+        state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: worldCam.zoom });
+      }
+    }
+  );
+  assert.deepEqual(cityReasons, ['interrupted']);
+  assert.equal(map.methods.length - beforeWorldwide, 1, 'exactly 1 camera call for the new preset');
+  assert.equal(map.methods.at(-1), 'flyTo');
+  assert.ok(!map.methods.includes('jumpTo'));
+  assert.deepEqual(state.box, short, 'replaced city end must not grow the canvas');
+
+  for (const zoom of [cityCam.zoom, 8, 4, 2, 1.1, worldCam.zoom]) {
+    state = reduceCanvasMachine(state, { type: 'flightProgress', zoom });
+    assert.deepEqual(state.box, short, `canvas grew at live zoom ${zoom}`);
+  }
+
+  map.endFlight();
+  assert.deepEqual(state.box, short, 'no snap after landing');
+  assert.equal(state.shortened, true);
+  assert.ok(!map.methods.includes('jumpTo'));
+});
+
+test('768 Worldwide then city mid-flight grows the canvas once before the city flight', () => {
+  const viewport = { width: 768, height: 900 };
+  const tokyo = LOCATION_PRESETS.find((item) => item.id === 'tokyo')!;
+  const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
+  const cityCam = presetCamera(tokyo, 768, 900, { left: 0, right: 0 });
+  const worldCam = presetCamera(worldwide, 768, 900, { left: 0, right: 0 });
+
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: worldCam.zoom,
+  });
+  assert.equal(state.shortened, true);
+  const short = state.box;
+
+  const map = new InterruptibleMap();
+  map.width = 768;
+  map.height = 900;
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const worldReasons: CameraEndReason[] = [];
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [worldCam.lng, worldCam.lat],
+      zoom: worldCam.zoom,
+      duration: 2000,
+      padding: ZERO_PADDING,
+    }),
+    (reason = 'complete') => {
+      worldReasons.push(reason);
+      const kind = classifyFlightEnd({ animationReason: reason, userInputActive: false });
+      assert.equal(shouldApplyFlightEndToCanvas(kind), false);
+      state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: worldCam.zoom, replaced: true });
+    }
+  );
+
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: cityCam.zoom });
+  assert.equal(state.shortened, false);
+  assert.deepEqual(state.box, { top: 0, height: 900 });
+  assert.ok(short.height < 900);
+
+  const beforeCity = map.methods.length;
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [cityCam.lng, cityCam.lat],
+      zoom: cityCam.zoom,
+      duration: 2000,
+      padding: ZERO_PADDING,
+    }),
+    (reason = 'complete') => {
+      const kind = classifyFlightEnd({ animationReason: reason, userInputActive: false });
+      if (shouldApplyFlightEndToCanvas(kind)) {
+        state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: cityCam.zoom });
+      }
+    }
+  );
+  assert.deepEqual(worldReasons, ['interrupted']);
+  assert.equal(map.methods.length - beforeCity, 1, 'exactly 1 camera call for the city preset');
+  assert.deepEqual(state.box, { top: 0, height: 900 }, 'Worldwide interrupt must not re-shorten');
+  assert.ok(!map.methods.includes('jumpTo'));
+
+  map.endFlight();
+  assert.equal(state.shortened, false);
+  assert.deepEqual(state.box, { top: 0, height: 900 });
+});
+
+test('flightEnd at zoom > 1 never leaves an empty band', () => {
+  const viewport = { width: 768, height: 900 };
+  const world = narrowWidthFitZoom(768);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: world,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: world });
+  assert.ok(state.box.top > 0);
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: 11 });
+  assert.equal(state.shortened, false);
+  assert.deepEqual(state.box, { top: 0, height: 900 });
+});
+
+test('user pan at the narrow-world zoom keeps the short canvas', () => {
+  const viewport = { width: 768, height: 900 };
+  const world = narrowWidthFitZoom(768);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: world,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: world });
+  const short = state.box;
+  state = reduceCanvasMachine(state, { type: 'pan', zoom: world });
+  assert.deepEqual(state.box, short);
+  assert.equal(state.shortened, true);
+});
+
+test('768 Worldwide shrink-first lands at 0.459 / 704px / top 196', () => {
+  const viewport = { width: 768, height: 900 };
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    768,
+    900,
+    { left: 0, right: 0 }
+  );
+  const target = narrowWidthFitZoom(768);
+  assert.ok(Math.abs(camera.zoom - target) < 1e-9);
+  assert.ok(Math.abs(camera.zoom - 0.459) < 0.002);
+  const state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: camera.zoom,
+    viewport,
+  });
+  assert.equal(state.box.height, 704);
+  assert.equal(state.box.top, 196);
+  assert.ok(mapboxHeightMinZoom(state.box.height) <= camera.zoom + 1e-9);
+  assert.ok(canvasReadyForFlight(state.box, state.box));
+  assert.equal(canvasReadyForFlight({ top: 0, height: 900 }, state.box), false);
+  const host = canvasHostStyle(state.box);
+  assert.equal(host.height, 704);
+  assert.equal(host.transform, 'translate3d(0, 196px, 0)');
+  const fill = canvasFillStyle(state.box, STREETS_LOW_ZOOM_OCEAN);
+  assert.deepEqual(fill, { height: 196, backgroundColor: STREETS_LOW_ZOOM_OCEAN });
+  assert.equal(canvasFillStyle({ top: 0, height: 900 }, STREETS_LOW_ZOOM_OCEAN), null);
+  const grown = canvasHostStyle({ top: 0, height: 900 });
+  assert.equal(grown.transform, 'none');
+  assert.equal(grown.height, 900);
+  assert.equal(canvasBoxEquals(state.box, { top: 196, height: 704 }), true);
+});
+
 test('canvas machine: wheel zoom-out never grows the short canvas', () => {
   const viewport = { width: 768, height: 900 };
   const target = narrowWidthFitZoom(768);
@@ -606,6 +1045,42 @@ test('768→1280→768 re-applies the narrow Worldwide camera after resize settl
   assert.ok(Math.abs((state.anchorZoom ?? 0) - target) < 1e-9);
 });
 
+test('resize 768→1280→768→1440 yields each width\'s own camera', () => {
+  const loc = { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 };
+  const sequence = [
+    { width: 768, height: 900 },
+    { width: 1280, height: 900 },
+    { width: 768, height: 900 },
+    { width: 1440, height: 900 },
+  ];
+  const cameras = sequence.map((measured) => {
+    const afterResize = readMeasuredViewport(
+      { clientWidth: measured.width, clientHeight: measured.height },
+      sequence[0]
+    );
+    assert.ok(afterResize);
+    assert.equal(afterResize.width, measured.width);
+    return presetFlyCamera(loc, afterResize);
+  });
+  assert.equal(cameras[0].lng, WORLDWIDE_COMFORT_LNG);
+  assert.ok(Math.abs(cameras[0].zoom - narrowWidthFitZoom(768)) < 1e-9);
+  assert.ok(Math.abs(cameras[1].lng - -72.4) < 0.2, `1280 lng ${cameras[1].lng}`);
+  assert.deepEqual(
+    { lng: cameras[2].lng, lat: cameras[2].lat, zoom: cameras[2].zoom },
+    { lng: cameras[0].lng, lat: cameras[0].lat, zoom: cameras[0].zoom }
+  );
+  assert.ok(Math.abs(cameras[3].zoom - 1.028) < 0.01, `1440 zoom ${cameras[3].zoom}`);
+  assert.notEqual(cameras[3].lng, cameras[0].lng);
+  assert.notEqual(cameras[3].lng, cameras[1].lng);
+  const stale768At1280 = presetFlyCamera(loc, sequence[0]);
+  assert.notEqual(cameras[1].lng, stale768At1280.lng);
+  const padding1280 = flyPadding(false, true, sequence[1], false, 0);
+  const framed1280 = presetCamera(loc, 1280, 900, { left: padding1280.left, right: padding1280.right });
+  const visual1280 = unpaddedCenter(framed1280, framed1280.zoom, padding1280);
+  assert.ok(Math.abs(visual1280.lng - -72.4) < 0.2);
+  assert.ok(Math.abs(framed1280.lng - 6.8) < 0.2);
+});
+
 test('canvas machine: resize 1280→768 shrinks then lands at the narrow fit', () => {
   const desktop = { width: 1280, height: 900 };
   const compact = { width: 768, height: 900 };
@@ -661,6 +1136,70 @@ test('readMapWaterColor prefers the water layer over beige', () => {
     '#f8f4f0'
   );
   assert.notEqual(readMapWaterColor((layer, prop) => paint[layer]?.[prop]), '#e8e4dc');
+});
+
+test('evaluatePaintColor uses the water interpolate at the current zoom', () => {
+  const worldwideZoom = Math.log2(768 / MERCATOR_TILE_SIZE);
+  const streetsWater = [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    0,
+    'rgb(97, 202, 255)',
+    8,
+    'rgb(153, 221, 255)',
+  ];
+  assert.equal(cssColorFromPaint(streetsWater), 'rgb(153, 221, 255)');
+  assert.equal(evaluatePaintColor(streetsWater, 8), 'rgb(153, 221, 255)');
+  assert.equal(evaluatePaintColor(streetsWater, 0), 'rgb(97, 202, 255)');
+
+  const atWorldwide = evaluatePaintColor(streetsWater, worldwideZoom);
+  const parsed = atWorldwide ? parseCssColor(atWorldwide) : null;
+  assert.ok(parsed);
+  const lastStop = parseCssColor('rgb(153, 221, 255)');
+  assert.ok(lastStop);
+  assert.ok(parsed[0] < 120, `worldwide red ${parsed[0]} should stay near the ocean stop`);
+  assert.ok(parsed[1] <= 207, `worldwide green ${parsed[1]} should stay near the ocean stop`);
+  assert.equal(parsed[2], 255);
+  assert.ok(
+    lastStop[0] - parsed[0] >= 30,
+    'last-stop fill would leave a light-blue seam against Streets ocean'
+  );
+
+  const hslStops = [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    0,
+    'hsl(200, 100%, 69%)',
+    8,
+    'hsl(200, 100%, 80%)',
+  ];
+  const hslWorldwide = parseCssColor(evaluatePaintColor(hslStops, worldwideZoom) ?? '');
+  assert.ok(hslWorldwide);
+  assert.ok(hslWorldwide[0] >= 97 && hslWorldwide[0] <= 114);
+  assert.ok(hslWorldwide[1] >= 202 && hslWorldwide[1] <= 207);
+  assert.equal(hslWorldwide[2], 255);
+
+  const paint: Record<string, Record<string, unknown>> = {
+    water: { 'fill-color': streetsWater },
+  };
+  const zoomed = readMapWaterColor((layer, prop) => paint[layer]?.[prop], worldwideZoom);
+  const last = readMapWaterColor((layer, prop) => paint[layer]?.[prop]);
+  assert.equal(zoomed, STREETS_LOW_ZOOM_OCEAN);
+  assert.equal(last, 'rgb(153, 221, 255)');
+  assert.notEqual(zoomed, last);
+  assert.deepEqual(formatCssRgb([97.2, 202.4, 255, 1]), 'rgb(97, 202, 255)');
+  assert.equal(resolveWaterFillCss('rgb(153, 221, 255)', 0.58), STREETS_LOW_ZOOM_OCEAN);
+  assert.equal(resolveWaterFillCss('rgb(153, 221, 255)', STREETS_LOW_ZOOM_OCEAN_MAX), STREETS_LOW_ZOOM_OCEAN);
+  assert.equal(resolveWaterFillCss('rgb(153, 221, 255)', 11), 'rgb(153, 221, 255)');
+  const constantWater: Record<string, Record<string, unknown>> = {
+    water: { 'fill-color': 'hsl(200, 100%, 80%)' },
+  };
+  assert.equal(
+    readMapWaterColor((layer, prop) => constantWater[layer]?.[prop], worldwideZoom),
+    STREETS_LOW_ZOOM_OCEAN
+  );
 });
 
 test('768x1024 Worldwide zoom fits 360° of longitude in the canvas width', () => {
@@ -829,8 +1368,8 @@ function startPlacesMapFlight(
     handlerRef,
     'flyTo',
     { padding: { ...ZERO_PADDING, left: 396 } },
-    () => {
-      clearPaddingKeepView(map);
+    (reason: CameraEndReason = 'complete') => {
+      if (reason === 'complete') clearPaddingKeepView(map);
     }
   );
 }
@@ -850,6 +1389,1274 @@ test('preset change mid-flight leaves padding at 0', () => {
   assert.equal(map.getPadding().left, 396);
   map.endFlight();
   assert.deepEqual(map.getPadding(), ZERO_PADDING);
+});
+
+test('replacing an in-flight camera animation runs the previous onEnd once as interrupted', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const first: CameraEndReason[] = [];
+  const second: CameraEndReason[] = [];
+  startCameraAnimation(map, handlerRef, 'flyTo', { center: [0, 0] }, (reason = 'complete') => {
+    first.push(reason);
+  });
+  startCameraAnimation(map, handlerRef, 'easeTo', { center: [1, 1] }, (reason = 'complete') => {
+    second.push(reason);
+  });
+  assert.deepEqual(first, ['interrupted']);
+  map.endFlight();
+  assert.deepEqual(first, ['interrupted']);
+  assert.deepEqual(second, ['complete']);
+  map.endFlight();
+  assert.deepEqual(first, ['interrupted']);
+  assert.deepEqual(second, ['complete']);
+});
+
+/**
+ * Page + PlacesMap session: flyRequest keeps cameraBusy true until
+ * onFlyComplete(nonce) runs. Zoom / cluster / locate replace the camera
+ * through startCameraAnimation.
+ */
+function createBusyFlightSession() {
+  let flyRequest: { nonce: number } | null = { nonce: 1 };
+  let mapCameraBusy = false;
+  let jumpTo = 0;
+  const presetReasons: CameraEndReason[] = [];
+  const cameraBusy = () => Boolean(flyRequest) || mapCameraBusy;
+  let leftPreset = false;
+  let lastKey = 'preset:london';
+  let pendingSearch: { requestId: number } | null = { requestId: 1 };
+  let heading = createListHeadingMachine();
+  heading = startListHeadingRequest(heading);
+  const liveBoundsKey = 'live-bounds';
+  const applyLeavePreset = (gestureSearchPending = false) => {
+    lastKey = lastKeyAfterLeavingPreset({
+      boundsKey: liveBoundsKey,
+      gestureSearchPending,
+    });
+    leftPreset = true;
+  };
+  const handleFlyComplete = (
+    nonce?: number,
+    kind?: FlightEndKind,
+    opts?: { gestureSearchPending?: boolean }
+  ) => {
+    if (!flyRequest) return;
+    if (nonce != null && flyRequest.nonce !== nonce) return;
+    flyRequest = null;
+    if (kind === 'user-interrupt') {
+      heading = startListHeadingRequest(heading);
+      pendingSearch = null;
+      applyLeavePreset(Boolean(opts?.gestureSearchPending));
+    }
+  };
+  const handleUserCameraMove = (info?: { gestureSearchPending?: boolean }) => {
+    applyLeavePreset(Boolean(info?.gestureSearchPending));
+  };
+  const onPresetEnd = (reason: CameraEndReason = 'complete') => {
+    presetReasons.push(reason);
+    if (reason === 'complete') jumpTo += 1;
+    mapCameraBusy = false;
+    handleFlyComplete(1);
+  };
+  return {
+    cameraBusy,
+    handleFlyComplete,
+    handleUserCameraMove,
+    onPresetEnd,
+    presetReasons,
+    get flyRequest() {
+      return flyRequest;
+    },
+    set flyRequest(next: { nonce: number } | null) {
+      flyRequest = next;
+    },
+    get jumpTo() {
+      return jumpTo;
+    },
+    get mapCameraBusy() {
+      return mapCameraBusy;
+    },
+    set mapCameraBusy(next: boolean) {
+      mapCameraBusy = next;
+    },
+    get leftPreset() {
+      return leftPreset;
+    },
+    get lastKey() {
+      return lastKey;
+    },
+    get pendingSearch() {
+      return pendingSearch;
+    },
+    get heading() {
+      return heading;
+    },
+    set lastKey(next: string) {
+      lastKey = next;
+    },
+    set leftPreset(next: boolean) {
+      leftPreset = next;
+    },
+  };
+}
+
+function assertIdleSearchCommits(session: { cameraBusy: () => boolean }) {
+  assert.equal(session.cameraBusy(), false);
+  const decision = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'after-interrupt',
+    lastPresetKey: 'preset:united-states',
+    cameraBusy: session.cameraBusy(),
+  });
+  assert.equal(decision.action, 'moveend');
+  let heading = createListHeadingMachine();
+  heading = startListHeadingRequest(heading);
+  heading = startListHeadingRequest(heading);
+  assert.equal(shouldCommitSearchUi({ requestId: 2, machine: heading, cameraBusy: true }), false);
+  assert.equal(shouldCommitSearchUi({ requestId: 2, machine: heading, cameraBusy: session.cameraBusy() }), true);
+}
+
+for (const interrupt of [
+  { name: 'Zoom', method: 'easeTo' as const, options: { duration: 220, zoom: 6 } },
+  { name: 'cluster click', method: 'easeTo' as const, options: { duration: 480, zoom: 8 } },
+  { name: 'Locate me', method: 'flyTo' as const, options: { duration: 1600, center: [0, 0] } },
+]) {
+  test(`interrupted preset flight (${interrupt.name}) clears flyRequest and lets the next settle search`, () => {
+    const map = new InterruptibleMap();
+    const handlerRef: { current: (() => void) | null } = { current: null };
+    const session = createBusyFlightSession();
+    session.mapCameraBusy = true;
+    startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [-20, 20] }, session.onPresetEnd);
+    assert.equal(session.cameraBusy(), true);
+    assert.ok(session.flyRequest);
+
+    let replacementEnds = 0;
+    startCameraAnimation(map, handlerRef, interrupt.method, interrupt.options, () => {
+      replacementEnds += 1;
+      session.mapCameraBusy = false;
+    });
+    if (handlerRef.current) session.mapCameraBusy = true;
+    assert.deepEqual(session.presetReasons, ['interrupted']);
+    assert.equal(session.flyRequest, null, 'interrupted preset must release flyRequest');
+    assert.equal(session.jumpTo, 0, 'interrupt must not padding-clear jumpTo');
+    assert.equal(session.cameraBusy(), true, 'replacement camera is still busy');
+    assert.equal(replacementEnds, 0);
+
+    map.endFlight();
+    assert.equal(replacementEnds, 1);
+    assert.equal(session.presetReasons.length, 1);
+    assertIdleSearchCommits(session);
+  });
+}
+
+test('preset interrupted by another preset keeps the new flyRequest', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const session = createBusyFlightSession();
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [139, 35] }, session.onPresetEnd);
+  session.flyRequest = { nonce: 2 };
+  session.mapCameraBusy = true;
+  let secondEnds = 0;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 1800, center: [-100, 40] }, (reason = 'complete') => {
+    secondEnds += 1;
+    if (reason === 'complete') session.mapCameraBusy = false;
+    session.handleFlyComplete(2);
+  });
+  assert.deepEqual(session.presetReasons, ['interrupted']);
+  assert.deepEqual(session.flyRequest, { nonce: 2 });
+  assert.equal(session.jumpTo, 0);
+  map.endFlight();
+  assert.equal(secondEnds, 1);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.cameraBusy(), false);
+});
+
+test('resize mid-flight replaces the camera without a padding-clear jumpTo', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const session = createBusyFlightSession();
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [139, 35] }, session.onPresetEnd);
+  session.flyRequest = { nonce: 3 };
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'easeTo', { duration: 0, center: [-20, 20] }, (reason = 'complete') => {
+    session.mapCameraBusy = false;
+    session.handleFlyComplete(3);
+    assert.equal(reason, 'complete');
+  });
+  assert.deepEqual(session.presetReasons, ['interrupted']);
+  assert.equal(session.jumpTo, 0);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.cameraBusy(), false);
+});
+
+test('user wheel mid-flight still completes the end handler once', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const session = createBusyFlightSession();
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [-20, 20] }, session.onPresetEnd);
+  map.endFlight();
+  assert.deepEqual(session.presetReasons, ['complete']);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.cameraBusy(), false);
+  map.endFlight();
+  assert.deepEqual(session.presetReasons, ['complete']);
+});
+
+test('abandonCameraAnimation on unmount drops the listener without clearing flyRequest', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const session = createBusyFlightSession();
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [-20, 20] }, session.onPresetEnd);
+  abandonCameraAnimation(map, handlerRef);
+  session.mapCameraBusy = false;
+  assert.ok(session.flyRequest);
+  assert.deepEqual(session.presetReasons, []);
+  map.endFlight();
+  assert.deepEqual(session.presetReasons, []);
+});
+
+test('classifyFlightEnd: only real user input is an interrupt; clamp/resize misses stay complete', () => {
+  assert.equal(
+    classifyFlightEnd({ animationReason: 'interrupted', reachedTarget: false, userInputActive: false }),
+    'replaced'
+  );
+  assert.equal(
+    classifyFlightEnd({ animationReason: 'complete', reachedTarget: false, userInputActive: false }),
+    'complete'
+  );
+  assert.equal(
+    classifyFlightEnd({ animationReason: 'complete', reachedTarget: true, userInputActive: true }),
+    'user-interrupt'
+  );
+  assert.equal(
+    classifyFlightEnd({ animationReason: 'complete', reachedTarget: true, userInputActive: false }),
+    'complete'
+  );
+  assert.equal(
+    cameraReachedTarget({ lng: -20, lat: 20, zoom: 0.81 }, { lng: -20, lat: 20, zoom: 0.459 }),
+    false
+  );
+  assert.equal(
+    classifyFlightEnd({
+      animationReason: 'complete',
+      reachedTarget: cameraReachedTarget(
+        { lng: -20, lat: 20, zoom: 0.81 },
+        { lng: -20, lat: 20, zoom: 0.459 }
+      ),
+      userInputActive: false,
+    }),
+    'complete'
+  );
+});
+
+test('768 Worldwide with no interrupt keeps Worldwide', () => {
+  const kind = classifyFlightEnd({
+    animationReason: 'complete',
+    reachedTarget: false,
+    userInputActive: false,
+  });
+  assert.equal(kind, 'complete');
+  const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
+  let heading = createListHeadingMachine();
+  heading = startListHeadingRequest(heading);
+  heading = settleListHeadingRequest(
+    heading,
+    1,
+    { shown: 82, total: 82, hasMore: false, places: [] },
+    { hasMap: true, zoom: 0.459, location: worldwide, leftPreset: false }
+  );
+  assert.equal(heading.heading?.chipLabel, 'Worldwide');
+  const decision = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'ww-live-bounds',
+    lastPresetKey: '',
+    cameraBusy: false,
+    settleKey: 'preset:worldwide',
+  });
+  assert.equal(decision.action, 'filters');
+  assert.equal(decision.nextPresetKey, 'preset:worldwide');
+});
+
+test('resize on Worldwide keeps the chip and does not search', () => {
+  const resize = cameraMoveendEffects({}, 'resize', { zoomChanged: true });
+  assert.equal(resize.leavePreset, false);
+  assert.equal(isUserMapMove({}, null, { zoomChanged: true }), false);
+  const afterClamp = cameraMoveendEffects({}, null, { zoomChanged: true });
+  assert.equal(afterClamp.leavePreset, false);
+  const decision = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'resized-bounds',
+    lastPresetKey: 'preset:worldwide',
+    cameraBusy: false,
+    settleKey: 'preset:worldwide',
+  });
+  assert.equal(decision.action, 'skip');
+});
+
+test('user interrupt of a preset cancels settle and bounds-searches Map area once', () => {
+  const session = createBusyFlightSession();
+  const kind = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: true,
+  });
+  assert.equal(kind, 'user-interrupt');
+  session.handleFlyComplete(1, kind);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.leftPreset, true);
+  assert.equal(session.pendingSearch, null);
+  assert.equal(shouldApplySettledSearch(1, session.heading), false);
+
+  assert.equal(session.lastKey, '', 'chip flip must not mark the live bounds as already searched');
+  const sameBounds = searchAfterViewportChange({
+    leftPreset: session.leftPreset,
+    boundsKey: 'live-bounds',
+    lastPresetKey: session.lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(sameBounds.action, 'moveend', 'Map area chip flip must search even when the camera did not move');
+
+  const decision = searchAfterViewportChange({
+    leftPreset: session.leftPreset,
+    boundsKey: 'mid-flight-stop',
+    lastPresetKey: sameBounds.nextPresetKey ?? session.lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(decision.action, 'moveend');
+  assert.equal(decision.nextPresetKey, 'mid-flight-stop');
+});
+
+test('replaced preset does not flip to Map area so the newest preset settle wins', () => {
+  const session = createBusyFlightSession();
+  session.flyRequest = { nonce: 2 };
+  const kind = classifyFlightEnd({
+    animationReason: 'interrupted',
+    reachedTarget: false,
+    userInputActive: false,
+  });
+  assert.equal(kind, 'replaced');
+  session.handleFlyComplete(1, kind);
+  assert.deepEqual(session.flyRequest, { nonce: 2 });
+  assert.equal(session.leftPreset, false);
+  assert.equal(session.lastKey, 'preset:london');
+
+  const tokyo = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'map-area-stop',
+    lastPresetKey: '',
+    cameraBusy: false,
+    settleKey: 'preset:tokyo',
+  });
+  assert.equal(tokyo.action, 'filters');
+  assert.equal(tokyo.nextPresetKey, 'preset:tokyo');
+});
+
+test('zoomChanged during a preset tag does not leave the chip', () => {
+  const effects = cameraMoveendEffects({}, 'preset', { zoomChanged: true });
+  assert.equal(effects.leavePreset, false);
+  assert.equal(effects.reportBounds, false);
+  const afterWipe = cameraMoveendEffects({}, null, { zoomChanged: true });
+  assert.equal(afterWipe.leavePreset, false, 'clamp/resize zoomChanged without user input must not leave');
+});
+
+test('cluster mousedown during a programmatic flight is queued', () => {
+  assert.equal(shouldQueueClusterExpand('preset', { cluster_id: 42 }), true);
+  assert.equal(shouldQueueClusterExpand('place', { cluster: true }), true);
+  assert.equal(shouldQueueClusterExpand(null, { cluster_id: 42 }), false);
+  assert.equal(shouldQueueClusterExpand('resize', { cluster_id: 42 }), false);
+  assert.equal(shouldQueueClusterExpand('preset', {}), false);
+});
+
+test('drag-from-cluster does not expand', () => {
+  const start = { x: 100, y: 80, at: 1_000 };
+  assert.equal(
+    isGenuineClusterClick({ start, end: { x: 101, y: 81, at: 1_120 } }),
+    true
+  );
+  assert.equal(
+    isGenuineClusterClick({ start, end: { x: 120, y: 80, at: 1_120 } }),
+    false
+  );
+  assert.equal(clusterPointerMoved(start, { x: 106, y: 80 }), true);
+  assert.equal(clusterPointerMoved(start, { x: 103, y: 82 }), false);
+  assert.equal(
+    isGenuineClusterClick({ start, end: { x: 101, y: 81, at: 1_400 } }),
+    false
+  );
+  assert.equal(
+    isGenuineClusterClick({ start, end: { x: 101, y: 81, at: 1_120 }, cancelled: true }),
+    false
+  );
+});
+
+test('cluster click mid-flight never gets stuck', () => {
+  const session = createBusyFlightSession();
+  session.handleFlyComplete(
+    1,
+    classifyFlightEnd({ animationReason: 'complete', userInputActive: true })
+  );
+  assert.equal(session.leftPreset, true);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.cameraBusy(), false);
+  assert.equal(shouldApplySettledSearch(1, session.heading), false);
+
+  const queued = shouldQueueClusterExpand('preset', { cluster_id: 7 });
+  const dragged = clusterPointerMoved({ x: 10, y: 10 }, { x: 40, y: 12 });
+  assert.equal(queued, true);
+  assert.equal(dragged, true);
+
+  const afterFailOpen = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'stopped-here',
+    lastPresetKey: session.lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(afterFailOpen.action, 'moveend');
+
+  const afterDrag = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'later-drag',
+    lastPresetKey: afterFailOpen.nextPresetKey ?? session.lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(afterDrag.action, 'moveend');
+});
+
+test('a mid-flight drag searches once at the drag end', () => {
+  assert.equal(shouldSearchOnUserMoveend({ pointerDown: true }), false);
+  assert.equal(shouldSearchOnUserMoveend({ pointerDown: false }), true);
+
+  let gesture = beginUserGesture(createGestureBoundsState(), 'pointer');
+  const searches: string[] = [];
+  let lastKey = 'preset:london';
+  const consider = (pointerDown: boolean, mapMoving: boolean, boundsKey: string) => {
+    const flush = shouldFlushGestureBounds({
+      pointerDown,
+      mapMoving,
+      gestureId: gesture.gestureId,
+      reportedId: gesture.reportedId,
+    });
+    if (!flush.flush) return;
+    gesture = { ...gesture, reportedId: flush.reportedId };
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey,
+      lastPresetKey: lastKey,
+      cameraBusy: false,
+    });
+    if (decision.action === 'skip') return;
+    lastKey = decision.nextPresetKey ?? boundsKey;
+    searches.push(boundsKey);
+  };
+  consider(true, true, 'stop-mid-flight');
+  consider(false, false, 'mouseup');
+  consider(false, false, 'drag-moveend');
+  assert.deepEqual(searches, ['mouseup']);
+});
+
+test('isGestureSearchPending is true while a pointer is held or a wheel/drag has not flushed', () => {
+  assert.equal(
+    isGestureSearchPending({ pointerDown: true, gesture: createGestureBoundsState() }),
+    true
+  );
+  assert.equal(
+    isGestureSearchPending({ pointerDown: false, gesture: createGestureBoundsState() }),
+    false
+  );
+  const pointer = beginUserGesture(createGestureBoundsState(), 'pointer');
+  assert.equal(isGestureSearchPending({ pointerDown: false, gesture: pointer }), true);
+  assert.equal(
+    isGestureSearchPending({
+      pointerDown: false,
+      gesture: { ...pointer, reportedId: pointer.gestureId },
+    }),
+    false
+  );
+  const wheel = beginUserGesture(createGestureBoundsState(), 'wheel');
+  assert.equal(isGestureSearchPending({ pointerDown: false, gesture: wheel }), true);
+  const key = beginUserGesture(createGestureBoundsState(), 'key');
+  assert.equal(isGestureSearchPending({ pointerDown: false, gesture: key }), false);
+});
+
+test('a drag mid-flight searches once after mouseup and not while the pointer is held', () => {
+  const session = createBusyFlightSession();
+  let gesture = beginUserGesture(createGestureBoundsState(), 'pointer');
+  const pending = isGestureSearchPending({ pointerDown: true, gesture });
+  assert.equal(pending, true);
+  session.handleUserCameraMove({ gestureSearchPending: pending });
+  session.handleFlyComplete(1, 'user-interrupt', { gestureSearchPending: pending });
+  assert.equal(session.lastKey, 'live-bounds');
+  assert.equal(session.leftPreset, true);
+  assert.equal(session.cameraBusy(), false);
+
+  const searches: string[] = [];
+  const pageSearch = (boundsKey: string, gestureInProgress: boolean) => {
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey,
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+      gestureInProgress,
+    });
+    if (decision.action === 'skip') return;
+    searches.push(boundsKey);
+    session.lastKey = decision.nextPresetKey ?? boundsKey;
+  };
+
+  pageSearch('live-bounds', true);
+  pageSearch('drag-mid', true);
+  assert.deepEqual(searches, [], 'interrupt settle must not search while the pointer is held');
+
+  const flush = shouldFlushGestureBounds({
+    pointerDown: false,
+    mapMoving: false,
+    gestureId: gesture.gestureId,
+    reportedId: gesture.reportedId,
+  });
+  assert.equal(flush.flush, true);
+  gesture = { ...gesture, reportedId: flush.reportedId };
+  pageSearch('mouseup-bounds', false);
+  assert.deepEqual(searches, ['mouseup-bounds']);
+
+  const again = shouldFlushGestureBounds({
+    pointerDown: false,
+    mapMoving: false,
+    gestureId: gesture.gestureId,
+    reportedId: gesture.reportedId,
+  });
+  assert.equal(again.flush, false);
+  pageSearch('mouseup-bounds', false);
+  assert.deepEqual(searches, ['mouseup-bounds']);
+});
+
+test('a wheel mid-flight searches once at wheel settle', () => {
+  const session = createBusyFlightSession();
+  const gesture = beginUserGesture(createGestureBoundsState(), 'wheel');
+  assert.equal(isGestureSearchPending({ pointerDown: false, gesture }), true);
+  session.handleUserCameraMove({ gestureSearchPending: true });
+  session.handleFlyComplete(1, 'user-interrupt', { gestureSearchPending: true });
+  assert.equal(session.lastKey, 'live-bounds');
+
+  const searches: string[] = [];
+  const pageSearch = (boundsKey: string, gestureInProgress: boolean) => {
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey,
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+      gestureInProgress,
+    });
+    if (decision.action === 'skip') return;
+    searches.push(boundsKey);
+    session.lastKey = decision.nextPresetKey ?? boundsKey;
+  };
+
+  pageSearch('live-bounds', true);
+  pageSearch('wheel-mid', true);
+  assert.deepEqual(searches, [], 'interrupt settle must not search during the wheel burst');
+
+  const flush = shouldFlushGestureBounds({
+    pointerDown: false,
+    mapMoving: false,
+    gestureId: gesture.gestureId,
+    reportedId: gesture.reportedId,
+  });
+  assert.equal(flush.flush, true);
+  pageSearch('wheel-end', false);
+  assert.deepEqual(searches, ['wheel-end']);
+});
+
+test('Enter or space Zoom flip, or a no-move Map area flip, still searches once', () => {
+  for (const key of ['Enter', ' ']) {
+    assert.equal(isCameraKey({ type: 'keydown', key }), false, key);
+  }
+
+  const zoomSession = createBusyFlightSession();
+  zoomSession.handleUserCameraMove();
+  assert.equal(zoomSession.lastKey, '');
+  zoomSession.flyRequest = null;
+  zoomSession.mapCameraBusy = true;
+  assert.equal(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'live-bounds',
+      lastPresetKey: zoomSession.lastKey,
+      cameraBusy: true,
+      gestureInProgress: false,
+    }).action,
+    'skip'
+  );
+  zoomSession.mapCameraBusy = false;
+  const zoomSearch = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'zoom-end-bounds',
+    lastPresetKey: zoomSession.lastKey,
+    cameraBusy: false,
+    gestureInProgress: false,
+  });
+  assert.equal(zoomSearch.action, 'moveend');
+  assert.equal(zoomSearch.nextPresetKey, 'zoom-end-bounds');
+
+  const flip = createBusyFlightSession();
+  flip.handleFlyComplete(1, 'user-interrupt');
+  assert.equal(flip.lastKey, '');
+  const noMove = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'live-bounds',
+    lastPresetKey: flip.lastKey,
+    cameraBusy: false,
+    gestureInProgress: false,
+  });
+  assert.equal(noMove.action, 'moveend');
+  assert.equal(noMove.nextPresetKey, 'live-bounds');
+});
+
+test('wheel mid-flight at 1440 and 768 interrupts London and Worldwide', () => {
+  const london = LOCATION_PRESETS.find((item) => item.id === 'london') ?? {
+    id: 'london',
+    label: 'London',
+    lat: 51.5,
+    lng: -0.12,
+    zoom: 9,
+    radiusKm: 40,
+  };
+  const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
+  const cases = [
+    { preset: london, viewport: { width: 1440, height: 900 }, liveZoom: 6.4 },
+    { preset: london, viewport: { width: 768, height: 900 }, liveZoom: 10.5 },
+    { preset: worldwide, viewport: { width: 1440, height: 900 }, liveZoom: 1.9 },
+    { preset: worldwide, viewport: { width: 768, height: 900 }, liveZoom: 1.3 },
+  ];
+  for (const item of cases) {
+    assert.equal(shouldStampUserInputDuringFlight(true, 'wheel'), true, item.preset.id);
+    const kind = classifyFlightEnd({
+      animationReason: 'complete',
+      userInputActive: true,
+      originalEvent: { type: 'wheel' },
+    });
+    assert.equal(kind, 'user-interrupt', item.preset.id);
+    assert.equal(
+      shouldReapplyNarrowFitAfterFlight({
+        kind,
+        leftPreset: false,
+        locationId: item.preset.id,
+        viewport: item.viewport,
+        liveZoom: item.liveZoom,
+      }),
+      false,
+      `${item.preset.id} ${item.viewport.width} must not jumpTo the Worldwide floor`
+    );
+    assert.equal(
+      classifyFlightEnd({
+        animationReason: 'complete',
+        userInputActive: false,
+        originalEvent: { type: 'wheel' },
+      }),
+      'user-interrupt',
+      'Mapbox originalEvent wheel is an interrupt'
+    );
+    const session = createBusyFlightSession();
+    session.handleFlyComplete(1, kind);
+    assert.equal(session.leftPreset, true);
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: `wheel-end-${item.preset.id}-${item.viewport.width}`,
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+    });
+    assert.equal(decision.action, 'moveend');
+  }
+});
+
+test('capture-phase listeners stamp user input only while a flight is active', () => {
+  const calls: string[] = [];
+  const listeners = new Map<string, { fn: (event: Event) => void; capture?: boolean }>();
+  const el = {
+    addEventListener(
+      type: string,
+      listener: (event: Event) => void,
+      options?: { capture?: boolean }
+    ) {
+      listeners.set(type, { fn: listener, capture: options?.capture });
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+  };
+  let flightActive = true;
+  const stop = attachUserFlightInputListeners(el, () => flightActive, (type) => calls.push(type));
+  assert.equal(listeners.get('wheel')?.capture, true);
+  assert.equal(listeners.get('pointerdown')?.capture, true);
+  listeners.get('wheel')?.fn({ type: 'wheel' } as Event);
+  listeners.get('pointerdown')?.fn({ type: 'pointerdown' } as Event);
+  assert.deepEqual(calls, ['wheel', 'pointerdown']);
+  flightActive = false;
+  listeners.get('wheel')?.fn({ type: 'wheel' } as Event);
+  assert.deepEqual(calls, ['wheel', 'pointerdown']);
+  stop();
+  assert.equal(listeners.size, 0);
+});
+
+test('Escape, Tab, and letters mid-flight are not camera input; a later preset still searches', () => {
+  for (const key of ['Escape', 'Tab', 'a', 'Enter', ' ']) {
+    assert.equal(isCameraKey({ type: 'keydown', key }), false, key);
+    assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key }), false, key);
+    assert.equal(
+      classifyFlightEnd({
+        animationReason: 'complete',
+        userInputActive: false,
+        originalEvent: { type: 'keydown', key },
+      }),
+      'complete',
+      key
+    );
+    assert.equal(isUserGestureEvent({ originalEvent: { type: 'keydown', key } }), false, key);
+  }
+  const canvasTarget = {
+    closest(sel: string) {
+      return sel === 'canvas' || sel === '[data-map-canvas]' || sel === '[data-map-canvas-host]'
+        ? canvasTarget
+        : null;
+    },
+  };
+  for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '-', '=', '_']) {
+    assert.equal(isCameraKey({ type: 'keydown', key }), true, key);
+    assert.equal(
+      shouldStampUserInputDuringFlight(true, {
+        type: 'keydown',
+        key,
+        target: canvasTarget as unknown as EventTarget,
+      }),
+      true,
+      key
+    );
+  }
+  assert.equal(
+    shouldStampUserInputDuringFlight(true, {
+      type: 'keydown',
+      key: 'ArrowLeft',
+      shiftKey: true,
+      target: canvasTarget as unknown as EventTarget,
+    }),
+    true
+  );
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'ArrowLeft' }), false);
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'PageDown' }), false);
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'Home' }), false);
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'End' }), false);
+  assert.equal(shouldStampUserInputDuringFlight(true, 'wheel'), true);
+
+  const listeners = new Map<string, { fn: (event: Event) => void }>();
+  const el = {
+    addEventListener(type: string, listener: (event: Event) => void) {
+      listeners.set(type, { fn: listener });
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+  };
+  const calls: string[] = [];
+  const stop = attachUserFlightInputListeners(el, () => true, (type) => calls.push(type));
+  listeners.get('keydown')?.fn({ type: 'keydown', key: 'Escape' } as KeyboardEvent);
+  listeners.get('keydown')?.fn({ type: 'keydown', key: 'Tab' } as KeyboardEvent);
+  listeners.get('keydown')?.fn({ type: 'keydown', key: 'a' } as KeyboardEvent);
+  listeners.get('keydown')?.fn({
+    type: 'keydown',
+    key: 'ArrowLeft',
+    target: canvasTarget,
+  } as unknown as KeyboardEvent);
+  assert.deepEqual(calls, ['keydown']);
+  stop();
+
+  const session = createBusyFlightSession();
+  const escapeKind = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: false,
+    originalEvent: { type: 'keydown', key: 'Escape' },
+  });
+  session.handleFlyComplete(1, escapeKind);
+  assert.equal(session.leftPreset, false, 'Escape must commit the preset, not leave it');
+  assert.equal(session.lastKey, 'preset:london');
+
+  session.lastKey = '';
+  session.leftPreset = false;
+  session.flyRequest = { nonce: 2 };
+  const leftover = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: false,
+    originalEvent: { type: 'keydown' },
+  });
+  assert.equal(leftover, 'complete', 'stale keydown without a camera key must not interrupt');
+  session.handleFlyComplete(2, leftover);
+  assert.equal(session.leftPreset, false);
+  const tokyo = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'tokyo-live-bounds',
+    lastPresetKey: session.lastKey,
+    cameraBusy: false,
+    settleKey: 'preset:tokyo',
+  });
+  assert.equal(tokyo.action, 'filters');
+  assert.equal(tokyo.nextPresetKey, 'preset:tokyo');
+});
+
+test('Arrow and +/- keys on Zoom or Locate do not stamp mid-flight; canvas keys do', () => {
+  const canvas = {
+    closest(sel: string) {
+      return sel === 'canvas' || sel === '[data-map-canvas]' || sel === '[data-map-canvas-host]' ? canvas : null;
+    },
+  };
+  const host = {
+    closest(sel: string) {
+      return sel === '[data-map-canvas-host]' || sel === '[data-map-canvas]' ? host : null;
+    },
+  };
+  const zoom = {
+    closest(sel: string) {
+      return sel === '[data-map-controls]' || sel === 'button' ? zoom : null;
+    },
+  };
+  const locate = {
+    closest(sel: string) {
+      return sel === '[data-map-controls]' || sel === 'button' ? locate : null;
+    },
+  };
+  assert.equal(isMapboxKeyboardTarget(canvas as unknown as EventTarget), true);
+  assert.equal(isMapboxKeyboardTarget(host as unknown as EventTarget), true);
+  assert.equal(isMapboxKeyboardTarget(zoom as unknown as EventTarget), false);
+  assert.equal(isMapboxKeyboardTarget(locate as unknown as EventTarget), false);
+
+  for (const key of ['ArrowLeft', 'ArrowUp', '+', '-', '=', '_']) {
+    assert.equal(
+      shouldStampUserInputDuringFlight(true, {
+        type: 'keydown',
+        key,
+        target: zoom as unknown as EventTarget,
+      }),
+      false,
+      `Zoom ${key}`
+    );
+    assert.equal(
+      shouldStampUserInputDuringFlight(true, {
+        type: 'keydown',
+        key,
+        target: locate as unknown as EventTarget,
+      }),
+      false,
+      `Locate ${key}`
+    );
+    assert.equal(
+      classifyFlightEnd({
+        animationReason: 'complete',
+        userInputActive: false,
+        originalEvent: { type: 'keydown', key },
+      }),
+      'complete',
+      key
+    );
+    assert.equal(
+      shouldStampUserInputDuringFlight(true, {
+        type: 'keydown',
+        key,
+        target: canvas as unknown as EventTarget,
+      }),
+      true,
+      `canvas ${key}`
+    );
+  }
+
+  const listeners = new Map<string, { fn: (event: Event) => void }>();
+  const el = {
+    addEventListener(type: string, listener: (event: Event) => void) {
+      listeners.set(type, { fn: listener });
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+  };
+  const calls: string[] = [];
+  const stop = attachUserFlightInputListeners(el, () => true, (type) => calls.push(type));
+  for (const key of ['ArrowLeft', '+', '-']) {
+    listeners.get('keydown')?.fn({ type: 'keydown', key, target: zoom } as unknown as KeyboardEvent);
+    listeners.get('keydown')?.fn({ type: 'keydown', key, target: locate } as unknown as KeyboardEvent);
+  }
+  listeners.get('keydown')?.fn({
+    type: 'keydown',
+    key: 'ArrowLeft',
+    target: canvas,
+  } as unknown as KeyboardEvent);
+  assert.deepEqual(calls, ['keydown']);
+  stop();
+
+  const session = createBusyFlightSession();
+  const kind = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: false,
+    originalEvent: { type: 'keydown', key: 'ArrowLeft' },
+  });
+  session.handleFlyComplete(1, kind);
+  assert.equal(session.leftPreset, false, 'focused Zoom arrows must commit the preset');
+  assert.equal(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: 'london-bounds',
+      lastPresetKey: '',
+      cameraBusy: false,
+      settleKey: 'preset:london',
+    }).action,
+    'filters'
+  );
+});
+
+test('interrupt with no search still lets a later preset filters-search', () => {
+  const session = createBusyFlightSession();
+  session.handleFlyComplete(1, 'user-interrupt');
+  assert.equal(session.leftPreset, true);
+  assert.equal(session.lastKey, '');
+  assert.equal(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'current-bounds',
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+    }).action,
+    'moveend',
+    'Map area chip flip must search even when bounds did not change'
+  );
+
+  session.lastKey = '';
+  session.leftPreset = false;
+  session.flyRequest = { nonce: 2 };
+  const kind = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: false,
+    originalEvent: { type: 'keydown', key: 'Tab' },
+  });
+  assert.equal(kind, 'complete');
+  session.handleFlyComplete(2, kind);
+  assert.equal(session.leftPreset, false);
+  assert.equal(session.lastKey, '');
+  const next = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'map-bounds',
+    lastPresetKey: session.lastKey,
+    cameraBusy: false,
+    settleKey: 'preset:tokyo',
+  });
+  assert.equal(next.action, 'filters');
+});
+
+test('pointerdown on Zoom controls does not hold the pointer; window pointerup clears a stuck hold', () => {
+  const control = { closest: (sel: string) => (sel === '[data-map-controls]' ? control : null) };
+  const canvas = { closest: () => null };
+  assert.equal(isMapControlTarget(control as unknown as EventTarget), true);
+  assert.equal(isMapControlTarget(canvas as unknown as EventTarget), false);
+  assert.equal(
+    shouldHoldPointerForFlight({ type: 'pointerdown', target: control as unknown as EventTarget }),
+    false
+  );
+  assert.equal(
+    shouldHoldPointerForFlight({ type: 'pointerdown', target: canvas as unknown as EventTarget }),
+    true
+  );
+  assert.equal(
+    shouldHoldPointerForFlight({ type: 'wheel', target: canvas as unknown as EventTarget }),
+    false
+  );
+
+  let pointerDown = true;
+  const listeners = new Map<string, () => void>();
+  const win = {
+    addEventListener(type: string, listener: () => void) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+  };
+  const stop = attachPointerHoldClearListeners(win, () => {
+    pointerDown = false;
+  });
+  for (const type of ['pointerup', 'pointercancel', 'touchend', 'blur'] as const) {
+    pointerDown = true;
+    listeners.get(type)?.();
+    assert.equal(pointerDown, false, type);
+    assert.equal(
+      shouldFlushGestureBounds({
+        pointerDown,
+        mapMoving: false,
+        gestureId: 1,
+        reportedId: null,
+      }).flush,
+      true,
+      `${type} must let the next wheel search`
+    );
+  }
+  stop();
+  assert.equal(listeners.size, 0);
+});
+
+test('resize mid-Worldwide flight re-applies the narrow fit when it settles', () => {
+  const compact = { width: 768, height: 900 };
+  assert.equal(
+    shouldReapplyNarrowFitAfterFlight({
+      kind: 'complete',
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      liveZoom: 0.81,
+    }),
+    true
+  );
+  assert.equal(
+    shouldReapplyNarrowFitAfterFlight({
+      kind: 'user-interrupt',
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      liveZoom: 0.81,
+    }),
+    false
+  );
+  assert.equal(isUserMapMove({ originalEvent: { type: 'resize' } }, 'preset'), false);
+});
+
+test('zoom interrupting a card fly lets the next drag search', () => {
+  let lastKey = 'place-bounds';
+  const handleUserCameraMove = () => {
+    lastKey = 'place-bounds';
+  };
+  handleUserCameraMove();
+  const afterZoom = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'zoom-end-bounds',
+    lastPresetKey: lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(afterZoom.action, 'moveend');
+  lastKey = afterZoom.nextPresetKey ?? lastKey;
+  const drag = cameraMoveendEffects({ originalEvent: { type: 'mouseup' } }, 'zoom');
+  assert.equal(drag.leavePreset, true);
+  assert.equal(drag.reportBounds, true);
+  const afterDrag = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'drag-bounds',
+    lastPresetKey: lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(afterDrag.action, 'moveend');
+});
+
+test('flyTo options use a gentle curve and an explicit duration cap', () => {
+  const fly = cameraFlyOptions({ center: [1, 2], zoom: 4, duration: 1500 });
+  assert.equal(fly.speed, undefined);
+  assert.equal(fly.curve, CAMERA_FLY.curve);
+  assert.equal(fly.duration, 1500);
+  assert.equal(fly.easing, easeOutCubic);
+  const ease = cameraEaseOptions(560, { zoom: 8 });
+  assert.equal(ease.duration, 560);
+  assert.equal(ease.speed, undefined);
+  assert.equal(isShortCameraHop('cluster'), true);
+  assert.equal(isShortCameraHop('zoom'), true);
+  assert.equal(isShortCameraHop('drawer'), true);
+  assert.equal(isShortCameraHop('preset'), false);
+  assert.equal(isShortCameraHop('place'), false);
+});
+
+test('clearPaddingKeepView is a no-op when padding is already zero', () => {
+  const calls = { jumpTo: 0, flyTo: 0, easeTo: 0, setCenter: 0 };
+  const zeroMap = {
+    getPadding: () => ({ ...ZERO_PADDING }),
+    getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
+    unproject: () => ({ lng: 1, lat: 2 }),
+    jumpTo: () => {
+      calls.jumpTo += 1;
+    },
+    flyTo: () => {
+      calls.flyTo += 1;
+    },
+    easeTo: () => {
+      calls.easeTo += 1;
+    },
+    setCenter: () => {
+      calls.setCenter += 1;
+    },
+  };
+  assert.equal(paddingIsZero(ZERO_PADDING), true);
+  assert.equal(clearPaddingKeepView(zeroMap), false);
+  assert.deepEqual(calls, { jumpTo: 0, flyTo: 0, easeTo: 0, setCenter: 0 });
+});
+
+test('in-flight tags suppress viewport reports until the final moveend', () => {
+  assert.equal(isProgrammaticFlightTag('preset'), true);
+  assert.equal(isProgrammaticFlightTag('place'), true);
+  assert.equal(isProgrammaticFlightTag('cluster'), true);
+  assert.equal(isProgrammaticFlightTag('resize'), false);
+  assert.equal(shouldReportViewport('preset'), false);
+  assert.equal(shouldReportViewport('place'), false);
+  assert.equal(shouldReportViewport('cluster'), false);
+  assert.equal(shouldReportViewport('resize'), true);
+  assert.equal(shouldReportViewport(null), true);
+});
+
+test('a preset produces exactly one camera method call including setCenter/jumpTo/easeTo', () => {
+  const methods: string[] = [];
+  const map = {
+    flyTo: (options: Record<string, unknown>) => {
+      methods.push('flyTo');
+      return options;
+    },
+    easeTo: () => {
+      methods.push('easeTo');
+    },
+    jumpTo: () => {
+      methods.push('jumpTo');
+    },
+    setCenter: () => {
+      methods.push('setCenter');
+    },
+    once: () => undefined,
+    off: () => undefined,
+    isMoving: () => false,
+    getPadding: () => ({ ...ZERO_PADDING }),
+    getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
+    unproject: () => ({ lng: -20, lat: 20 }),
+  };
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const started: { current: number | null } = { current: null };
+  const tokyo = { lng: 139.6503, lat: 35.6762, zoom: 11 };
+  const worldwide = presetFlyCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    { width: 1440, height: 900 }
+  );
+  const nonce = 42;
+  assert.equal(claimFlyNonce(started, nonce), true);
+  const move = pickCameraAnimation('preset', tokyo, worldwide);
+  assert.equal(move.method, 'flyTo');
+  assert.ok(move.duration <= CAMERA_DURATION_CAP.presetMax);
+  startCameraAnimation(
+    map,
+    handlerRef,
+    move.method,
+    cameraFlyOptions({
+      center: [worldwide.lng, worldwide.lat],
+      zoom: worldwide.zoom,
+      duration: move.duration,
+      padding: ZERO_PADDING,
+      retainPadding: false,
+    }),
+    () => {
+      clearPaddingKeepView(map);
+    }
+  );
+  assert.equal(claimFlyNonce(started, nonce), false);
+  assert.deepEqual(methods, ['flyTo']);
+  assert.ok(move.duration + 200 <= 2600);
+  assert.equal(claimFlyNonce(started, nonce + 1), true);
+  const first = nextFlyNonce(0, 1_700_000_000_000);
+  const sameMs = nextFlyNonce(first, first);
+  assert.equal(sameMs, first + 1, 'Tokyo then Worldwide in the same millisecond must not share a nonce');
+  assert.equal(claimFlyNonce({ current: first }, sameMs), true);
+});
+
+test('unpadded preset fly has no extra jumpTo; padded flight may add one', () => {
+  const flyToCalls: Array<Record<string, unknown>> = [];
+  const jumpToCalls: Array<Record<string, unknown>> = [];
+  const unpadded = {
+    flyTo: (options: Record<string, unknown>) => {
+      flyToCalls.push(options);
+    },
+    easeTo: () => undefined,
+    jumpTo: (options: Record<string, unknown>) => {
+      jumpToCalls.push(options);
+    },
+    once: () => undefined,
+    off: () => undefined,
+    isMoving: () => false,
+    getPadding: () => ({ ...ZERO_PADDING }),
+    getCanvas: () => ({ clientWidth: 1440, clientHeight: 900 }),
+    unproject: () => ({ lng: -20, lat: 20 }),
+    setCenter: () => {
+      jumpToCalls.push({ setCenter: true });
+    },
+  };
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  startCameraAnimation(
+    unpadded,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [-20, 20],
+      zoom: 1.15,
+      duration: 1800,
+      padding: ZERO_PADDING,
+      retainPadding: false,
+    }),
+    () => {
+      clearPaddingKeepView(unpadded);
+    }
+  );
+  assert.equal(flyToCalls.length, 1);
+  assert.equal(jumpToCalls.length, 0);
+
+  const padded = new InterruptibleMap();
+  padded.padding = { ...ZERO_PADDING, right: 496 };
+  startCameraAnimation(
+    padded,
+    handlerRef,
+    'flyTo',
+    { duration: 0, center: [-111.94, 33.425], padding: { ...ZERO_PADDING, right: 496 } },
+    () => {
+      clearPaddingKeepView(padded);
+    }
+  );
+  const cameraCalls = padded.methods.filter(
+    (name) => name === 'flyTo' || name === 'easeTo' || name === 'jumpTo' || name === 'setCenter'
+  );
+  assert.equal(cameraCalls[0], 'flyTo');
+  assert.ok(
+    cameraCalls.length === 1 || (cameraCalls.length === 2 && cameraCalls[1] === 'jumpTo'),
+    'a padded flight may add one jumpTo to clear padding'
+  );
+  assert.deepEqual(padded.getPadding(), ZERO_PADDING);
+});
+
+test('place and preset flights stay inside the 1.2–1.8s / 2.2s caps', () => {
+  const us = { lng: -98.5795, lat: 39.8283, zoom: 3.4 };
+  const tempe = { lng: -111.94, lat: 33.425, zoom: 12 };
+  const worldwide = { lng: -20, lat: 20, zoom: 1.15 };
+  const far = cameraSeparation(us, tempe);
+  assert.ok(far > 10);
+  assert.ok(!isShortPlaceHop(far));
+  assert.ok(cappedFlyDuration('place', far) <= CAMERA_DURATION_CAP.placeMax);
+  assert.equal(cappedFlyDuration('place', 200), CAMERA_DURATION_CAP.placeMax);
+  assert.ok(cappedFlyDuration('preset', 200) <= CAMERA_DURATION_CAP.presetMax);
+  const place = pickCameraAnimation('place', us, tempe);
+  assert.equal(place.method, 'flyTo');
+  assert.ok(place.duration >= 1200 && place.duration <= 1800);
+  const preset = pickCameraAnimation('preset', us, worldwide);
+  assert.equal(preset.method, 'flyTo');
+  assert.ok(preset.duration <= 2200);
+  const near = pickCameraAnimation('place', tempe, { lng: -111.93, lat: 33.43, zoom: 12 });
+  assert.equal(near.method, 'easeTo');
+  assert.equal(near.duration, CAMERA_DURATION.placeShort);
+  const drawer = pickCameraAnimation('drawer', tempe, tempe);
+  assert.equal(drawer.method, 'easeTo');
+  assert.equal(drawer.duration, CAMERA_DURATION.drawer);
+});
+
+test('flyToThenOnMoveend still attaches after start', () => {
+  const map = new InterruptibleMap();
+  let ended = 0;
+  flyToThenOnMoveend(map, { padding: ZERO_PADDING }, () => {
+    ended += 1;
+  });
+  assert.equal(ended, 0);
+  map.endFlight();
+  assert.equal(ended, 1);
 });
 
 test('instant flyTo (duration 0) runs the end handler even when moveend is synchronous', () => {
@@ -1026,10 +2833,7 @@ test('user zoom-in grows the short canvas after a padding clear', () => {
     prevZoom: number,
     nextZoom: number
   ) => {
-    const programmatic =
-      (tag === 'preset' || tag === 'resize' || tag === 'programmatic' || tag === 'place') &&
-      !isUserGestureEvent(event);
-    if (programmatic) {
+    if (isProgrammaticCanvasMove(tag, event)) {
       return reduceCanvasMachine(current, { type: 'flightProgress', zoom: nextZoom });
     }
     return reduceCanvasMachine(current, { type: 'userZoom', zoom: nextZoom, prevZoom });
@@ -1040,10 +2844,18 @@ test('user zoom-in grows the short canvas after a padding clear', () => {
   assert.equal(state.box.height, short);
   assert.equal(state.shortened, true);
 
+  // Mid-flight tags stay locked unless a real wheel/gesture comes through.
+  for (const tag of ['preset', 'place', 'drawer', 'cluster', 'zoom', 'locate', 'programmatic'] as const) {
+    const locked = applyMove(state, tag, {}, target, clamp);
+    assert.equal(locked.box.height, short, tag);
+  }
+
   // A leaked resize tag must not block a real wheel zoom-in at the floor.
   state = applyMove(state, 'resize', { originalEvent: { type: 'wheel' } }, target, clamp);
   assert.equal(state.box.height, 900);
   assert.equal(state.shortened, false);
+  assert.equal(isUserGestureEvent({ originalEvent: { type: 'wheel' } }), true);
+  assert.equal(isUserGestureEvent({}), false);
 });
 
 function visualCenter(map: InterruptibleMap) {
@@ -1051,7 +2863,7 @@ function visualCenter(map: InterruptibleMap) {
   return map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
 }
 
-test('clearPaddingKeepView keeps the visual centre (padded mock transform)', () => {
+test('clearPaddingKeepView keeps the visual centre via jumpTo', () => {
   const map = new InterruptibleMap();
   map.padding = { ...ZERO_PADDING, right: 400 };
   map.center = { lng: -111.94, lat: 33.425 };
@@ -1097,6 +2909,28 @@ test('padding-clear jumpTo updates bounds and search without flipping the chip',
   assert.equal(shouldApplySettledSearch(1, heading), false);
   assert.equal(listHeadingText(heading.heading), '4 places in this area');
   assert.equal(heading.heading?.chipLabel, 'Map area');
+});
+
+test('cluster expand with the drawer open is deterministic and does not stack padding', () => {
+  const cluster = { lng: -111.94, lat: 33.425 };
+  const size = { width: 1280, height: 900 };
+  const intended = flyPadding(true, false, size);
+  const leftover = { ...ZERO_PADDING, right: 496 };
+  const first = clusterExpandCamera(cluster, 8, intended);
+  const again = clusterExpandCamera(cluster, 8, intended);
+  const fromLeftoverIfStacked = clusterExpandCamera(first.center, 8, leftover);
+  assert.deepEqual(first, again);
+  assert.deepEqual(first.padding, ZERO_PADDING);
+  assert.equal(first.retainPadding, false);
+  assert.notDeepEqual(
+    fromLeftoverIfStacked.center,
+    first.center,
+    'a second easeTo that kept leftover padding would shift again'
+  );
+  const secondClick = clusterExpandCamera(cluster, 8, intended);
+  assert.deepEqual(secondClick, first);
+  assert.ok(intended.right > 0);
+  assert.notEqual(first.center.lng, cluster.lng);
 });
 
 test('drawer close after a card fly does not shift the view', () => {

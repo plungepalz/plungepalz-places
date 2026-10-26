@@ -7,27 +7,78 @@ import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
 import { BRAND } from '@/lib/brand';
 import {
   CAMERA_DURATION,
+  STREETS_LOW_ZOOM_OCEAN,
+  ZERO_PADDING,
+  cameraEaseOptions,
+  cameraFlyOptions,
   cameraMoveendEffects,
+  attachPointerHoldClearListeners,
+  attachUserFlightInputListeners,
+  beginUserGesture,
+  classifyFlightEnd,
+  shouldApplyFlightEndToCanvas,
+  clusterExpandCamera,
+  clusterPointerMoved,
+  createGestureBoundsState,
+  gestureSettleMs,
+  isGenuineClusterClick,
+  isGestureSearchPending,
+  isMapControlTarget,
+  shouldFlushGestureBounds,
+  shouldHoldPointerForFlight,
+  shouldReapplyNarrowFitAfterFlight,
+  canvasBoxEquals,
+  canvasFillStyle,
+  canvasHostStyle,
   canvasReadyForFlight,
+  claimFlyNonce,
   clearPaddingKeepView,
-  createCanvasMachine,
-  paddingIsZero,
-  shouldClearPaddingAfterFlight,
-  easeOutCubic,
   flyPadding,
+  interruptCameraAnimation,
+  isNarrowViewport,
+  isProgrammaticCanvasMove,
+  isProgrammaticFlightTag,
   isUserGestureEvent,
-  NARROW_VIEWPORT,
+  presetFlyCamera,
+  readMeasuredViewport,
+  createCanvasMachine,
   mapControlsRightPx,
+  mapNeedsResize,
+  mapboxChromeLayout,
+  paddingIsZero,
+  pickCameraAnimation,
   pinHintCenterX,
   presetCamera,
   readMapWaterColor,
   reduceCanvasMachine,
   scheduleMapResize,
+  shouldApplyNarrowWorldwideAfterResize,
+  shouldClearPaddingAfterFlight,
+  shouldQueueClusterExpand,
+  shouldReapplyNarrowWorldwide,
+  abandonCameraAnimation,
   startCameraAnimation,
+  type CameraEndReason,
+  type CameraHandlerRef,
+  type CameraMethod,
+  type ClusterClickPointer,
+  type FlightEndKind,
+  type GestureBoundsKind,
+  type FlightTag,
   type MapResizeState,
+  type SizeBox,
 } from '@/lib/map-camera';
 import type { LocationPreset } from '@/lib/locations';
-import { clusterLeafHasPlace, placesMapLayerSpecs } from '@/lib/map-style';
+import {
+  MAPBOX_STREETS_STYLE,
+  MAP_FADE_DURATION_MS,
+  PIN_STROKE,
+  clusterLeafHasPlace,
+  muteMotorwayLayers,
+  pinMapboxChromeToContainer,
+  placesMapLayerSpecs,
+  placesToGeoJSON,
+} from '@/lib/map-style';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import type { FlyRequest, MapBounds, PlaceSearchResult } from '@/lib/types';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -40,9 +91,13 @@ interface DraftLocation {
 interface PlacesMapProps {
   places: PlaceSearchResult[];
   selectedPlaceId: string | null;
-  hoveredPlaceId: string | null;
+  bindHover?: (apply: (placeId: string | null) => void) => () => void;
   flyRequest: FlyRequest | null;
-  onFlyComplete: () => void;
+  onFlyComplete: (
+    nonce?: number,
+    kind?: FlightEndKind,
+    info?: { gestureSearchPending?: boolean }
+  ) => void;
   panelOpen: boolean;
   locationPickMode?: boolean;
   draftLocation?: DraftLocation | null;
@@ -52,7 +107,9 @@ interface PlacesMapProps {
   onSelectPlace: (placeId: string) => void;
   onHoverPlace: (placeId: string | null) => void;
   onViewportChange: (bounds: MapBounds, zoom: number) => void;
-  onUserCameraMove?: () => void;
+  onUserCameraMove?: (info?: { gestureSearchPending?: boolean }) => void;
+  /** True while a programmatic fly / cluster ease is running — suppress bbox search. */
+  onCameraBusy?: (busy: boolean) => void;
   /** Pixels from the top so the pin-drop hint sits below the filter chrome. */
   hintTop?: number;
   mapboxToken?: string;
@@ -135,7 +192,7 @@ function pinSvg(fill: string, innerWhiteDot: boolean): string {
   const inner = innerWhiteDot
     ? '<circle cx="16" cy="14" r="6" fill="white" fill-opacity="0.92"/>'
     : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="80" viewBox="0 0 32 40"><path d="${PIN_PATH}" fill="${fill}"/>${inner}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="80" viewBox="-3 -3 38 48"><defs><filter id="pin-shadow" x="-40%" y="-20%" width="180%" height="180%"><feDropShadow dx="0" dy="1.4" stdDeviation="1.1" flood-color="#0f172a" flood-opacity="0.32"/></filter></defs><path d="${PIN_PATH}" fill="${fill}" stroke="${PIN_STROKE}" stroke-width="1.8" stroke-linejoin="round" filter="url(#pin-shadow)"/>${inner}</svg>`;
 }
 
 function addFallbackOrangePin(map: MapboxMap, id: string): void {
@@ -148,6 +205,8 @@ function addFallbackOrangePin(map: MapboxMap, id: string): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.fillStyle = BRAND.orange;
+  ctx.strokeStyle = PIN_STROKE;
+  ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.moveTo(32, 76);
   ctx.quadraticCurveTo(8, 44, 8, 28);
@@ -155,6 +214,7 @@ function addFallbackOrangePin(map: MapboxMap, id: string): void {
   ctx.quadraticCurveTo(56, 44, 32, 76);
   ctx.closePath();
   ctx.fill();
+  ctx.stroke();
   map.addImage(id, ctx.getImageData(0, 0, width, height), { pixelRatio: 2 });
 }
 
@@ -188,7 +248,7 @@ async function ensurePinImage(map: MapboxMap, id: string, svg: string): Promise<
 export default function PlacesMap({
   places,
   selectedPlaceId,
-  hoveredPlaceId,
+  bindHover,
   flyRequest,
   onFlyComplete,
   panelOpen,
@@ -201,6 +261,7 @@ export default function PlacesMap({
   onHoverPlace,
   onViewportChange,
   onUserCameraMove,
+  onCameraBusy,
   hintTop = 96,
   mapboxToken,
   collapseList = false,
@@ -208,12 +269,16 @@ export default function PlacesMap({
   viewportWidth,
   viewportHeight,
   location,
+  leftPreset = false,
 }: PlacesMapProps) {
   const mapRef = useRef<MapRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapBoxRef = useRef<HTMLDivElement>(null);
-  const flyEndHandlerRef = useRef<(() => void) | null>(null);
+  const flyEndHandlerRef = useRef<(() => void) | null>(null) as CameraHandlerRef;
+  const onCameraBusyRef = useRef(onCameraBusy);
+  const liveMapRef = useRef<MapboxMap | null>(null);
   const flightTagRef = useRef<string | null>(null);
+  const startedFlyNonceRef = useRef<number | null>(null);
   const [imagesReady, setImagesReady] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
   const [highlightedClusterId, setHighlightedClusterId] = useState<number | null>(null);
@@ -233,6 +298,29 @@ export default function PlacesMap({
   const [waterColor, setWaterColor] = useState<string | undefined>(undefined);
   const resizeStateRef = useRef<MapResizeState>({ rafId: null });
   const liveZoomRef = useRef<number | null>(null);
+  const userInputRef = useRef(false);
+  const zoomMovedRef = useRef(false);
+  const pendingClusterRef = useRef<ClusterClickPointer | null>(null);
+  const pointerDownRef = useRef(false);
+  const needsBoundsReportRef = useRef(false);
+  const clusterExpandingRef = useRef(false);
+  const lastOriginalEventRef = useRef<{
+    type?: string;
+    key?: string;
+    code?: string;
+    target?: EventTarget | null;
+  } | null>(null);
+  const gestureRef = useRef(createGestureBoundsState());
+  const gestureTimerRef = useRef<number | null>(null);
+  const pendingWorldwideRefitRef = useRef(false);
+  const pendingCameraRef = useRef<{
+    tag: FlightTag;
+    method: CameraMethod;
+    options: Record<string, unknown>;
+    onEnd: (reason: CameraEndReason) => void;
+  } | null>(null);
+  const detailsOpen = panelOpen && !locationPickMode;
+  const detailsOpenRef = useRef(detailsOpen);
   const slotSize = useMemo(
     () => ({
       width: viewportWidth ?? outerSize.width,
@@ -245,6 +333,9 @@ export default function PlacesMap({
     top: 0,
     height: typeof window === 'undefined' ? 800 : window.innerHeight,
   }));
+  const pendingNarrowWorldwideRef = useRef(false);
+  const prevSlotForJumpRef = useRef<SizeBox | null>(null);
+  const jumpContextRef = useRef({ leftPreset, location, slotSize });
   const flyFitTop = canvasLayout.top > 0 ? 0 : fitTop;
 
   const commitCanvas = useCallback((next: ReturnType<typeof reduceCanvasMachine>) => {
@@ -252,6 +343,21 @@ export default function PlacesMap({
     setCanvasLayout((prev) =>
       prev.top === next.box.top && prev.height === next.box.height ? prev : next.box
     );
+  }, []);
+
+  useEffect(() => {
+    onCameraBusyRef.current = onCameraBusy;
+  }, [onCameraBusy]);
+
+  useEffect(() => {
+    detailsOpenRef.current = detailsOpen;
+  }, [detailsOpen]);
+
+  useEffect(() => {
+    return () => {
+      abandonCameraAnimation(liveMapRef.current, flyEndHandlerRef);
+      onCameraBusyRef.current?.(false);
+    };
   }, []);
 
   const targetZoomForFly = useCallback(
@@ -287,31 +393,90 @@ export default function PlacesMap({
     return clearPaddingKeepView(map);
   }, []);
 
+  const applyNarrowWorldwideAfterResize = useCallback(() => {
+    if (!pendingNarrowWorldwideRef.current) return;
+    const { leftPreset: left, location: loc, slotSize: slot } = jumpContextRef.current;
+    if (!loc || left || loc.id !== 'worldwide') {
+      pendingNarrowWorldwideRef.current = false;
+      return;
+    }
+    const measured =
+      readMeasuredViewport(containerRef.current) ??
+      readMeasuredViewport(mapBoxRef.current) ??
+      slot;
+    const el = mapBoxRef.current;
+    const map = mapRef.current?.getMap();
+    const liveZoom = map?.getZoom() ?? liveZoomRef.current ?? 0;
+    const canvasHeight = el?.clientHeight ?? measured.height;
+    if (canvasHeight >= measured.height - 1) return;
+    if (
+      !shouldApplyNarrowWorldwideAfterResize({
+        pending: true,
+        leftPreset: left,
+        locationId: loc.id,
+        viewport: measured,
+        canvasHeight,
+        liveZoom,
+      })
+    ) {
+      pendingNarrowWorldwideRef.current = false;
+      return;
+    }
+    if (!map) return;
+    pendingNarrowWorldwideRef.current = false;
+    const camera = presetFlyCamera(loc, measured);
+    flightTagRef.current = 'resize';
+    map.jumpTo({ center: [camera.lng, camera.lat], zoom: camera.zoom });
+    liveZoomRef.current = camera.zoom;
+    commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: camera.zoom }));
+    flightTagRef.current = null;
+  }, [commitCanvas]);
+
   const requestMapResize = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    if (isProgrammaticFlightTag(flightTagRef.current) && !pendingNarrowWorldwideRef.current) {
+      return;
+    }
+    if (flyRequest && !pendingNarrowWorldwideRef.current) {
+      return;
+    }
+    if (!mapNeedsResize(map.getCanvas(), mapBoxRef.current)) {
+      applyNarrowWorldwideAfterResize();
+      return;
+    }
     flightTagRef.current = 'resize';
-    scheduleMapResize(map, resizeStateRef.current, requestAnimationFrame, cancelAnimationFrame);
-  }, []);
+    scheduleMapResize(
+      map,
+      resizeStateRef.current,
+      requestAnimationFrame,
+      cancelAnimationFrame,
+      applyNarrowWorldwideAfterResize
+    );
+  }, [applyNarrowWorldwideAfterResize, flyRequest]);
 
   const applyWaterColor = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
-    const color = readMapWaterColor((layer, prop) =>
-      map.getPaintProperty(layer, prop as never)
+    const color = readMapWaterColor(
+      (layer, prop) => map.getPaintProperty(layer, prop as never),
+      map.getZoom()
     );
-    if (color) setWaterColor(color);
+    if (color) setWaterColor((prev) => (prev === color ? prev : color));
   }, []);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const update = () => setOuterSize({ width: el.clientWidth, height: el.clientHeight });
+    const update = () => {
+      setOuterSize({ width: el.clientWidth, height: el.clientHeight });
+      requestMapResize();
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [requestMapResize]);
 
   useLayoutEffect(() => {
     const el = mapBoxRef.current;
@@ -334,8 +499,23 @@ export default function PlacesMap({
   }, [requestMapResize, canvasLayout.top, canvasLayout.height]);
 
   useLayoutEffect(() => {
+    jumpContextRef.current = { leftPreset, location, slotSize };
+    const prev = prevSlotForJumpRef.current;
+    if (shouldReapplyNarrowWorldwide(leftPreset, location?.id ?? '', prev, slotSize)) {
+      pendingNarrowWorldwideRef.current = true;
+    }
+    if (
+      flyRequest?.exactZoom &&
+      location?.id === 'worldwide' &&
+      !leftPreset &&
+      prev &&
+      (prev.width !== slotSize.width || prev.height !== slotSize.height)
+    ) {
+      pendingWorldwideRefitRef.current = true;
+    }
+    prevSlotForJumpRef.current = slotSize;
     let next = reduceCanvasMachine(canvasMachineRef.current, { type: 'viewport', viewport: slotSize });
-    if (flyRequest) {
+    if (!pendingCameraRef.current && flyRequest) {
       const currentZoom = mapRef.current?.getMap()?.getZoom() ?? liveZoomRef.current ?? 3.4;
       next = reduceCanvasMachine(next, {
         type: 'prepareFlight',
@@ -344,25 +524,17 @@ export default function PlacesMap({
       });
     }
     commitCanvas(next);
-  }, [commitCanvas, flyRequest, slotSize, targetZoomForFly]);
+  }, [commitCanvas, flyRequest, leftPreset, location, slotSize, targetZoomForFly]);
 
-  const geojson = useMemo(
-    () => ({
-      type: 'FeatureCollection' as const,
-      features: places.map((place) => ({
-        type: 'Feature' as const,
-        id: place.place_id,
-        properties: {
-          place_id: place.place_id,
-          place_name: place.place_name,
-        },
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [place.lng, place.lat] as [number, number],
-        },
-      })),
-    }),
-    [places]
+  const geojson = useMemo(() => placesToGeoJSON(places), [places]);
+
+  const layerSpecs = useMemo(
+    () =>
+      placesMapLayerSpecs({
+        selectedPlaceId,
+        highlightedClusterId,
+      }),
+    [selectedPlaceId, highlightedClusterId]
   );
 
   const reportViewport = useCallback(() => {
@@ -381,12 +553,236 @@ export default function PlacesMap({
     );
   }, [onViewportChange]);
 
+  const flushPendingCamera = useCallback(
+    (applied: { top: number; height: number }) => {
+      const pending = pendingCameraRef.current;
+      if (!pending) return;
+      if (!canvasReadyForFlight(applied, canvasMachineRef.current.box)) return;
+      const map = mapRef.current?.getMap();
+      if (!map) {
+        pendingCameraRef.current = null;
+        onCameraBusy?.(false);
+        return;
+      }
+      pendingCameraRef.current = null;
+      if (mapNeedsResize(map.getCanvas(), mapBoxRef.current)) {
+        map.resize();
+      }
+      flightTagRef.current = pending.tag;
+      onCameraBusy?.(true);
+      startCameraAnimation(map, flyEndHandlerRef, pending.method, pending.options, pending.onEnd);
+      if (flyEndHandlerRef.current) onCameraBusy?.(true);
+    },
+    [onCameraBusy]
+  );
+
+  const queueProgrammaticCamera = useCallback(
+    (spec: {
+      tag: FlightTag;
+      method: CameraMethod;
+      options: Record<string, unknown>;
+      targetZoom: number;
+      onEnd: (reason: CameraEndReason) => void;
+    }) => {
+      const map = mapRef.current?.getMap();
+      if (map) interruptCameraAnimation(map, flyEndHandlerRef);
+      onCameraBusy?.(true);
+      const next = reduceCanvasMachine(canvasMachineRef.current, {
+        type: 'prepareFlight',
+        targetZoom: spec.targetZoom,
+        viewport: slotSize,
+      });
+      commitCanvas(next);
+      pendingCameraRef.current = {
+        tag: spec.tag,
+        method: spec.method,
+        options: spec.options,
+        onEnd: spec.onEnd,
+      };
+      flightTagRef.current = spec.tag;
+      userInputRef.current = false;
+      lastOriginalEventRef.current = null;
+      zoomMovedRef.current = false;
+      if (canvasBoxEquals(canvasLayout, next.box)) {
+        flushPendingCamera(canvasLayout);
+      }
+    },
+    [canvasLayout, commitCanvas, flushPendingCamera, onCameraBusy, slotSize]
+  );
+
+  const notifyLeavePreset = useCallback(() => {
+    const pending = isGestureSearchPending({
+      pointerDown: pointerDownRef.current,
+      gesture: gestureRef.current,
+    });
+    onUserCameraMove?.({ gestureSearchPending: pending });
+    return pending;
+  }, [onUserCameraMove]);
+
+  const expandCluster = useCallback(
+    (clusterId: number, clusterCenter: [number, number]) => {
+      const failOpen = () => {
+        clusterExpandingRef.current = false;
+        pendingCameraRef.current = null;
+        onCameraBusy?.(false);
+        notifyLeavePreset();
+        needsBoundsReportRef.current = false;
+        reportViewport();
+      };
+      clusterExpandingRef.current = true;
+      const live = mapRef.current?.getMap();
+      if (!live) {
+        failOpen();
+        return;
+      }
+      const source = live.getSource('places') as GeoJSONSource | undefined;
+      if (!source?.getClusterExpansionZoom) {
+        failOpen();
+        return;
+      }
+      source.getClusterExpansionZoom(clusterId, (error, zoom) => {
+        if (error || zoom == null) {
+          failOpen();
+          return;
+        }
+        const map = mapRef.current?.getMap();
+        if (!map) {
+          failOpen();
+          return;
+        }
+        const size = readMeasuredViewport(containerRef.current) ?? slotSize;
+        const padding = flyPadding(detailsOpenRef.current, false, size, collapseList);
+        const camera = clusterExpandCamera(
+          { lng: clusterCenter[0], lat: clusterCenter[1] },
+          zoom,
+          padding
+        );
+        notifyLeavePreset();
+        queueProgrammaticCamera({
+          tag: 'cluster',
+          method: 'easeTo',
+          targetZoom: camera.zoom,
+          options: cameraEaseOptions(CAMERA_DURATION.cluster, {
+            center: [camera.center.lng, camera.center.lat],
+            zoom: camera.zoom,
+            padding: camera.padding,
+            retainPadding: camera.retainPadding,
+          }),
+          onEnd: () => {
+            clusterExpandingRef.current = false;
+            notifyLeavePreset();
+            flightTagRef.current = null;
+            onCameraBusy?.(false);
+            needsBoundsReportRef.current = false;
+            reportViewport();
+          },
+        });
+      });
+    },
+    [collapseList, notifyLeavePreset, onCameraBusy, queueProgrammaticCamera, reportViewport, slotSize]
+  );
+
+  const scheduleGestureBoundsRef = useRef<(kind?: GestureBoundsKind) => void>(() => undefined);
+  const scheduleGestureBounds = useCallback(
+    (kind?: GestureBoundsKind) => {
+      const settleKind = kind ?? gestureRef.current.kind;
+      if (gestureTimerRef.current != null) {
+        window.clearTimeout(gestureTimerRef.current);
+      }
+      gestureTimerRef.current = window.setTimeout(() => {
+        gestureTimerRef.current = null;
+        const map = mapRef.current?.getMap();
+        const decision = shouldFlushGestureBounds({
+          pointerDown: pointerDownRef.current,
+          mapMoving: Boolean(map?.isMoving?.()),
+          gestureId: gestureRef.current.gestureId,
+          reportedId: gestureRef.current.reportedId,
+        });
+        if (!decision.flush) {
+          return;
+        }
+        gestureRef.current = { ...gestureRef.current, reportedId: decision.reportedId };
+        needsBoundsReportRef.current = false;
+        reportViewport();
+        setClusterQueryTick((tick) => tick + 1);
+      }, gestureSettleMs(settleKind));
+    },
+    [reportViewport]
+  );
+
+  useEffect(() => {
+    scheduleGestureBoundsRef.current = scheduleGestureBounds;
+  }, [scheduleGestureBounds]);
+
+  const reportAfterUserGesture = useCallback(() => {
+    needsBoundsReportRef.current = true;
+    scheduleGestureBounds();
+  }, [scheduleGestureBounds]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    return attachUserFlightInputListeners(
+      el,
+      () => Boolean(flyEndHandlerRef.current) || isProgrammaticFlightTag(flightTagRef.current),
+      (type, event) => {
+        if ((type === 'pointerdown' || type === 'touchstart') && isMapControlTarget(event.target)) {
+          return;
+        }
+        userInputRef.current = true;
+        const keyEvent = event as KeyboardEvent;
+        lastOriginalEventRef.current = {
+          type,
+          key: keyEvent.key,
+          code: keyEvent.code,
+          target: event.target,
+        };
+        if (type === 'pointerdown' || type === 'touchstart') {
+          if (shouldHoldPointerForFlight({ type, target: event.target })) {
+            pointerDownRef.current = true;
+          }
+          gestureRef.current = beginUserGesture(gestureRef.current, 'pointer');
+        } else if (type === 'wheel') {
+          gestureRef.current = beginUserGesture(gestureRef.current, 'wheel');
+        } else {
+          gestureRef.current = beginUserGesture(gestureRef.current, 'key');
+        }
+      }
+    );
+  }, []);
+
+  useEffect(() => {
+    const clearHold = () => {
+      pointerDownRef.current = false;
+      if (needsBoundsReportRef.current) {
+        scheduleGestureBoundsRef.current();
+      }
+    };
+    return attachPointerHoldClearListeners(window, clearHold);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (gestureTimerRef.current != null) {
+        window.clearTimeout(gestureTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    flushPendingCamera(canvasLayout);
+    applyNarrowWorldwideAfterResize();
+  }, [applyNarrowWorldwideAfterResize, canvasLayout, flushPendingCamera]);
+
   const handleLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    liveMapRef.current = map;
     map.setMinZoom(0);
+    muteMotorwayLayers(map);
     flightTagRef.current = 'resize';
     map.resize();
+    pinMapboxChromeToContainer(containerRef.current, map.getContainer());
     applyWaterColor();
     map.once('idle', applyWaterColor);
     void Promise.all([
@@ -395,13 +791,6 @@ export default function PlacesMap({
     ]).finally(() => setImagesReady(true));
     reportViewport();
   }, [applyWaterColor, reportViewport]);
-
-  const detailsOpen = panelOpen && !locationPickMode;
-  const detailsOpenRef = useRef(detailsOpen);
-
-  useEffect(() => {
-    detailsOpenRef.current = detailsOpen;
-  }, [detailsOpen]);
 
   useEffect(() => {
     if (detailsOpen) return;
@@ -413,37 +802,37 @@ export default function PlacesMap({
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map || !imagesReady) return;
-    const prev = featureStateRef.current;
-    const clear = (id: string | null, key: 'hover' | 'selected') => {
-      if (!id) return;
+    const applyHover = (placeId: string | null) => {
+      const prev = featureStateRef.current.hover;
+      if (prev === placeId) return;
       try {
-        map.removeFeatureState({ source: 'places', id }, key);
+        if (prev) map.removeFeatureState({ source: 'places', id: prev }, 'hover');
+        if (placeId) map.setFeatureState({ source: 'places', id: placeId }, { hover: true });
       } catch {
         /* source or feature may not exist at this zoom */
       }
+      featureStateRef.current.hover = placeId;
     };
-    const set = (id: string | null, key: 'hover' | 'selected') => {
-      if (!id) return;
-      try {
-        map.setFeatureState({ source: 'places', id }, { [key]: true });
-      } catch {
-        /* clustered-away points have no source feature */
-      }
-    };
-    if (prev.hover !== hoveredPlaceId) {
-      clear(prev.hover, 'hover');
-      set(hoveredPlaceId, 'hover');
-    }
-    if (prev.selected !== selectedPlaceId) {
-      clear(prev.selected, 'selected');
-      set(selectedPlaceId, 'selected');
-    }
-    featureStateRef.current = { hover: hoveredPlaceId, selected: selectedPlaceId };
-  }, [hoveredPlaceId, selectedPlaceId, imagesReady]);
+    return bindHover?.(applyHover);
+  }, [bindHover, imagesReady]);
 
   useEffect(() => {
     const map = mapRef.current?.getMap();
-    const placeId = hoveredPlaceId || selectedPlaceId;
+    if (!map || !imagesReady) return;
+    const prev = featureStateRef.current.selected;
+    if (prev === selectedPlaceId) return;
+    try {
+      if (prev) map.removeFeatureState({ source: 'places', id: prev }, 'selected');
+      if (selectedPlaceId) map.setFeatureState({ source: 'places', id: selectedPlaceId }, { selected: true });
+    } catch {
+      /* clustered-away points have no source feature */
+    }
+    featureStateRef.current.selected = selectedPlaceId;
+  }, [selectedPlaceId, imagesReady]);
+
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    const placeId = selectedPlaceId;
     if (!map || !imagesReady || !placeId) {
       setHighlightedClusterId(null);
       return;
@@ -485,7 +874,7 @@ export default function PlacesMap({
     return () => {
       cancelled = true;
     };
-  }, [hoveredPlaceId, selectedPlaceId, imagesReady, clusterQueryTick]);
+  }, [selectedPlaceId, imagesReady, clusterQueryTick]);
 
   useEffect(() => {
     if (!mapCenterRequest || !mapRef.current || !onMapCenter) return;
@@ -501,16 +890,38 @@ export default function PlacesMap({
     if (!flyRequest || !mapRef.current) return;
     const prepared = canvasMachineRef.current.box;
     if (!canvasReadyForFlight(canvasLayout, prepared)) return;
+    if (!claimFlyNonce(startedFlyNonceRef, flyRequest.nonce)) return;
     const map = mapRef.current.getMap();
+    liveMapRef.current = map;
     if (resizeStateRef.current.rafId != null) {
       cancelAnimationFrame(resizeStateRef.current.rafId);
       resizeStateRef.current.rafId = null;
     }
+    const programmatic = Boolean(flyRequest.programmatic);
+    const flightTag: FlightTag = programmatic
+      ? 'programmatic'
+      : flyRequest.exactZoom
+        ? 'preset'
+        : flyRequest.ease
+          ? 'drawer'
+          : 'place';
+    flightTagRef.current = flightTag;
+    userInputRef.current = false;
+    lastOriginalEventRef.current = null;
+    zoomMovedRef.current = false;
+    onCameraBusy?.(true);
+    if (mapNeedsResize(map.getCanvas(), mapBoxRef.current)) {
+      map.resize();
+    }
+    const measured =
+      readMeasuredViewport(containerRef.current) ??
+      readMeasuredViewport(map.getCanvas()) ??
+      slotSize;
     const currentZoom = map.getZoom();
-    const size = { width: slotSize.width, height: prepared.height };
+    const size = { width: measured.width, height: prepared.height };
     const narrowWorldFly =
       Boolean(flyRequest.exactZoom) &&
-      slotSize.width <= NARROW_VIEWPORT &&
+      isNarrowViewport(measured.width) &&
       (location?.id === 'worldwide' || (flyRequest.zoom ?? currentZoom) <= 1.3);
     const padding = flyPadding(
       panelOpen,
@@ -519,22 +930,19 @@ export default function PlacesMap({
       collapseList || narrowWorldFly,
       flyFitTop
     );
-    let zoom = resolveFlyZoom(currentZoom, flyRequest);
+    let zoom = flyRequest.keepZoom ? currentZoom : resolveFlyZoom(currentZoom, flyRequest);
     let longitude = flyRequest.longitude;
     let latitude = flyRequest.latitude;
-    if (!flyRequest.exactZoom && !flyRequest.programmatic) {
-      onUserCameraMove?.();
+    if (!flyRequest.exactZoom && !flyRequest.ease && !flyRequest.programmatic) {
+      notifyLeavePreset();
     }
     if (flyRequest.exactZoom && location) {
-      const camera = presetCamera(location, slotSize.width, slotSize.height, {
-        left: padding.left,
-        right: padding.right,
-      });
+      const camera = presetFlyCamera(location, measured, panelOpen);
       zoom = camera.zoom;
       longitude = camera.lng;
       latitude = camera.lat;
     } else if (flyRequest.exactZoom && (flyRequest.zoom ?? currentZoom) <= 1.3) {
-      const camera = presetCamera(
+      const camera = presetFlyCamera(
         {
           id: 'worldwide',
           lat: flyRequest.latitude,
@@ -542,55 +950,125 @@ export default function PlacesMap({
           zoom: flyRequest.zoom ?? 1.15,
           radiusKm: 20000,
         },
-        slotSize.width,
-        slotSize.height,
-        { left: padding.left, right: padding.right }
+        measured,
+        panelOpen
       );
       zoom = camera.zoom;
       longitude = camera.lng;
       latitude = camera.lat;
     }
     liveZoomRef.current = zoom;
-    const programmatic = Boolean(flyRequest.programmatic);
     const keepFitPadding = Boolean(flyRequest.exactZoom && flyFitTop > 0);
-    flightTagRef.current = programmatic ? 'resize' : flyRequest.exactZoom ? 'preset' : 'place';
-    // Shrink-first box is on screen. Resize, then one camera call — same path
-    // for animated and prefers-reduced-motion. Padding clear may add one
-    // jumpTo so the visual centre stays put and moveend reports bounds.
-    map.resize();
-    const onFlyEnd = () => {
-      const endedZoom = mapRef.current?.getMap()?.getZoom() ?? zoom;
-      commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
+    const endedTag = flightTag;
+    const endedNonce = flyRequest.nonce;
+    const onFlyEnd = (reason: CameraEndReason = 'complete') => {
       const live = mapRef.current?.getMap();
-      const shouldClear =
-        !detailsOpenRef.current &&
-        !keepFitPadding &&
-        shouldClearPaddingAfterFlight(padding, live?.getPadding());
-      if (shouldClear) {
-        clearPaddingProgrammatic();
+      const endedZoom = live?.getZoom() ?? zoom;
+      const originalEvent = lastOriginalEventRef.current;
+      lastOriginalEventRef.current = null;
+      const kind = classifyFlightEnd({
+        animationReason: reason,
+        userInputActive: userInputRef.current,
+        originalEvent,
+      });
+      let interruptPending: boolean | undefined;
+      if (shouldApplyFlightEndToCanvas(kind)) {
+        commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
+      }
+      if (kind === 'complete') {
+        const shouldClear =
+          !detailsOpenRef.current &&
+          !keepFitPadding &&
+          shouldClearPaddingAfterFlight(
+            flyRequest.exactZoom ? ZERO_PADDING : padding,
+            live?.getPadding()
+          );
+        if (shouldClear) {
+          clearPaddingProgrammatic();
+        }
+        reportViewport();
+        const onChip = jumpContextRef.current;
+        const needFit =
+          pendingWorldwideRefitRef.current ||
+          shouldReapplyNarrowFitAfterFlight({
+            kind: 'complete',
+            leftPreset: onChip.leftPreset,
+            locationId: onChip.location?.id ?? '',
+            viewport: onChip.slotSize,
+            liveZoom: endedZoom,
+          });
+        pendingWorldwideRefitRef.current = false;
+        if (needFit && onChip.location?.id === 'worldwide' && !onChip.leftPreset) {
+          pendingNarrowWorldwideRef.current = true;
+          commitCanvas(
+            reduceCanvasMachine(canvasMachineRef.current, {
+              type: 'prepareFlight',
+              targetZoom: presetFlyCamera(onChip.location, onChip.slotSize).zoom,
+              viewport: onChip.slotSize,
+            })
+          );
+        }
+      } else if (kind === 'user-interrupt') {
+        pendingWorldwideRefitRef.current = false;
+        pendingNarrowWorldwideRef.current = false;
+        interruptPending = notifyLeavePreset();
+        reportAfterUserGesture();
       } else {
+        pendingWorldwideRefitRef.current = false;
+      }
+      if (kind !== 'replaced' && flightTagRef.current === endedTag) {
         flightTagRef.current = null;
       }
+      if (kind !== 'replaced') {
+        userInputRef.current = false;
+        zoomMovedRef.current = false;
+      }
+      onCameraBusy?.(pendingCameraRef.current != null);
+      onFlyComplete(
+        endedNonce,
+        kind,
+        interruptPending != null ? { gestureSearchPending: interruptPending } : undefined
+      );
     };
+    const current = map.getCenter();
+    const move = programmatic
+      ? { method: 'easeTo' as const, duration: 0 }
+      : flyRequest.ease
+        ? pickCameraAnimation('drawer', current, { lng: longitude, lat: latitude, zoom })
+        : pickCameraAnimation(
+            flyRequest.exactZoom ? 'preset' : 'place',
+            { lng: current.lng, lat: current.lat, zoom: currentZoom },
+            { lng: longitude, lat: latitude, zoom }
+          );
+    const cameraOptions = flyRequest.exactZoom
+      ? {
+          center: [longitude, latitude],
+          zoom,
+          padding: { top: 0, right: 0, bottom: 0, left: 0 },
+          retainPadding: false,
+        }
+      : {
+          center: [longitude, latitude],
+          zoom,
+          padding,
+          retainPadding: keepFitPadding || !paddingIsZero(padding),
+        };
+    // Instant flights (duration 0 / reduced motion) finish inside flyTo/easeTo
+    // and startCameraAnimation runs onFlyEnd now. Animated flights attach after
+    // start so stop() from an interrupt does not consume this cleanup.
+    // Shrink-first already resized the short canvas. One capped unpadded
+    // preset fly; a leftover padded flight may add one jumpTo so the visual
+    // centre stays put and moveend reports bounds.
     startCameraAnimation(
       map,
       flyEndHandlerRef,
-      programmatic ? 'easeTo' : 'flyTo',
-      {
-        center: [longitude, latitude],
-        zoom,
-        duration: programmatic
-          ? 0
-          : flyRequest.exactZoom
-            ? CAMERA_DURATION.preset
-            : CAMERA_DURATION.place,
-        easing: easeOutCubic,
-        padding,
-        retainPadding: flyRequest.exactZoom ? keepFitPadding : undefined,
-      },
+      move.method,
+      move.method === 'easeTo'
+        ? cameraEaseOptions(move.duration, cameraOptions)
+        : cameraFlyOptions({ ...cameraOptions, duration: move.duration }),
       onFlyEnd
     );
-    onFlyComplete();
+    if (flyEndHandlerRef.current) onCameraBusy?.(true);
   }, [
     canvasLayout,
     collapseList,
@@ -599,9 +1077,12 @@ export default function PlacesMap({
     flyRequest,
     location,
     clearPaddingProgrammatic,
+    notifyLeavePreset,
+    onCameraBusy,
     onFlyComplete,
-    onUserCameraMove,
     panelOpen,
+    reportAfterUserGesture,
+    reportViewport,
     slotSize,
   ]);
 
@@ -611,13 +1092,19 @@ export default function PlacesMap({
     if (!detailsOpen) {
       clearPaddingProgrammatic();
     }
-    onUserCameraMove?.();
-    startCameraAnimation(
-      map,
-      flyEndHandlerRef,
-      'easeTo',
-      { zoom: map.getZoom() + delta, duration: CAMERA_DURATION.zoom, easing: easeOutCubic }
-    );
+    notifyLeavePreset();
+    const targetZoom = map.getZoom() + delta;
+    queueProgrammaticCamera({
+      tag: 'zoom',
+      method: 'easeTo',
+      targetZoom,
+      options: cameraEaseOptions(CAMERA_DURATION.zoom, { zoom: targetZoom }),
+      onEnd: () => {
+        flightTagRef.current = null;
+        onCameraBusy?.(false);
+        reportViewport();
+      },
+    });
   };
 
   const locateMe = () => {
@@ -628,20 +1115,23 @@ export default function PlacesMap({
     setLocateError(null);
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        onUserCameraMove?.();
-        const live = mapRef.current?.getMap();
-        if (!live) return;
-        startCameraAnimation(
-          live,
-          flyEndHandlerRef,
-          'flyTo',
-          {
+        notifyLeavePreset();
+        if (!mapRef.current) return;
+        queueProgrammaticCamera({
+          tag: 'locate',
+          method: 'flyTo',
+          targetZoom: 11,
+          options: cameraFlyOptions({
             center: [position.coords.longitude, position.coords.latitude],
             zoom: 11,
             duration: CAMERA_DURATION.locate,
-            easing: easeOutCubic,
-          }
-        );
+          }),
+          onEnd: () => {
+            flightTagRef.current = null;
+            onCameraBusy?.(false);
+            reportViewport();
+          },
+        });
       },
       (err) => {
         setLocateError(
@@ -653,6 +1143,60 @@ export default function PlacesMap({
     );
   };
 
+  const handleMapMouseDown = (event: MapMouseEvent) => {
+    pointerDownRef.current = true;
+    if (!isProgrammaticFlightTag(flightTagRef.current)) return;
+    userInputRef.current = true;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    let hits: Array<{
+      properties?: { cluster?: boolean; cluster_id?: number | string };
+      geometry?: { type?: string; coordinates?: [number, number] };
+    }> = [];
+    try {
+      hits = map.queryRenderedFeatures(event.point, {
+        layers: ['clusters', 'cluster-count'],
+      }) as typeof hits;
+    } catch {
+      return;
+    }
+    const feature = hits[0];
+    const props = feature?.properties;
+    if (!shouldQueueClusterExpand(flightTagRef.current, props)) return;
+    const clusterId = Number(props?.cluster_id);
+    if (!Number.isFinite(clusterId)) return;
+    const coords = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : undefined;
+    pendingClusterRef.current = {
+      clusterId,
+      center: coords ?? [event.lngLat.lng, event.lngLat.lat],
+      x: event.point.x,
+      y: event.point.y,
+      at: Date.now(),
+    };
+  };
+
+  const handleMapMouseUp = (event: MapMouseEvent) => {
+    const pending = pendingClusterRef.current;
+    pointerDownRef.current = false;
+    if (pending) {
+      pendingClusterRef.current = null;
+      if (
+        isGenuineClusterClick({
+          start: pending,
+          end: { x: event.point.x, y: event.point.y, at: Date.now() },
+        })
+      ) {
+        expandCluster(pending.clusterId, pending.center);
+      } else if (needsBoundsReportRef.current) {
+        reportAfterUserGesture();
+      }
+      return;
+    }
+    if (needsBoundsReportRef.current) {
+      reportAfterUserGesture();
+    }
+  };
+
   const handleMapClick = (event: MapMouseEvent) => {
     const feature = event.features?.[0] as
       | {
@@ -662,30 +1206,11 @@ export default function PlacesMap({
       | undefined;
     const props = feature?.properties;
     if (props?.cluster_id != null && mapRef.current) {
-      const source = mapRef.current.getMap().getSource('places') as GeoJSONSource;
+      pendingClusterRef.current = null;
+      if (clusterExpandingRef.current) return;
       const coords = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : undefined;
       const clusterCenter: [number, number] = coords ?? [event.lngLat.lng, event.lngLat.lat];
-      source.getClusterExpansionZoom(Number(props.cluster_id), (error, zoom) => {
-        if (error || zoom == null) return;
-        const map = mapRef.current?.getMap();
-        if (map && !detailsOpen) {
-          clearPaddingProgrammatic();
-        }
-        onUserCameraMove?.();
-        const live = mapRef.current?.getMap();
-        if (!live) return;
-        startCameraAnimation(
-          live,
-          flyEndHandlerRef,
-          'easeTo',
-          {
-            center: clusterCenter,
-            zoom,
-            duration: CAMERA_DURATION.cluster,
-            easing: easeOutCubic,
-          }
-        );
-      });
+      expandCluster(Number(props.cluster_id), clusterCenter);
       return;
     }
     if (locationPickMode) {
@@ -698,6 +1223,10 @@ export default function PlacesMap({
   };
 
   const handleMouseMove = (event: MapMouseEvent) => {
+    const queued = pendingClusterRef.current;
+    if (queued && clusterPointerMoved(queued, event.point)) {
+      pendingClusterRef.current = null;
+    }
     const map = mapRef.current?.getMap();
     if (!map) return;
     const feature = event.features?.[0] as
@@ -762,14 +1291,17 @@ export default function PlacesMap({
 
   const handleMove = useCallback(
     (event: ViewStateChangeEvent) => {
+      if (isUserGestureEvent(event as { originalEvent?: unknown })) {
+        userInputRef.current = true;
+      }
       const nextZoom = event.viewState.zoom;
       const prevZoom = liveZoomRef.current;
       liveZoomRef.current = nextZoom;
+      if (prevZoom != null && Math.abs(prevZoom - nextZoom) > 1e-6) {
+        zoomMovedRef.current = true;
+      }
       const tag = flightTagRef.current;
-      const programmaticFlight =
-        (tag === 'preset' || tag === 'resize' || tag === 'programmatic' || tag === 'place') &&
-        !isUserGestureEvent(event as { originalEvent?: unknown });
-      if (programmaticFlight) {
+      if (isProgrammaticCanvasMove(tag, event as { originalEvent?: unknown })) {
         commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightProgress', zoom: nextZoom }));
         return;
       }
@@ -791,18 +1323,36 @@ export default function PlacesMap({
   const handleMoveEnd = useCallback(
     (event: ViewStateChangeEvent) => {
       handleMove(event);
+      const zoomChanged = zoomMovedRef.current;
       const tag = flightTagRef.current;
-      const effects = cameraMoveendEffects(event as { originalEvent?: unknown }, tag);
-      if (effects.reportBounds) reportViewport();
-      setClusterQueryTick((tick) => tick + 1);
-      if (effects.leavePreset) {
-        onUserCameraMove?.();
+      const effects = cameraMoveendEffects(event as { originalEvent?: unknown }, tag, {
+        userInputActive: userInputRef.current,
+        zoomChanged,
+      });
+      if (isUserGestureEvent(event as { originalEvent?: unknown })) {
+        lastOriginalEventRef.current = (event as { originalEvent?: { type?: string } }).originalEvent ?? {
+          type: 'move',
+        };
       }
-      if (tag === 'resize') {
+      if (effects.leavePreset) {
+        notifyLeavePreset();
+      }
+      if (needsBoundsReportRef.current) {
+        scheduleGestureBounds(gestureRef.current.kind);
+      } else if (effects.reportBounds) {
+        reportViewport();
+        setClusterQueryTick((tick) => tick + 1);
+      }
+      if (tag === 'resize' || effects.leavePreset) {
         flightTagRef.current = null;
       }
+      const map = mapRef.current?.getMap();
+      if (!map?.isMoving?.() && !flyEndHandlerRef.current) {
+        userInputRef.current = false;
+        zoomMovedRef.current = false;
+      }
     },
-    [handleMove, onUserCameraMove, reportViewport]
+    [handleMove, notifyLeavePreset, reportViewport, scheduleGestureBounds]
   );
 
   const pinHint = locationPickMode ? (
@@ -826,6 +1376,10 @@ export default function PlacesMap({
   );
 
   const accessToken = resolveMapboxToken(mapboxToken);
+  const fillColor = waterColor ?? (canvasLayout.top > 0 ? STREETS_LOW_ZOOM_OCEAN : undefined);
+  const leftoverFill = fillColor ? canvasFillStyle(canvasLayout, fillColor) : null;
+  const hostStyle = canvasHostStyle(canvasLayout);
+  const chromeLayout = mapboxChromeLayout({ canvasWidth: slotSize.width, collapseList });
 
   if (!accessToken) {
     return (
@@ -854,23 +1408,37 @@ export default function PlacesMap({
       ref={containerRef}
       data-places-map
       className="relative h-full w-full"
-      style={waterColor ? { backgroundColor: waterColor } : undefined}
+      style={{
+        ...(fillColor ? { backgroundColor: fillColor } : {}),
+        ['--map-chrome-left' as string]: `${chromeLayout.left}px`,
+        ['--map-chrome-bottom' as string]: `${chromeLayout.bottom}px`,
+      }}
     >
+      {leftoverFill && (
+        <div
+          data-map-fill
+          className="pointer-events-none absolute inset-x-0 top-0"
+          style={leftoverFill}
+        />
+      )}
+      <div data-map-canvas className="absolute inset-0 overflow-hidden">
       <div
         ref={mapBoxRef}
-        data-map-canvas
-        className="absolute inset-x-0 overflow-hidden"
-        style={{ top: canvasLayout.top, height: canvasLayout.height }}
+        data-map-canvas-host
+        className="absolute inset-x-0 top-0 overflow-hidden"
+        style={hostStyle}
       >
       <MapGL
         ref={mapRef}
         initialViewState={{ longitude: -98.5795, latitude: 39.8283, zoom: 3.4 }}
         minZoom={0}
         projection="mercator"
-        mapStyle="mapbox://styles/mapbox/light-v11"
+        mapStyle={MAPBOX_STREETS_STYLE}
         mapboxAccessToken={accessToken}
         attributionControl
-        style={{ width: '100%', height: '100%' }}
+        renderWorldCopies
+        {...{ fadeDuration: MAP_FADE_DURATION_MS }}
+        style={{ width: '100%', height: '100%', backgroundColor: fillColor }}
         interactiveLayerIds={
           imagesReady
             ? [
@@ -884,8 +1452,11 @@ export default function PlacesMap({
         }
         cursor="auto"
         onLoad={handleLoad}
+        onZoomEnd={applyWaterColor}
         onMove={handleMove}
         onMoveEnd={handleMoveEnd}
+        onMouseDown={handleMapMouseDown}
+        onMouseUp={handleMapMouseUp}
         onClick={handleMapClick}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => {
@@ -904,11 +1475,7 @@ export default function PlacesMap({
             clusterRadius={60}
             promoteId="place_id"
           >
-            {placesMapLayerSpecs({
-              hoveredPlaceId,
-              selectedPlaceId,
-              highlightedClusterId,
-            }).map((layer) => (
+            {layerSpecs.map((layer) => (
               <Layer
                 key={layer.id}
                 id={layer.id}
@@ -929,6 +1496,7 @@ export default function PlacesMap({
           </Marker>
         )}
       </MapGL>
+      </div>
       </div>
 
       {pinHint}

@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { placesListHeading } from '@/lib/list-heading';
-import { FILTER_OVERLAY_HEADER_INSET, shouldScrollChildIntoView } from '@/lib/map-style';
+import { listSwapForCls, PLACE_CARD_LAYOUT } from '@/lib/merge-local-places';
+import { FILTER_OVERLAY_HEADER_INSET } from '@/lib/map-style';
 import type { PlaceSearchResult } from '@/lib/types';
 import PlaceCard from './PlaceCard';
 
@@ -10,7 +11,6 @@ interface PlacesListProps {
   places: PlaceSearchResult[];
   total: number;
   selectedPlaceId: string | null;
-  hoveredPlaceId: string | null;
   favorites: Set<string>;
   onSelectPlace: (placeId: string) => void;
   onHoverPlace: (placeId: string | null) => void;
@@ -27,13 +27,14 @@ interface PlacesListProps {
   collapsible?: boolean;
   expanded?: boolean;
   onToggleExpanded?: () => void;
+  /** Region/request key — remount the card batch on preset/region settle. */
+  listKey?: string;
 }
 
-export default function PlacesList({
+function PlacesList({
   places,
   total,
   selectedPlaceId,
-  hoveredPlaceId,
   favorites,
   onSelectPlace,
   onHoverPlace,
@@ -48,33 +49,44 @@ export default function PlacesList({
   collapsible = false,
   expanded = true,
   onToggleExpanded,
+  listKey = '0',
 }: PlacesListProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
   const compact = collapsible && !expanded;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [swap, setSwap] = useState(() => ({
+    seen: places,
+    exiting: [] as PlaceSearchResult[],
+    key: listKey,
+  }));
+  if (swap.seen !== places || swap.key !== listKey) {
+    if (swap.key !== listKey) {
+      setSwap({ seen: places, exiting: [], key: listKey });
+    } else {
+      const next = listSwapForCls(swap.seen, places);
+      setSwap({ seen: places, exiting: next.exiting, key: listKey });
+    }
+  }
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [listKey]);
+  useEffect(() => {
+    if (swap.exiting.length === 0) return;
+    const handle = window.setTimeout(() => {
+      setSwap((current) => (current.exiting.length === 0 ? current : { ...current, exiting: [] }));
+    }, PLACE_CARD_LAYOUT.exitMs);
+    return () => window.clearTimeout(handle);
+  }, [swap.exiting]);
   const title =
     heading ??
     (isLoading && places.length === 0
       ? 'Loading places…'
       : placesListHeading(places.length, total, locationName, { hasMore }));
 
-  useEffect(() => {
-    const placeId = hoveredPlaceId || selectedPlaceId;
-    const parent = scrollRef.current;
-    if (!placeId || !parent) return;
-    const child = parent.querySelector<HTMLElement>(`[data-place-id="${placeId}"]`);
-    if (!child) return;
-    const parentRect = parent.getBoundingClientRect();
-    const childRect = child.getBoundingClientRect();
-    if (shouldScrollChildIntoView(childRect, parentRect)) {
-      child.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, [hoveredPlaceId, selectedPlaceId]);
-
   const toggleLabel = (
     <span className="ml-3 flex shrink-0 items-center gap-1 text-sm font-medium text-gray-500">
       {expanded ? 'Hide list' : 'Show list'}
       <svg
-        className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
+        className={`h-4 w-4 places-list-chevron ${expanded ? 'rotate-180' : ''}`}
         viewBox="0 0 20 20"
         fill="currentColor"
         aria-hidden
@@ -91,17 +103,23 @@ export default function PlacesList({
   return (
     <div
       data-places-list
-      className={`flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5 ${
+      data-list-expanded={expanded ? 'true' : 'false'}
+      data-collapsible={collapsible ? 'true' : 'false'}
+      className={`places-list flex flex-col overflow-hidden rounded-2xl bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)] ring-1 ring-black/5 ${
         compact ? 'h-auto' : 'h-full'
       }`}
     >
+      <div className="relative h-0.5 shrink-0 overflow-hidden bg-transparent" aria-hidden>
+        {isLoading ? <div className="places-loading-bar" /> : null}
+      </div>
       <div
+        data-list-header
         className="border-b border-gray-100"
         style={filterHeaderInset ? { paddingTop: FILTER_OVERLAY_HEADER_INSET } : undefined}
       >
         {collapsible ? (
           <div className="flex w-full items-center justify-between px-4 py-3">
-            <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+            <h2 className="min-h-6 text-base font-semibold text-gray-900">{title}</h2>
             <button
               type="button"
               className="-mr-2 rounded-lg px-2 py-1 text-left hover:bg-gray-50"
@@ -114,43 +132,67 @@ export default function PlacesList({
           </div>
         ) : (
           <div className="px-4 py-3">
-            <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+            <h2 className="min-h-6 text-base font-semibold text-gray-900">{title}</h2>
           </div>
         )}
       </div>
 
       <div
-        id="places-list-body"
-        ref={scrollRef}
-        hidden={compact}
-        className="flex-1 space-y-1 overflow-y-auto px-2 py-2"
+        className={`places-list-body-wrap ${compact ? 'places-list-body-wrap-collapsed' : 'places-list-body-wrap-expanded'}`}
+        aria-hidden={compact}
+        inert={compact ? true : undefined}
       >
+        <div
+          ref={bodyRef}
+          id="places-list-body"
+          hidden={compact}
+          className="places-list-body relative flex-1 space-y-1 overflow-y-auto px-2 py-2"
+        >
           {error && (
             <div className="m-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
           )}
+
+          <div key={listKey} className="places-list-batch space-y-1">
+            {places.map((place) => (
+              <PlaceCard
+                key={place.place_id}
+                place={place}
+                isSelected={selectedPlaceId === place.place_id}
+                isFavorited={favorites.has(place.place_id)}
+                onSelectPlace={onSelectPlace}
+                onHoverPlace={onHoverPlace}
+                onToggleFavorite={onToggleFavorite}
+              />
+            ))}
+          </div>
+
+          {swap.exiting.length > 0 ? (
+            <div className="places-list-exit" aria-hidden>
+              {swap.exiting.map((place) => (
+                <PlaceCard
+                  key={`exit-${place.place_id}`}
+                  place={place}
+                  isSelected={false}
+                  isFavorited={favorites.has(place.place_id)}
+                  onSelectPlace={onSelectPlace}
+                  onHoverPlace={onHoverPlace}
+                  onToggleFavorite={onToggleFavorite}
+                />
+              ))}
+            </div>
+          ) : null}
 
           {isLoading && places.length === 0 ? (
             <div className="flex h-32 items-center justify-center">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
             </div>
-          ) : places.length === 0 ? (
+          ) : null}
+
+          {!isLoading && places.length === 0 ? (
             <div className="px-4 py-10 text-center text-sm text-gray-500">
               No places in this view. Try zooming out or clearing filters.
             </div>
-          ) : (
-            places.map((place) => (
-              <PlaceCard
-                key={place.place_id}
-                place={place}
-                isSelected={selectedPlaceId === place.place_id}
-                isHovered={hoveredPlaceId === place.place_id}
-                isFavorited={favorites.has(place.place_id)}
-                onSelect={() => onSelectPlace(place.place_id)}
-                onHover={(hover) => onHoverPlace(hover ? place.place_id : null)}
-                onToggleFavorite={() => onToggleFavorite(place.place_id)}
-              />
-            ))
-          )}
+          ) : null}
 
           {hasMore && !isLoading && (
             <div className="p-2">
@@ -163,13 +205,10 @@ export default function PlacesList({
               </button>
             </div>
           )}
-
-          {isLoading && places.length > 0 && (
-            <div className="flex items-center justify-center py-4">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand border-t-transparent" />
-            </div>
-          )}
+        </div>
       </div>
     </div>
   );
 }
+
+export default memo(PlacesList);

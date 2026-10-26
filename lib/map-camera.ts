@@ -23,8 +23,12 @@ export const WORLDWIDE_COMFORT_LNG = -20;
 export const WORLDWIDE_LAT = 20;
 /** Hide/collapse the list while framing Worldwide so the whole world can fit. */
 export const NARROW_VIEWPORT = 768;
-/** List expand/collapse settle time before a follow-up `map.resize()`. */
-export const LIST_EXPAND_RESIZE_MS = 220;
+/** List panel overlays the map (and chrome) only from this width up. */
+export const DESKTOP_LIST_OVERLAP = 1280;
+/** Show/Hide max-height duration — keep in sync with `.places-list-body-wrap` in globals.css. */
+export const LIST_EXPAND_MS = 280;
+/** Follow-up `map.resize()` after the list expand/collapse transition settles. */
+export const LIST_EXPAND_RESIZE_MS = LIST_EXPAND_MS + 20;
 
 export function wrapLng(lng: number): number {
   return ((((lng + 180) % 360) + 360) % 360) - 180;
@@ -37,6 +41,64 @@ export function mercatorWorldPx(zoom: number): number {
 /** Left padding that lines the padded viewport up with the list’s right edge. */
 export function listPanelRightEdge(canvasWidth: number): number {
   return Math.min(LIST_PANEL_RIGHT, Math.max(0, canvasWidth - 80));
+}
+
+/** Mapbox logo/attrib sit in the visible map, not under the list or the Next.js badge. */
+export function mapboxChromeInsetLeft(canvasWidth: number, collapseList: boolean): number {
+  return mapboxChromeLayout({ canvasWidth, collapseList }).left;
+}
+
+/** Conservative Mapbox chrome boxes used to keep logo and attrib apart. */
+export const MAPBOX_LOGO = { width: 88, height: 23, pad: 10 } as const;
+export const MAPBOX_ATTRIB = { width: 280, height: 20, pad: 8 } as const;
+export const MAPBOX_CHROME_GAP = 8;
+
+/**
+ * Logo/attrib placement. Desktop (1280+) insets by the overlapping list.
+ * At 768 the list is a left sheet — park chrome in the visible map gap
+ * and lift the logo above the attribution bar so they never overlap.
+ */
+export function mapboxChromeLayout(input: {
+  canvasWidth: number;
+  collapseList: boolean;
+  /** Live sheet height when the stacked list is shown; unused for the gap park. */
+  sheetHeight?: number;
+}): { left: number; bottom: number } {
+  const { canvasWidth, collapseList } = input;
+  if (collapseList) return { left: 0, bottom: 0 };
+  if (canvasWidth >= DESKTOP_LIST_OVERLAP) {
+    return { left: listPanelRightEdge(canvasWidth), bottom: 0 };
+  }
+  const left = listPanelRightEdge(canvasWidth);
+  const logoRight = left + MAPBOX_LOGO.pad + MAPBOX_LOGO.width;
+  const attribLeft = canvasWidth - MAPBOX_ATTRIB.pad - MAPBOX_ATTRIB.width;
+  const bottom =
+    logoRight + MAPBOX_CHROME_GAP > attribLeft ? MAPBOX_ATTRIB.height + MAPBOX_CHROME_GAP : 0;
+  return { left, bottom };
+}
+
+export function mapboxChromeRects(
+  canvasWidth: number,
+  canvasHeight: number,
+  collapseList: boolean
+): {
+  logo: { left: number; right: number; top: number; bottom: number };
+  attrib: { left: number; right: number; top: number; bottom: number };
+} {
+  const { left, bottom } = mapboxChromeLayout({ canvasWidth, collapseList });
+  const logo = {
+    left: left + MAPBOX_LOGO.pad,
+    right: left + MAPBOX_LOGO.pad + MAPBOX_LOGO.width,
+    top: canvasHeight - bottom - MAPBOX_LOGO.pad - MAPBOX_LOGO.height,
+    bottom: canvasHeight - bottom - MAPBOX_LOGO.pad,
+  };
+  const attrib = {
+    left: canvasWidth - MAPBOX_ATTRIB.pad - MAPBOX_ATTRIB.width,
+    right: canvasWidth - MAPBOX_ATTRIB.pad,
+    top: canvasHeight - MAPBOX_ATTRIB.pad - MAPBOX_ATTRIB.height,
+    bottom: canvasHeight - MAPBOX_ATTRIB.pad,
+  };
+  return { logo, attrib };
 }
 
 /** Drawer width plus `right-4`, never wider than the canvas minus side gutters. */
@@ -162,7 +224,7 @@ export type CanvasMachineEvent =
   | { type: 'viewport'; viewport: SizeBox }
   | { type: 'prepareFlight'; targetZoom: number; viewport?: SizeBox }
   | { type: 'flightProgress'; zoom: number }
-  | { type: 'flightEnd'; zoom: number }
+  | { type: 'flightEnd'; zoom: number; replaced?: boolean }
   | { type: 'pan'; zoom: number }
   | { type: 'userZoom'; zoom: number; prevZoom?: number }
   | { type: 'resizeNarrowFit'; viewport: SizeBox; targetZoom: number };
@@ -175,9 +237,29 @@ export function canvasBoxEquals(a: CanvasBox, b: CanvasBox): boolean {
   return a.top === b.top && a.height === b.height;
 }
 
-/** True once the shrink-first box is committed — only then start the camera. */
+/** True once the shrink-first box is committed — only then start the capped fly. */
 export function canvasReadyForFlight(applied: CanvasBox, prepared: CanvasBox): boolean {
   return canvasBoxEquals(applied, prepared);
+}
+
+/**
+ * Keep the measured map box (`data-map-canvas`) fixed. Offset the GL host with
+ * a transform so Worldwide grow-back is not a layout shift.
+ */
+export function canvasHostStyle(box: CanvasBox): { height: number; transform: string } {
+  return {
+    height: box.height,
+    transform: box.top === 0 ? 'none' : `translate3d(0, ${box.top}px, 0)`,
+  };
+}
+
+/** Leftover band above a shortened canvas — ocean, never page beige or white. */
+export function canvasFillStyle(
+  box: CanvasBox,
+  color: string
+): { height: number; backgroundColor: string } | null {
+  if (box.top <= 0) return null;
+  return { height: box.top, backgroundColor: color };
 }
 
 export function createCanvasMachine(viewport: SizeBox): CanvasMachineState {
@@ -198,10 +280,19 @@ function withBox(state: CanvasMachineState): CanvasMachineState {
   return { ...state, box: lowZoomCanvasLayout(state.viewport, state.anchorZoom) };
 }
 
+/** Programmatic cameras above this zoom must use the full-height canvas. */
+export const WORLDWIDE_CANVAS_GROW_ZOOM = 1;
+
+/** Empty leftover band is only for the narrow Worldwide floor, never city zooms. */
+export function shouldGrowCanvasForZoom(zoom: number): boolean {
+  return zoom > WORLDWIDE_CANVAS_GROW_ZOOM;
+}
+
 /**
- * Hysteresis canvas: shrink *before* a low-target programmatic flight and
- * keep that height until a user zoom-in (or a high-target flight) reaches
- * the full-height clamp. Live zoom during a flight never grows the canvas.
+ * Hysteresis canvas: shrink *before* a low-target programmatic flight.
+ * Any programmatic non-Worldwide move (target above the height clamp, or
+ * zoom > 1) grows to full height first — resize, then one camera call.
+ * Live zoom during a flight never grows the canvas.
  */
 export function reduceCanvasMachine(
   state: CanvasMachineState,
@@ -237,21 +328,23 @@ export function reduceCanvasMachine(
         };
       }
       return {
-        ...state,
         viewport,
+        shortened: false,
         flightLocked: true,
-        growArmed: state.shortened,
-        box: state.shortened
-          ? lowZoomCanvasLayout(viewport, state.anchorZoom ?? event.targetZoom)
-          : fullCanvasBox(viewport),
+        growArmed: false,
+        anchorZoom: null,
+        box: fullCanvasBox(viewport),
       };
     }
     case 'flightProgress':
       return state;
     case 'flightEnd': {
+      // A replaced animation is not the active camera — its live zoom must
+      // not grow or shrink the canvas. prepareFlight of the newest fly owns size.
+      if (event.replaced) return state;
       const unlocked = { ...state, flightLocked: false };
       const clamp = mapboxHeightMinZoom(state.viewport.height);
-      if (state.growArmed && event.zoom >= clamp - 1e-9) {
+      if (shouldGrowCanvasForZoom(event.zoom) || (state.growArmed && event.zoom >= clamp - 1e-9)) {
         return {
           ...unlocked,
           shortened: false,
@@ -351,7 +444,250 @@ export function shouldApplyNarrowWorldwideAfterResize(input: {
   );
 }
 
-/** Pull a CSS color out of a Mapbox paint value (constant or expression). */
+export type RgbaColor = [number, number, number, number];
+
+function clampChannel(value: number, max = 255): number {
+  return Math.min(max, Math.max(0, value));
+}
+
+function splitColorArgs(inner: string): string[] {
+  const [main, alpha] = inner.split('/');
+  const parts = main.split(/[\s,]+/).map((part) => part.trim()).filter(Boolean);
+  if (alpha?.trim()) parts.push(alpha.trim());
+  return parts;
+}
+
+function parseChannel(raw: string, max: number): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.endsWith('%')) {
+    const pct = Number.parseFloat(trimmed.slice(0, -1));
+    return Number.isFinite(pct) ? (pct / 100) * max : null;
+  }
+  const n = Number.parseFloat(trimmed);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseAlpha(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed.endsWith('%')) {
+    const pct = Number.parseFloat(trimmed.slice(0, -1));
+    return Number.isFinite(pct) ? clampChannel(pct / 100, 1) : null;
+  }
+  const n = Number.parseFloat(trimmed);
+  return Number.isFinite(n) ? clampChannel(n, 1) : null;
+}
+
+function parseHue(raw: string): number | null {
+  const trimmed = raw.trim().toLowerCase();
+  const match = trimmed.match(/^(-?[\d.]+)(deg|rad|turn|grad)?$/);
+  if (!match) return null;
+  const n = Number.parseFloat(match[1]);
+  if (!Number.isFinite(n)) return null;
+  switch (match[2]) {
+    case 'rad':
+      return (n * 180) / Math.PI;
+    case 'turn':
+      return n * 360;
+    case 'grad':
+      return (n * 9) / 10;
+    default:
+      return n;
+  }
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const sat = clampChannel(s, 1);
+  const light = clampChannel(l, 1);
+  const hue = ((h % 360) + 360) % 360;
+  const chroma = (1 - Math.abs(2 * light - 1)) * sat;
+  const huePrime = hue / 60;
+  const x = chroma * (1 - Math.abs((huePrime % 2) - 1));
+  const m = light - chroma / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (huePrime < 1) [r, g, b] = [chroma, x, 0];
+  else if (huePrime < 2) [r, g, b] = [x, chroma, 0];
+  else if (huePrime < 3) [r, g, b] = [0, chroma, x];
+  else if (huePrime < 4) [r, g, b] = [0, x, chroma];
+  else if (huePrime < 5) [r, g, b] = [x, 0, chroma];
+  else [r, g, b] = [chroma, 0, x];
+  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+}
+
+/** Parse a CSS / Mapbox color string to RGBA 0–255 / 0–1. */
+export function parseCssColor(value: string): RgbaColor | null {
+  const v = value.trim();
+  if (!v || v.toLowerCase() === 'transparent') return null;
+  if (v.charAt(0) === '#') {
+    const hex = v.slice(1);
+    if (hex.length === 3 || hex.length === 4) {
+      const r = Number.parseInt(hex[0] + hex[0], 16);
+      const g = Number.parseInt(hex[1] + hex[1], 16);
+      const b = Number.parseInt(hex[2] + hex[2], 16);
+      const a = hex.length === 4 ? Number.parseInt(hex[3] + hex[3], 16) / 255 : 1;
+      if ([r, g, b, a].some((n) => Number.isNaN(n))) return null;
+      return [r, g, b, a];
+    }
+    if (hex.length === 6 || hex.length === 8) {
+      const r = Number.parseInt(hex.slice(0, 2), 16);
+      const g = Number.parseInt(hex.slice(2, 4), 16);
+      const b = Number.parseInt(hex.slice(4, 6), 16);
+      const a = hex.length === 8 ? Number.parseInt(hex.slice(6, 8), 16) / 255 : 1;
+      if ([r, g, b, a].some((n) => Number.isNaN(n))) return null;
+      return [r, g, b, a];
+    }
+    return null;
+  }
+  const lower = v.toLowerCase();
+  const rgb = lower.match(/^rgba?\(\s*([\s\S]+)\)$/);
+  if (rgb) {
+    const parts = splitColorArgs(rgb[1]);
+    if (parts.length < 3) return null;
+    const r = parseChannel(parts[0], 255);
+    const g = parseChannel(parts[1], 255);
+    const b = parseChannel(parts[2], 255);
+    const a = parts[3] != null ? parseAlpha(parts[3]) : 1;
+    if (r == null || g == null || b == null || a == null) return null;
+    return [clampChannel(r), clampChannel(g), clampChannel(b), a];
+  }
+  const hsl = lower.match(/^hsla?\(\s*([\s\S]+)\)$/);
+  if (hsl) {
+    const parts = splitColorArgs(hsl[1]);
+    if (parts.length < 3) return null;
+    const h = parseHue(parts[0]);
+    const s = parseChannel(parts[1], 1);
+    const l = parseChannel(parts[2], 1);
+    const a = parts[3] != null ? parseAlpha(parts[3]) : 1;
+    if (h == null || s == null || l == null || a == null) return null;
+    const [r, g, b] = hslToRgb(h, s, l);
+    return [r, g, b, a];
+  }
+  return null;
+}
+
+export function formatCssRgb([r, g, b, a]: RgbaColor): string {
+  const red = Math.round(clampChannel(r));
+  const green = Math.round(clampChannel(g));
+  const blue = Math.round(clampChannel(b));
+  if (a < 1 - 1e-6) {
+    const alpha = Math.round(clampChannel(a, 1) * 1000) / 1000;
+    return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+  }
+  return `rgb(${red}, ${green}, ${blue})`;
+}
+
+function interpolationT(kind: unknown, input: number, lower: number, upper: number): number {
+  if (upper === lower) return 0;
+  const linear = (input - lower) / (upper - lower);
+  if (!Array.isArray(kind) || kind[0] !== 'exponential') return linear;
+  const base = Number(kind[1]);
+  if (!Number.isFinite(base) || base === 1) return linear;
+  return (base ** (input - lower) - 1) / (base ** (upper - lower) - 1);
+}
+
+function evaluateNumber(value: unknown, zoom: number): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) {
+    if (value[0] === 'zoom') return zoom;
+    if (value[0] === 'literal' && typeof value[1] === 'number') return value[1];
+  }
+  return null;
+}
+
+function lerpRgba(a: RgbaColor, b: RgbaColor, t: number): RgbaColor {
+  const u = clampChannel(t, 1);
+  return [
+    a[0] + (b[0] - a[0]) * u,
+    a[1] + (b[1] - a[1]) * u,
+    a[2] + (b[2] - a[2]) * u,
+    a[3] + (b[3] - a[3]) * u,
+  ];
+}
+
+function rgbaFromPaint(value: unknown, zoom: number): RgbaColor | null {
+  const css = evaluatePaintColor(value, zoom);
+  return css ? parseCssColor(css) : null;
+}
+
+/**
+ * Evaluate a Mapbox paint color (constant or zoom-interpolated expression)
+ * at `zoom`. streets-v12 water is an `interpolate` on `["zoom"]`.
+ */
+export function evaluatePaintColor(value: unknown, zoom: number): string | null {
+  if (typeof value === 'string') {
+    const parsed = parseCssColor(value);
+    return parsed ? formatCssRgb(parsed) : cssColorFromPaint(value);
+  }
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const op = value[0];
+  if (op === 'literal') return evaluatePaintColor(value[1], zoom);
+  if (op === 'to-color') return evaluatePaintColor(value[1], zoom);
+  if (op === 'rgb' || op === 'rgba') {
+    const r = evaluateNumber(value[1], zoom);
+    const g = evaluateNumber(value[2], zoom);
+    const b = evaluateNumber(value[3], zoom);
+    const a = op === 'rgba' ? evaluateNumber(value[4], zoom) : 1;
+    if (r == null || g == null || b == null || a == null) return null;
+    return formatCssRgb([r, g, b, a]);
+  }
+  if (op === 'hsl' || op === 'hsla') {
+    const h = evaluateNumber(value[1], zoom);
+    const s = evaluateNumber(value[2], zoom);
+    const l = evaluateNumber(value[3], zoom);
+    const a = op === 'hsla' ? evaluateNumber(value[4], zoom) : 1;
+    if (h == null || s == null || l == null || a == null) return null;
+    const sat = s > 1 ? s / 100 : s;
+    const light = l > 1 ? l / 100 : l;
+    const [r, g, b] = hslToRgb(h, sat, light);
+    return formatCssRgb([r, g, b, a]);
+  }
+  if (op === 'step') {
+    const input = evaluateNumber(value[1], zoom);
+    if (input == null || value.length < 3) return null;
+    let chosen: unknown = value[2];
+    for (let i = 3; i < value.length - 1; i += 2) {
+      const stop = evaluateNumber(value[i], zoom);
+      if (stop == null) continue;
+      if (input >= stop) chosen = value[i + 1];
+    }
+    return evaluatePaintColor(chosen, zoom);
+  }
+  if (op === 'interpolate' || op === 'interpolate-hcl' || op === 'interpolate-lab') {
+    const input = evaluateNumber(value[2], zoom);
+    if (input == null) return null;
+    const stops: Array<{ stop: number; output: unknown }> = [];
+    for (let i = 3; i < value.length - 1; i += 2) {
+      const stop = evaluateNumber(value[i], zoom);
+      if (stop == null) return null;
+      stops.push({ stop, output: value[i + 1] });
+    }
+    if (stops.length === 0) return null;
+    if (input <= stops[0].stop) return evaluatePaintColor(stops[0].output, zoom);
+    const last = stops[stops.length - 1];
+    if (input >= last.stop) return evaluatePaintColor(last.output, zoom);
+    for (let i = 1; i < stops.length; i += 1) {
+      if (input <= stops[i].stop) {
+        const from = stops[i - 1];
+        const to = stops[i];
+        const t = interpolationT(value[1], input, from.stop, to.stop);
+        const a = rgbaFromPaint(from.output, zoom);
+        const b = rgbaFromPaint(to.output, zoom);
+        if (!a || !b) return evaluatePaintColor(from.output, zoom);
+        return formatCssRgb(lerpRgba(a, b, t));
+      }
+    }
+    return evaluatePaintColor(last.output, zoom);
+  }
+  for (let i = value.length - 1; i >= 0; i -= 1) {
+    const found = evaluatePaintColor(value[i], zoom);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Pull a CSS color out of a Mapbox paint value (constant or last expression stop). */
 export function cssColorFromPaint(value: unknown): string | null {
   if (typeof value === 'string') {
     const v = value.trim();
@@ -367,11 +703,29 @@ export function cssColorFromPaint(value: unknown): string | null {
 }
 
 /**
+ * streets-v12 `water` fill-color is a constant light stop (153, 221, 255).
+ * At Worldwide / low zoom the rendered Pacific is darker — measured
+ * (105, 204, 255). Do not ReadPixels; that stalls the GPU.
+ */
+export const STREETS_LOW_ZOOM_OCEAN = 'rgb(105, 204, 255)';
+/** water-depth in streets-v12 is active below zoom 8; darker ocean below 6. */
+export const STREETS_LOW_ZOOM_OCEAN_MAX = 6;
+
+/** Fill behind a shortened canvas: evaluate at zoom, then the low-zoom constant. */
+export function resolveWaterFillCss(evaluated: string | null, zoom: number): string | null {
+  if (zoom <= STREETS_LOW_ZOOM_OCEAN_MAX) return STREETS_LOW_ZOOM_OCEAN;
+  return evaluated;
+}
+
+/**
  * Map water / background fill from the loaded style — not page beige.
- * Tries `water` then `background`.
+ * Tries `water` then `background`. Pass `zoom` (`map.getZoom()`) so
+ * zoom-interpolated water is evaluated at the current camera, and the
+ * streets low-zoom ocean constant covers the Worldwide leftover band.
  */
 export function readMapWaterColor(
-  getPaint: (layer: string, prop: string) => unknown
+  getPaint: (layer: string, prop: string) => unknown,
+  zoom?: number
 ): string | null {
   const attempts: Array<[string, string]> = [
     ['water', 'fill-color'],
@@ -380,7 +734,10 @@ export function readMapWaterColor(
   ];
   for (const [layer, prop] of attempts) {
     try {
-      const css = cssColorFromPaint(getPaint(layer, prop));
+      const value = getPaint(layer, prop);
+      const evaluated =
+        zoom == null ? cssColorFromPaint(value) : evaluatePaintColor(value, zoom);
+      const css = zoom == null ? evaluated : resolveWaterFillCss(evaluated, zoom);
       if (css) return css;
     } catch {
       /* layer may be missing until the style loads */
@@ -507,48 +864,284 @@ export function pinHintCenterX(canvasWidth: number, panelOpen: boolean, forceCol
   return (left + right) / 2;
 }
 
-/**
- * User-initiated camera change vs a programmatic flight / resize.
- * Mapbox `moveend` sets `originalEvent` for drag / scroll / pinch.
- * Window resize and our own camera tags must never flip the chip to Map area.
- */
-export function isUserGestureEvent(
-  event: { originalEvent?: unknown } | null | undefined
-): boolean {
-  const orig = event?.originalEvent as { type?: string } | undefined;
-  if (!orig?.type) return false;
-  return orig.type !== 'resize' && orig.type !== 'orientationchange';
-}
+/** Mapbox KeyboardHandler keys that pan, zoom, pitch, or rotate the camera. */
+const CAMERA_KEY_NAMES = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Left',
+  'Right',
+  'Up',
+  'Down',
+  '+',
+  '-',
+  '=',
+  '_']);
 
-export function isUserMapMove(
-  event: { originalEvent?: unknown } | null | undefined,
-  flightTag?: string | null
-): boolean {
-  if (flightTag === 'resize' || flightTag === 'programmatic') return false;
-  const orig = event?.originalEvent as { type?: string } | undefined;
-  if (orig && (orig.type === 'resize' || orig.type === 'orientationchange')) return false;
-  if (event?.originalEvent != null) return true;
-  if (flightTag) return false;
+const CAMERA_KEY_CODES = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Equal',
+  'Minus',
+  'NumpadAdd',
+  'NumpadSubtract',
+]);
+
+export type CameraKeyEvent = {
+  type?: string;
+  key?: string;
+  code?: string;
+  altKey?: boolean;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  shiftKey?: boolean;
+  target?: EventTarget | null;
+};
+
+/**
+ * True only for keys Mapbox actually moves the camera with: arrows (and
+ * Shift+arrows for rotate/pitch), +/-/=/_, and the numpad zoom keys.
+ * Escape, Tab, letters, and PageUp/Down/Home/End are ignored.
+ */
+export function isCameraKey(event: CameraKeyEvent | null | undefined): boolean {
+  if (!event) return false;
+  if (event.altKey || event.ctrlKey || event.metaKey) return false;
+  if (event.key && CAMERA_KEY_NAMES.has(event.key)) return true;
+  if (event.code && CAMERA_KEY_CODES.has(event.code)) return true;
   return false;
 }
 
 /**
- * moveend from a padding-clear jumpTo is programmatic (no chip flip) but
- * must still refresh bounds / search / header.
+ * Mapbox `move`/`moveend` sets `originalEvent` for drag / scroll / pinch.
+ * Window resize and orientation changes are not user gestures. A keydown is
+ * only a camera gesture when it is a Mapbox camera key.
  */
-export function shouldReportViewport(flightTag?: string | null): boolean {
-  void flightTag;
+export function isUserGestureEvent(
+  event: { originalEvent?: unknown } | null | undefined
+): boolean {
+  const orig = event?.originalEvent as CameraKeyEvent | undefined;
+  if (!orig?.type) return false;
+  if (orig.type === 'resize' || orig.type === 'orientationchange') return false;
+  if (orig.type === 'keydown' || orig.type === 'keyup') {
+    return isCameraKey(orig) && isMapboxKeyboardTarget(orig.target);
+  }
   return true;
+}
+
+/**
+ * User-initiated camera change vs a programmatic flight / resize.
+ * A real wheel / drag / pinch wins even if a leftover `resize` tag (canvas
+ * regrow or padding-clear jumpTo) is still on the flight — otherwise the
+ * chip stays Worldwide and moveend never bounds-searches.
+ * Window resize and our own untagged programmatic moves never flip the chip.
+ */
+export type UserMoveHints = {
+  /** Wheel / drag / pinch was seen on `move` — inertial moveend often has no originalEvent. */
+  userInputActive?: boolean;
+  /** Zoom changed this moveend (slow wheel fires several small ones). */
+  zoomChanged?: boolean;
+};
+
+export function isUserMapMove(
+  event: { originalEvent?: unknown } | null | undefined,
+  flightTag?: string | null,
+  hints?: UserMoveHints
+): boolean {
+  if (isUserGestureEvent(event) || hints?.userInputActive) return true;
+  if (flightTag === 'resize' || flightTag === 'programmatic') return false;
+  const orig = event?.originalEvent as { type?: string } | undefined;
+  if (orig && (orig.type === 'resize' || orig.type === 'orientationchange')) return false;
+  if (event?.originalEvent != null) return true;
+  // Clamp / resize / leftover moveends change zoom without a pointer or wheel.
+  // Only a real gesture (or userInputActive from one) may leave the chip.
+  return false;
+}
+
+export type FlightTag =
+  | 'preset'
+  | 'place'
+  | 'drawer'
+  | 'programmatic'
+  | 'cluster'
+  | 'zoom'
+  | 'locate'
+  | 'resize';
+
+/** In-flight cameras — skip bbox search and viewport reports until the final moveend. */
+export function isProgrammaticFlightTag(tag: string | null | undefined): boolean {
+  return (
+    tag === 'preset' ||
+    tag === 'place' ||
+    tag === 'drawer' ||
+    tag === 'programmatic' ||
+    tag === 'cluster' ||
+    tag === 'zoom' ||
+    tag === 'locate'
+  );
+}
+
+/**
+ * Padding-clear jumpTo is tagged `resize`: chip stays, bounds/search/header
+ * still refresh. In-flight preset/place/cluster tags stay silent until end.
+ */
+export function shouldReportViewport(tag: string | null | undefined): boolean {
+  return !isProgrammaticFlightTag(tag);
+}
+
+/**
+ * Canvas height follows the flight while tagged — unless a real wheel/drag
+ * comes through mid-flight or after a leftover resize-tagged jumpTo.
+ */
+export function isProgrammaticCanvasMove(
+  tag: string | null | undefined,
+  event: { originalEvent?: unknown } | null | undefined
+): boolean {
+  return (isProgrammaticFlightTag(tag) || tag === 'resize') && !isUserGestureEvent(event);
 }
 
 export function cameraMoveendEffects(
   event: { originalEvent?: unknown } | null | undefined,
-  flightTag?: string | null
+  flightTag?: string | null,
+  hints?: UserMoveHints
 ): { leavePreset: boolean; reportBounds: boolean } {
+  const userMove = isUserMapMove(event, flightTag, hints);
   return {
-    leavePreset: isUserMapMove(event, flightTag),
-    reportBounds: shouldReportViewport(flightTag),
+    leavePreset: userMove,
+    reportBounds: userMove || shouldReportViewport(flightTag),
   };
+}
+
+export type CameraPadding = {
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+};
+
+export function paddingIsZero(padding: CameraPadding | null | undefined): boolean {
+  if (!padding) return true;
+  return (
+    (padding.top ?? 0) === 0 &&
+    (padding.right ?? 0) === 0 &&
+    (padding.bottom ?? 0) === 0 &&
+    (padding.left ?? 0) === 0
+  );
+}
+
+/**
+ * Only clear leftover padding after a flight that actually used some.
+ * An unpadded preset (drawer closed) must not jumpTo on fly-end.
+ */
+export function shouldClearPaddingAfterFlight(
+  flightPadding: CameraPadding | null | undefined,
+  livePadding: CameraPadding | null | undefined
+): boolean {
+  if (paddingIsZero(flightPadding)) return false;
+  return !paddingIsZero(livePadding);
+}
+
+export interface PaddingClearMap {
+  getPadding: () => CameraPadding;
+  getCanvas: () => { clientWidth: number; clientHeight: number };
+  unproject: (point: [number, number]) => { lng: number; lat: number };
+  jumpTo: (options: { center: [number, number]; padding: CameraPadding }) => unknown;
+}
+
+/**
+ * Drop leftover flyTo padding without shifting what is on screen.
+ * Unproject the canvas centre, then jumpTo that point with zero padding.
+ * Never write Mapbox's private `transform.padding` — that shifts the view
+ * by half the padding and fires no moveend.
+ */
+export function clearPaddingKeepView(map: PaddingClearMap): boolean {
+  if (paddingIsZero(map.getPadding())) return false;
+  const canvas = map.getCanvas();
+  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
+  map.jumpTo({
+    center: [visual.lng, visual.lat],
+    padding: ZERO_PADDING,
+  });
+  return true;
+}
+
+/** Live container size after `map.resize()` — never a React width captured before the breakpoint. */
+export function readMeasuredViewport(
+  el: { clientWidth: number; clientHeight: number } | null | undefined,
+  fallback?: SizeBox | null
+): SizeBox | null {
+  if (el && el.clientWidth >= 2 && el.clientHeight >= 2) {
+    return { width: el.clientWidth, height: el.clientHeight };
+  }
+  return fallback ?? null;
+}
+
+export function mercatorYFromLat(lat: number): number {
+  const sin = Math.sin((lat * Math.PI) / 180);
+  return 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI);
+}
+
+export function mercatorLatFromY(y: number): number {
+  const n = Math.PI * (1 - 2 * y);
+  return (180 / Math.PI) * Math.atan(Math.sinh(n));
+}
+
+/**
+ * Mapbox padding puts `center` in the padded gap. Preset flights use this
+ * unpadded center so one flyTo is enough. A leftover padded flight may add
+ * one jumpTo to clear padding without shifting the visual centre.
+ */
+export function unpaddedCenter(
+  center: { lng: number; lat: number },
+  zoom: number,
+  padding: CameraPadding
+): { lng: number; lat: number } {
+  const dx = ((padding.left ?? 0) - (padding.right ?? 0)) / 2;
+  const dy = ((padding.top ?? 0) - (padding.bottom ?? 0)) / 2;
+  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return { lng: center.lng, lat: center.lat };
+  const worldPx = mercatorWorldPx(zoom);
+  const lng = wrapLng(center.lng - (dx / worldPx) * 360);
+  const lat = mercatorLatFromY(mercatorYFromLat(center.lat) - dy / worldPx);
+  return { lng, lat };
+}
+
+/**
+ * One deterministic cluster expand. Fold intended padding into the center
+ * and send zero padding so a leftover drawer inset cannot stack (0 vs 176px).
+ */
+export function clusterExpandCamera(
+  clusterCenter: { lng: number; lat: number },
+  zoom: number,
+  padding: CameraPadding
+): {
+  center: { lng: number; lat: number };
+  zoom: number;
+  padding: typeof ZERO_PADDING;
+  retainPadding: false;
+} {
+  return {
+    center: unpaddedCenter(clusterCenter, zoom, padding),
+    zoom,
+    padding: ZERO_PADDING,
+    retainPadding: false,
+  };
+}
+
+/** Preset camera from the size measured after resize, folded into one unpadded fly. */
+export function presetFlyCamera(
+  location: { id: string; lat: number; lng: number; zoom: number; radiusKm: number },
+  viewport: SizeBox,
+  panelOpen = false
+): { zoom: number; lng: number; lat: number } {
+  const collapse = isNarrowViewport(viewport.width);
+  const padding = flyPadding(panelOpen, true, viewport, collapse, 0);
+  const framed = presetCamera(location, viewport.width, viewport.height, {
+    left: padding.left,
+    right: padding.right,
+  });
+  return { zoom: framed.zoom, ...unpaddedCenter(framed, framed.zoom, padding) };
 }
 
 export interface MapResizeState {
@@ -556,6 +1149,24 @@ export interface MapResizeState {
 }
 
 /** Coalesce map.resize() to one call per animation frame. */
+/**
+ * Skip a no-op `map.resize()` — Mapbox still emits a zero-length
+ * movestart/moveend when the canvas already matches the host.
+ */
+export function mapNeedsResize(
+  canvas: { clientWidth: number; clientHeight: number } | null | undefined,
+  host: { clientWidth: number; clientHeight: number } | null | undefined
+): boolean {
+  if (!canvas || !host) return true;
+  if (canvas.clientWidth < 2 || canvas.clientHeight < 2 || host.clientWidth < 2 || host.clientHeight < 2) {
+    return true;
+  }
+  return (
+    Math.abs(canvas.clientWidth - host.clientWidth) > 1 ||
+    Math.abs(canvas.clientHeight - host.clientHeight) > 1
+  );
+}
+
 export function scheduleMapResize(
   map: { resize: () => void } | null | undefined,
   state: MapResizeState,
@@ -612,19 +1223,117 @@ export interface WorldwideFraming {
 
 export const ZERO_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
 
-/** Camera timings. Preset flights still use retainPadding: false + clearPaddingKeepView. */
+/** Camera timings. flyTo always gets an explicit duration so long hops cannot run 6s. */
 export const CAMERA_DURATION = {
-  preset: 900,
-  place: 760,
-  cluster: 560,
+  preset: 2000,
+  place: 1500,
+  placeShort: 560,
+  cluster: 480,
   zoom: 220,
-  locate: 900,
+  locate: 1600,
+  drawer: 520,
 } as const;
+
+export const CAMERA_DURATION_CAP = {
+  placeMin: 1200,
+  placeMax: 1800,
+  presetMin: 900,
+  presetMax: 2200,
+} as const;
+
+/** Gentle zoom curve. Duration is set separately so speed cannot stretch a US→Tempe hop. */
+export const CAMERA_FLY = {
+  curve: 1.2,
+} as const;
+
+export type CameraMethod = 'flyTo' | 'easeTo';
+export type CameraMoveKind = 'preset' | 'place' | 'drawer';
 
 /** Cubic ease-out: quick start, gentle settle. */
 export function easeOutCubic(t: number): number {
   const x = Math.min(1, Math.max(0, t));
   return 1 - (1 - x) ** 3;
+}
+
+export function cameraFlyOptions(partial: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    curve: CAMERA_FLY.curve,
+    easing: easeOutCubic,
+    ...partial,
+  };
+}
+
+export function cameraEaseOptions(
+  duration: number,
+  partial: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    duration,
+    easing: easeOutCubic,
+    ...partial,
+  };
+}
+
+export function isShortCameraHop(kind: 'preset' | 'place' | 'cluster' | 'zoom' | 'locate' | 'drawer'): boolean {
+  return kind === 'cluster' || kind === 'zoom' || kind === 'drawer';
+}
+
+export function shortestLngDelta(from: number, to: number): number {
+  return Math.abs(wrapLng(to - from));
+}
+
+/** Degrees + zoom so a local hop stays short and a continent hop still hits the cap. */
+export function cameraSeparation(
+  from: { lng: number; lat: number; zoom?: number },
+  to: { lng: number; lat: number; zoom?: number }
+): number {
+  const zoomFrom = from.zoom ?? to.zoom ?? 0;
+  const zoomTo = to.zoom ?? from.zoom ?? 0;
+  return Math.hypot(shortestLngDelta(from.lng, to.lng), to.lat - from.lat) + Math.abs(zoomTo - zoomFrom) * 3;
+}
+
+export function isShortPlaceHop(separation: number): boolean {
+  return separation < 2.5;
+}
+
+export function cappedFlyDuration(kind: 'preset' | 'place', separation: number): number {
+  if (kind === 'preset') {
+    return Math.min(
+      CAMERA_DURATION_CAP.presetMax,
+      Math.max(CAMERA_DURATION_CAP.presetMin, 900 + separation * 20)
+    );
+  }
+  return Math.min(
+    CAMERA_DURATION_CAP.placeMax,
+    Math.max(CAMERA_DURATION_CAP.placeMin, 1200 + separation * 12)
+  );
+}
+
+export function pickCameraAnimation(
+  kind: CameraMoveKind,
+  from: { lng: number; lat: number; zoom?: number },
+  to: { lng: number; lat: number; zoom?: number }
+): { method: CameraMethod; duration: number } {
+  if (kind === 'drawer') {
+    return { method: 'easeTo', duration: CAMERA_DURATION.drawer };
+  }
+  const separation = cameraSeparation(from, to);
+  if (kind === 'place' && isShortPlaceHop(separation)) {
+    return { method: 'easeTo', duration: CAMERA_DURATION.placeShort };
+  }
+  return { method: 'flyTo', duration: cappedFlyDuration(kind, separation) };
+}
+
+/** True once per flyRequest.nonce so a layout/zoom rerender cannot start a second camera. */
+export function claimFlyNonce(started: { current: number | null }, nonce: number): boolean {
+  if (started.current === nonce) return false;
+  started.current = nonce;
+  return true;
+}
+
+/** Monotonic fly nonce so two chips in the same millisecond cannot share an id. */
+export function nextFlyNonce(prev: number, now = Date.now()): number {
+  return now > prev ? now : prev + 1;
 }
 
 /**
@@ -699,10 +1408,281 @@ export function flyToThenOnMoveend(
   map.once('moveend', onMoveend);
 }
 
-export type CameraMethod = 'flyTo' | 'easeTo';
+export type CameraEndReason = 'complete' | 'interrupted';
+
+/**
+ * Semantic end of a flyRequest. Animation `interrupted` is a replacement
+ * (Zoom / cluster / Locate / another preset). A Mapbox `stop()` on user
+ * mousedown still fires `complete`, so only real user input counts as a
+ * user interrupt — never a missed target, clamp, or resize moveend.
+ */
+export type FlightEndKind = 'complete' | 'user-interrupt' | 'replaced';
+
+export function cameraReachedTarget(
+  live: { lng: number; lat: number; zoom: number },
+  target: { lng: number; lat: number; zoom: number },
+  zoomEps = 0.05,
+  degEps = 0.5
+): boolean {
+  return (
+    Math.abs(live.zoom - target.zoom) <= zoomEps &&
+    Math.abs(shortestLngDelta(live.lng, target.lng)) <= degEps &&
+    Math.abs(live.lat - target.lat) <= degEps
+  );
+}
+
+export function classifyFlightEnd(input: {
+  animationReason: CameraEndReason;
+  reachedTarget?: boolean;
+  userInputActive: boolean;
+  originalEvent?: CameraKeyEvent | { type?: string } | null;
+}): FlightEndKind {
+  if (input.animationReason === 'interrupted') return 'replaced';
+  if (input.userInputActive || isUserGestureEvent({ originalEvent: input.originalEvent })) {
+    return 'user-interrupt';
+  }
+  return 'complete';
+}
+
+/** Canvas size follows the newest camera. A replaced flight must not grow or shrink it. */
+export function shouldApplyFlightEndToCanvas(kind: FlightEndKind): boolean {
+  return kind !== 'replaced';
+}
+
+/** Capture-phase events that stamp user input while a programmatic camera is running. */
+export const USER_FLIGHT_INPUT_EVENTS = ['pointerdown', 'wheel', 'touchstart', 'keydown'] as const;
+
+export type FlightInputEvent = CameraKeyEvent & {
+  type: string;
+  target?: EventTarget | null;
+};
+
+export function shouldStampUserInputDuringFlight(
+  flightActive: boolean,
+  event: string | FlightInputEvent
+): boolean {
+  if (!flightActive) return false;
+  const ev = typeof event === 'string' ? { type: event } : event;
+  if (!(USER_FLIGHT_INPUT_EVENTS as readonly string[]).includes(ev.type)) return false;
+  if (ev.type === 'keydown') return isCameraKey(ev) && isMapboxKeyboardTarget(ev.target);
+  return true;
+}
+
+/**
+ * Mapbox's KeyboardHandler listens on the canvas / `.mapboxgl-canvas-container`,
+ * not Zoom or Locate. Arrow and +/- keys on those buttons do not move the camera.
+ */
+export function isMapboxKeyboardTarget(target: EventTarget | null | undefined): boolean {
+  if (!target || typeof (target as Element).closest !== 'function') return false;
+  const el = target as Element;
+  if (el.closest('[data-map-controls]')) return false;
+  if (el.closest('button')) return false;
+  if (el.closest('[role="button"]')) return false;
+  if (el.closest('a, input, textarea, select')) return false;
+  return Boolean(
+    el.closest('canvas') ||
+      el.closest('[data-map-canvas-host]') ||
+      el.closest('[data-map-canvas]') ||
+      el.closest('.mapboxgl-canvas-container') ||
+      el.closest('.mapboxgl-map')
+  );
+}
+
+/** Zoom / Locate live in `[data-map-controls]` and must not hold the pointer. */
+export function isMapControlTarget(target: EventTarget | null | undefined): boolean {
+  if (!target || typeof (target as Element).closest !== 'function') return false;
+  return Boolean((target as Element).closest('[data-map-controls]'));
+}
+
+export function shouldHoldPointerForFlight(event: {
+  type: string;
+  target?: EventTarget | null;
+}): boolean {
+  if (event.type !== 'pointerdown' && event.type !== 'touchstart') return false;
+  return !isMapControlTarget(event.target);
+}
+
+export const POINTER_HOLD_CLEAR_EVENTS = ['pointerup', 'pointercancel', 'touchend', 'blur'] as const;
+
+export function attachPointerHoldClearListeners(
+  target: {
+    addEventListener: (type: string, listener: () => void) => void;
+    removeEventListener: (type: string, listener: () => void) => void;
+  },
+  onClear: () => void
+): () => void {
+  for (const type of POINTER_HOLD_CLEAR_EVENTS) {
+    target.addEventListener(type, onClear);
+  }
+  return () => {
+    for (const type of POINTER_HOLD_CLEAR_EVENTS) {
+      target.removeEventListener(type, onClear);
+    }
+  };
+}
+
+export function attachUserFlightInputListeners(
+  target: {
+    addEventListener: (
+      type: string,
+      listener: (event: Event) => void,
+      options?: { capture?: boolean }
+    ) => void;
+    removeEventListener: (
+      type: string,
+      listener: (event: Event) => void,
+      options?: { capture?: boolean }
+    ) => void;
+  },
+  isFlightActive: () => boolean,
+  onUserInput: (type: string, event: Event) => void
+): () => void {
+  const listener = (event: Event) => {
+    if (!shouldStampUserInputDuringFlight(isFlightActive(), event as FlightInputEvent)) return;
+    onUserInput(event.type, event);
+  };
+  for (const type of USER_FLIGHT_INPUT_EVENTS) {
+    target.addEventListener(type, listener, { capture: true });
+  }
+  return () => {
+    for (const type of USER_FLIGHT_INPUT_EVENTS) {
+      target.removeEventListener(type, listener, { capture: true });
+    }
+  };
+}
+
+/** Narrow-fit jumpTo only after a completed (not interrupted) Worldwide flight. */
+export function shouldReapplyNarrowFitAfterFlight(input: {
+  kind: FlightEndKind;
+  leftPreset: boolean;
+  locationId: string;
+  viewport: SizeBox;
+  liveZoom: number;
+}): boolean {
+  if (input.kind !== 'complete') return false;
+  return shouldJumpToNarrowWorldwideFit(
+    input.leftPreset,
+    input.locationId,
+    input.viewport,
+    input.liveZoom
+  );
+}
+
+/** Cluster clicks are swallowed after mousedown-on-moving-map; queue them. */
+export function shouldQueueClusterExpand(
+  flightTag: string | null | undefined,
+  feature: { cluster?: boolean; cluster_id?: number | string } | null | undefined
+): boolean {
+  if (!isProgrammaticFlightTag(flightTag)) return false;
+  return feature?.cluster_id != null || feature?.cluster === true;
+}
+
+/** Mid-flight cluster queue: expand only on a short, still click. */
+export const CLUSTER_CLICK_MAX_PX = 5;
+export const CLUSTER_CLICK_MAX_MS = 300;
+
+export interface ClusterClickPointer {
+  x: number;
+  y: number;
+  at: number;
+  clusterId: number;
+  center: [number, number];
+}
+
+export function clusterPointerMoved(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  maxPx = CLUSTER_CLICK_MAX_PX
+): boolean {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  return dx * dx + dy * dy > maxPx * maxPx;
+}
+
+export function isGenuineClusterClick(input: {
+  start: { x: number; y: number; at: number };
+  end: { x: number; y: number; at: number };
+  cancelled?: boolean;
+}): boolean {
+  if (input.cancelled) return false;
+  if (clusterPointerMoved(input.start, input.end)) return false;
+  if (input.end.at - input.start.at > CLUSTER_CLICK_MAX_MS) return false;
+  return true;
+}
+
+/** Search the interrupted camera once the pointer is up, not on every mid-drag moveend. */
+export function shouldSearchOnUserMoveend(input: { pointerDown: boolean }): boolean {
+  return !input.pointerDown;
+}
+
+export const GESTURE_SETTLE_MS = {
+  pointer: 0,
+  wheel: 200,
+} as const;
+
+export type GestureBoundsKind = 'pointer' | 'wheel' | 'key';
+
+export interface GestureBoundsState {
+  gestureId: number;
+  reportedId: number | null;
+  kind: GestureBoundsKind;
+}
+
+export function createGestureBoundsState(): GestureBoundsState {
+  return { gestureId: 0, reportedId: null, kind: 'pointer' };
+}
+
+/** True while a pointer/wheel gesture still owes a bounds search. */
+export function isGestureSearchPending(input: {
+  pointerDown: boolean;
+  gesture: Pick<GestureBoundsState, 'kind' | 'gestureId' | 'reportedId'>;
+}): boolean {
+  if (input.pointerDown) return true;
+  if (input.gesture.gestureId === 0) return false;
+  if (input.gesture.reportedId === input.gesture.gestureId) return false;
+  return input.gesture.kind === 'pointer' || input.gesture.kind === 'wheel';
+}
+
+/** New pointer/key starts a settle. Extra wheels in the same burst keep the id. */
+export function beginUserGesture(
+  state: GestureBoundsState,
+  kind: GestureBoundsKind
+): GestureBoundsState {
+  if (kind === 'wheel' && state.kind === 'wheel' && state.reportedId !== state.gestureId) {
+    return { ...state, kind };
+  }
+  return { gestureId: state.gestureId + 1, reportedId: null, kind };
+}
+
+export function gestureSettleMs(kind: GestureBoundsKind): number {
+  return kind === 'wheel' ? GESTURE_SETTLE_MS.wheel : GESTURE_SETTLE_MS.pointer;
+}
+
+/**
+ * One bounds report per gesture, after pointer-up and the camera is idle.
+ * The interrupted flight's stop() moveend and the drag's own moveend share
+ * the same gesture id so they produce one search. Callers wait for pointerup
+ * / moveend instead of re-arming a 0ms timer while the pointer is held.
+ */
+export function shouldFlushGestureBounds(input: {
+  pointerDown: boolean;
+  mapMoving: boolean;
+  gestureId: number;
+  reportedId: number | null;
+}): { flush: boolean; reportedId: number | null } {
+  if (input.pointerDown || input.mapMoving) {
+    return { flush: false, reportedId: input.reportedId };
+  }
+  if (input.reportedId === input.gestureId) {
+    return { flush: false, reportedId: input.reportedId };
+  }
+  return { flush: true, reportedId: input.gestureId };
+}
 
 export interface CameraHandlerRef {
   current: (() => void) | null;
+  /** Consumed exactly once — on moveend or when a newer animation replaces this one. */
+  pendingEnd?: ((reason: CameraEndReason) => void) | null;
 }
 
 export interface CameraControllerMap {
@@ -713,93 +1693,76 @@ export interface CameraControllerMap {
   isMoving?: () => boolean;
 }
 
+function consumeCameraEnd(handlerRef: CameraHandlerRef, reason: CameraEndReason): void {
+  const end = handlerRef.pendingEnd;
+  handlerRef.pendingEnd = null;
+  end?.(reason);
+}
+
+/**
+ * Drop the moveend listener without running onEnd (unmount / remount).
+ * flyRequest stays so a remounted map can resume the same nonce.
+ */
+export function abandonCameraAnimation(
+  map: Pick<CameraControllerMap, 'off'> | null | undefined,
+  handlerRef: CameraHandlerRef
+): void {
+  if (handlerRef.current && map) {
+    map.off('moveend', handlerRef.current);
+  }
+  handlerRef.current = null;
+  handlerRef.pendingEnd = null;
+}
+
+/**
+ * Finish the active animation as interrupted. Used when Zoom / cluster /
+ * Locate (or another fly) replaces a running flight so flyRequest / busy
+ * can clear without a padding-clear jumpTo.
+ */
+export function interruptCameraAnimation(
+  map: Pick<CameraControllerMap, 'off'> | null | undefined,
+  handlerRef: CameraHandlerRef
+): void {
+  if (handlerRef.current && map) {
+    map.off('moveend', handlerRef.current);
+  }
+  handlerRef.current = null;
+  consumeCameraEnd(handlerRef, 'interrupted');
+}
+
 /**
  * Cancel the previous moveend handler, start flyTo or easeTo, then attach
  * the new listener. Same interrupt rule as flyToThenOnMoveend: attach after
  * start so mapbox-gl's synchronous stop()/moveend does not consume it.
  * Duration 0 / reduced-motion already fired moveend inside the camera call,
  * so run onEnd now and do not leave a second listener.
+ * A replaced flight's onEnd runs exactly once with reason `interrupted`.
  */
 export function startCameraAnimation(
   map: CameraControllerMap,
   handlerRef: CameraHandlerRef,
   method: CameraMethod,
   options: Record<string, unknown>,
-  onEnd: () => void = () => undefined
+  onEnd: (reason: CameraEndReason) => void = () => undefined
 ): void {
-  if (handlerRef.current) {
-    map.off('moveend', handlerRef.current);
-    handlerRef.current = null;
-  }
+  interruptCameraAnimation(map, handlerRef);
   const onMoveEnd = () => {
     if (handlerRef.current !== onMoveEnd) return;
     handlerRef.current = null;
-    onEnd();
+    consumeCameraEnd(handlerRef, 'complete');
   };
   if (method === 'flyTo') {
     map.flyTo(options);
   } else {
     map.easeTo(options);
   }
+  handlerRef.pendingEnd = onEnd;
   handlerRef.current = onMoveEnd;
   if (cameraMoveAlreadyIdle(map, options)) {
     onMoveEnd();
     return;
   }
   map.once('moveend', onMoveEnd);
-}
-
-export interface CameraPadding {
-  top?: number;
-  right?: number;
-  bottom?: number;
-  left?: number;
-}
-
-export function paddingIsZero(padding: CameraPadding | null | undefined): boolean {
-  if (!padding) return true;
-  return (
-    (padding.top ?? 0) === 0 &&
-    (padding.right ?? 0) === 0 &&
-    (padding.bottom ?? 0) === 0 &&
-    (padding.left ?? 0) === 0
-  );
-}
-
-/**
- * Only clear leftover padding after a flight that actually used some.
- * An unpadded preset (drawer closed) must not jumpTo on fly-end.
- */
-export function shouldClearPaddingAfterFlight(
-  flightPadding: CameraPadding | null | undefined,
-  livePadding: CameraPadding | null | undefined
-): boolean {
-  if (paddingIsZero(flightPadding)) return false;
-  return !paddingIsZero(livePadding);
-}
-
-export interface PaddingClearMap {
-  getPadding: () => CameraPadding;
-  getCanvas: () => { clientWidth: number; clientHeight: number };
-  unproject: (point: [number, number]) => { lng: number; lat: number };
-  jumpTo: (options: { center: [number, number]; padding: CameraPadding }) => unknown;
-}
-
-/**
- * Drop leftover flyTo padding without shifting what is on screen.
- * Unproject the canvas centre (visual centre), then jumpTo that point with
- * zero padding. Never write Mapbox's private `transform.padding` — that
- * shifts the view by half the padding and fires no moveend.
- */
-export function clearPaddingKeepView(map: PaddingClearMap): boolean {
-  if (paddingIsZero(map.getPadding())) return false;
-  const canvas = map.getCanvas();
-  const visual = map.unproject([canvas.clientWidth / 2, canvas.clientHeight / 2]);
-  map.jumpTo({
-    center: [visual.lng, visual.lat],
-    padding: ZERO_PADDING,
-  });
-  return true;
 }
 
 /** Screen X of a longitude when `centerLng` sits in the middle of the visible gap. */

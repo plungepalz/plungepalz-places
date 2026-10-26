@@ -74,15 +74,16 @@ export default function FilterBar({
         <div className="relative" ref={locationRef}>
           <button
             type="button"
+            data-location-chip
             onClick={() => setShowLocations((open) => !open)}
-            className="flex items-center gap-2 rounded-full bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+            className="flex w-[9.5rem] shrink-0 items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200 sm:w-[10.5rem] sm:px-3"
           >
-            <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="h-4 w-4 shrink-0 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-            {locationLabel ?? location.label}
-            <svg className="h-3.5 w-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <span className="min-w-0 flex-1 truncate text-left">{locationLabel ?? location.label}</span>
+            <svg className="h-3.5 w-3.5 shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>

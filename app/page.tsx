@@ -15,18 +15,42 @@ import {
   mapBoundsKey,
   settleListHeadingRequest,
   shouldApplySettledSearch,
+  shouldCommitSearchUi,
   startListHeadingRequest,
   type ListHeadingSnapshot,
 } from '@/lib/list-heading-state';
+import { listLocationName, locationChipLabel } from '@/lib/list-location-name';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
 import {
   defaultCompactList,
+  nextFlyNonce,
   shouldCollapseList,
   shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
+  type FlightEndKind,
   type SizeBox,
 } from '@/lib/map-camera';
-import { mergeLocalPlaces } from '@/lib/merge-local-places';
+import {
+  mergeLocalPlaces,
+  nextPlaceListMountKey,
+  placeListRegionKey,
+  placesVisibleDuringFlight,
+  reconcilePlacesById,
+} from '@/lib/merge-local-places';
+import {
+  placesListMaxHeightPx,
+  placesListSlotMaxHeightPx,
+  scrollPlaceCardIntoView,
+  syncMapHoveredCard,
+} from '@/lib/map-style';
+import { createPlaceHoverController } from '@/lib/place-hover';
+import {
+  lastKeyAfterLeavingPreset,
+  rememberSettleKeyOnDispatch,
+  searchAfterViewportChange,
+  searchDebounceMs,
+  viewportSearchIdentity,
+} from '@/lib/search-debounce';
 import type { ActivityType, FlyRequest, MapBounds, PlaceSearchResult, PlaceType, SearchParams } from '@/lib/types';
 import { resolveMapboxToken } from '@/lib/mapbox-token';
 import { formatBbox, wrapLng } from '@/lib/types';
@@ -57,7 +81,6 @@ export default function HomePage() {
   const [location, setLocation] = useState<LocationPreset>(DEFAULT_LOCATION);
 
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
-  const [hoveredPlaceId, setHoveredPlaceId] = useState<string | null>(null);
   const [detailsPlaceId, setDetailsPlaceId] = useState<string | null>(null);
   const [addPlaceOpen, setAddPlaceOpen] = useState(false);
   const [draftLocation, setDraftLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -65,6 +88,7 @@ export default function HomePage() {
   const [mapCenterRequest, setMapCenterRequest] = useState<number | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [flyRequest, setFlyRequest] = useState<FlyRequest | null>(null);
+  const [mapCameraBusy, setMapCameraBusy] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
@@ -74,6 +98,7 @@ export default function HomePage() {
   const [viewportHeight, setViewportHeight] = useState(900);
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const lastPresetBoundsKeyRef = useRef('');
+  const gestureSearchPendingRef = useRef(false);
   const headingMachineRef = useRef(createListHeadingMachine());
   const searchContextRef = useRef({
     hasMap: false,
@@ -90,7 +115,19 @@ export default function HomePage() {
   const [compactBarHeight, setCompactBarHeight] = useState(56);
   const leftPresetRef = useRef(leftPreset);
   const locationRef = useRef(location);
+  const flyNonceRef = useRef(0);
   const prevViewportRef = useRef<SizeBox | null>(null);
+  const cameraBusyRef = useRef(false);
+  const pendingSearchRef = useRef<{
+    requestId: number;
+    append: boolean;
+    places: PlaceSearchResult[];
+    total: number;
+    page: number;
+    hasMore: boolean;
+    heading: ListHeadingSnapshot | null;
+    error: string | null;
+  } | null>(null);
 
   const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
@@ -112,11 +149,33 @@ export default function HomePage() {
     [searchQuery, mapBounds, selectedPlaceTypes, selectedActivities, approvedOnly]
   );
 
-  const { places, extraCount } = useMemo(
+  const merged = useMemo(
     () => mergeLocalPlaces(serverPlaces, localPlaces, localFilters),
     [serverPlaces, localPlaces, localFilters]
   );
+  const extraCount = merged.extraCount;
+  const [placeStore, setPlaceStore] = useState({ src: merged, places: merged.places });
+  if (placeStore.src !== merged) {
+    setPlaceStore({ src: merged, places: reconcilePlacesById(placeStore.places, merged.places) });
+  }
+  const places = placeStore.src === merged ? placeStore.places : reconcilePlacesById(placeStore.places, merged.places);
+  const cameraBusy = hasMap && (Boolean(flyRequest) || mapCameraBusy);
+  useEffect(() => {
+    cameraBusyRef.current = cameraBusy;
+  }, [cameraBusy]);
+  const [heldList, setHeldList] = useState<PlaceSearchResult[] | null>(null);
+  const [listMountKey, setListMountKey] = useState('0');
+  const listMountKeyRef = useRef('0');
+  const listRegionKeyRef = useRef(placeListRegionKey(false, DEFAULT_LOCATION.id));
+  const listView = placesVisibleDuringFlight(places, heldList, cameraBusy, isLoading);
+  if (heldList !== listView.hold) {
+    setHeldList(listView.hold);
+  }
+  const listPlaces = listView.visible;
   const displayTotal = total + extraCount;
+  const [hoverCtrl] = useState(createPlaceHoverController);
+
+  useEffect(() => () => hoverCtrl.dispose(), [hoverCtrl]);
 
   const buildParams = useCallback(
     (pageNum: number, bounds: MapBounds | null): SearchParams => {
@@ -168,7 +227,42 @@ export default function HomePage() {
           context
         );
         headingMachineRef.current = settled;
-        if (!shouldApplySettledSearch(requestId, headingMachineRef.current)) return;
+        const commit = {
+          requestId,
+          append,
+          places: response.places,
+          total: response.total,
+          page: response.page,
+          hasMore: response.has_more,
+          heading: settled.heading,
+          error: null as string | null,
+        };
+        if (
+          !shouldCommitSearchUi({
+            requestId,
+            machine: headingMachineRef.current,
+            cameraBusy: cameraBusyRef.current,
+          })
+        ) {
+          if (shouldApplySettledSearch(requestId, headingMachineRef.current)) {
+            pendingSearchRef.current = commit;
+          }
+          return;
+        }
+        pendingSearchRef.current = null;
+        const regionKey = placeListRegionKey(context.leftPreset, context.location.id);
+        const nextMount = nextPlaceListMountKey({
+          prevKey: listMountKeyRef.current,
+          prevRegionKey: listRegionKeyRef.current,
+          requestId,
+          regionKey,
+          append,
+        });
+        listRegionKeyRef.current = regionKey;
+        if (nextMount !== listMountKeyRef.current) {
+          listMountKeyRef.current = nextMount;
+          setListMountKey(nextMount);
+        }
         const returnedIds = new Set(response.places.map((place) => place.place_id));
         setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
         setServerPlaces((prev) => (append ? [...prev, ...response.places] : response.places));
@@ -177,42 +271,109 @@ export default function HomePage() {
         setHasMore(response.has_more);
         setHeading(settled.heading);
         setError(null);
+        setIsLoading(false);
       } catch (err) {
-        if (requestId !== headingMachineRef.current.requestId) return;
-        setError(isPlacesApiError(err) ? err.message : 'Search failed');
-        if (!append) {
-          setServerPlaces([]);
-          setTotal(0);
-          setHasMore(false);
+        if (!shouldApplySettledSearch(requestId, headingMachineRef.current)) return;
+        const message = isPlacesApiError(err) ? err.message : 'Search failed';
+        if (cameraBusyRef.current) {
+          pendingSearchRef.current = {
+            requestId,
+            append,
+            places: [],
+            total: 0,
+            page: 0,
+            hasMore: false,
+            heading: headingMachineRef.current.heading,
+            error: message,
+          };
+          return;
         }
-      } finally {
-        if (requestId === headingMachineRef.current.requestId) setIsLoading(false);
+        setError(message);
+        setIsLoading(false);
       }
     },
     [buildParams]
   );
 
   const handleViewportChange = useCallback((bounds: MapBounds, zoom: number) => {
+    gestureSearchPendingRef.current = false;
     mapBoundsRef.current = bounds;
     setMapBounds(bounds);
     setMapZoom(zoom);
   }, []);
 
+  const filterKey = `${searchQuery.trim()}|${selectedActivities.join(',')}|${selectedPlaceTypes.join(',')}|${approvedOnly}`;
+  const searchIdentity = viewportSearchIdentity(
+    leftPreset,
+    mapBoundsKey(mapBounds),
+    location.id,
+    filterKey
+  );
+
   useEffect(() => {
-    if (!leftPreset) {
-      lastPresetBoundsKeyRef.current = mapBoundsKey(mapBounds);
-      const handle = window.setTimeout(() => {
-        performSearch(0, false, null);
-      }, 200);
-      return () => window.clearTimeout(handle);
+    if (!cameraBusy) {
+      const pending = pendingSearchRef.current;
+      if (pending) {
+        pendingSearchRef.current = null;
+        if (
+          shouldCommitSearchUi({
+            requestId: pending.requestId,
+            machine: headingMachineRef.current,
+            cameraBusy: false,
+          })
+        ) {
+          if (pending.error) {
+            setError(pending.error);
+          } else {
+            const ctx = searchContextRef.current;
+            const regionKey = placeListRegionKey(ctx.leftPreset, ctx.location.id);
+            const nextMount = nextPlaceListMountKey({
+              prevKey: listMountKeyRef.current,
+              prevRegionKey: listRegionKeyRef.current,
+              requestId: pending.requestId,
+              regionKey,
+              append: pending.append,
+            });
+            listRegionKeyRef.current = regionKey;
+            if (nextMount !== listMountKeyRef.current) {
+              listMountKeyRef.current = nextMount;
+              setListMountKey(nextMount);
+            }
+            const returnedIds = new Set(pending.places.map((place) => place.place_id));
+            setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
+            setServerPlaces((prev) => (pending.append ? [...prev, ...pending.places] : pending.places));
+            setTotal(pending.total);
+            setPage(pending.page);
+            setHasMore(pending.hasMore);
+            setHeading(pending.heading);
+            setError(null);
+          }
+          setIsLoading(false);
+        }
+      }
     }
-    const key = mapBoundsKey(mapBounds);
-    if (!key || key === lastPresetBoundsKeyRef.current) return;
+    const bounds = mapBoundsRef.current;
+    const decision = searchAfterViewportChange({
+      leftPreset,
+      boundsKey: mapBoundsKey(leftPreset ? bounds : null),
+      lastPresetKey: lastPresetBoundsKeyRef.current,
+      cameraBusy,
+      gestureInProgress: gestureSearchPendingRef.current,
+      settleKey: searchIdentity,
+      forceSettle:
+        headingMachineRef.current.heading == null && lastPresetBoundsKeyRef.current === '',
+    });
+    if (decision.action === 'skip') return;
     const handle = window.setTimeout(() => {
-      performSearch(0, false, mapBounds);
-    }, 450);
+      lastPresetBoundsKeyRef.current = rememberSettleKeyOnDispatch(
+        lastPresetBoundsKeyRef.current,
+        decision,
+        true
+      );
+      performSearch(0, false, decision.action === 'moveend' ? bounds : null);
+    }, searchDebounceMs(decision.action));
     return () => window.clearTimeout(handle);
-  }, [performSearch, leftPreset, mapBounds]);
+  }, [cameraBusy, flyRequest, mapCameraBusy, performSearch, leftPreset, searchIdentity]);
 
   useEffect(() => {
     if (!successMessage) return;
@@ -221,6 +382,9 @@ export default function HomePage() {
   }, [successMessage]);
 
   const handleLocationChange = (next: LocationPreset) => {
+    headingMachineRef.current = startListHeadingRequest(headingMachineRef.current);
+    lastPresetBoundsKeyRef.current = '';
+    pendingSearchRef.current = null;
     setDetailsPlaceId(null);
     setAddPlaceOpen(false);
     setSelectedPlaceId(null);
@@ -229,7 +393,7 @@ export default function HomePage() {
     setLocation(next);
     setMapZoom(next.zoom);
     setFlyRequest({
-      nonce: Date.now(),
+      nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)),
       longitude: next.lng,
       latitude: next.lat,
       zoom: next.zoom,
@@ -241,28 +405,72 @@ export default function HomePage() {
     }
   };
 
-  const handleSelectFromList = (placeId: string) => {
+  const handleSelectFromList = useCallback((placeId: string) => {
     const place = places.find((item) => item.place_id === placeId);
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
     setAddPlaceOpen(false);
     if (place) {
       setLeftPreset(true);
-      setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
+      setFlyRequest({ nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)), longitude: place.lng, latitude: place.lat, zoom: 12 });
     }
-  };
+  }, [places]);
 
-  const handleSelectFromMap = (placeId: string) => {
+  const handleSelectFromMap = useCallback((placeId: string) => {
+    const place = places.find((item) => item.place_id === placeId);
     setSelectedPlaceId(placeId);
     setDetailsPlaceId(placeId);
     setAddPlaceOpen(false);
-  };
+    if (place) {
+      setFlyRequest({
+        nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)),
+        longitude: place.lng,
+        latitude: place.lat,
+        ease: true,
+        keepZoom: true,
+      });
+    }
+  }, [places]);
 
-  const handleFlyComplete = useCallback(() => {
-    setFlyRequest(null);
+  const handleFlyComplete = useCallback((
+    nonce?: number,
+    kind?: FlightEndKind,
+    info?: { gestureSearchPending?: boolean }
+  ) => {
+    setFlyRequest((current) => {
+      if (!current) return null;
+      if (nonce != null && current.nonce !== nonce) return current;
+      return null;
+    });
+    if (kind === 'user-interrupt') {
+      headingMachineRef.current = startListHeadingRequest(headingMachineRef.current);
+      pendingSearchRef.current = null;
+      const pending = Boolean(info?.gestureSearchPending);
+      gestureSearchPendingRef.current = pending;
+      lastPresetBoundsKeyRef.current = lastKeyAfterLeavingPreset({
+        boundsKey: mapBoundsKey(mapBoundsRef.current),
+        gestureSearchPending: pending,
+      });
+      setLeftPreset(true);
+      setHeading((prev) =>
+        prev
+          ? {
+              ...prev,
+              chipLabel: locationChipLabel(locationRef.current, true),
+              locationName: listLocationName({ location: locationRef.current, leftPreset: true }),
+            }
+          : prev
+      );
+    }
   }, []);
 
-  const handleUserCameraMove = useCallback(() => {
+  const handleUserCameraMove = useCallback((info?: { gestureSearchPending?: boolean }) => {
+    const pending = Boolean(info?.gestureSearchPending);
+    gestureSearchPendingRef.current = pending;
+    lastPresetBoundsKeyRef.current = lastKeyAfterLeavingPreset({
+      boundsKey: mapBoundsKey(mapBoundsRef.current),
+      gestureSearchPending: pending,
+    });
     setLeftPreset(true);
   }, []);
 
@@ -301,18 +509,59 @@ export default function HomePage() {
     setSelectedPlaceId(place.place_id);
     setDetailsPlaceId(place.place_id);
     setLeftPreset(true);
-    setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
+    setFlyRequest({ nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)), longitude: place.lng, latitude: place.lat, zoom: 12 });
     setSuccessMessage('Place submitted. It is pending review and is not approved yet.');
   };
 
-  const handleToggleFavorite = (placeId: string) => {
+  const handleToggleFavorite = useCallback((placeId: string) => {
     setFavorites((prev) => {
       const next = new Set(prev);
       if (next.has(placeId)) next.delete(placeId);
       else next.add(placeId);
       return next;
     });
-  };
+  }, []);
+
+  const handleCardHover = useCallback((placeId: string | null) => {
+    hoverCtrl.setHover(placeId, 'card');
+  }, [hoverCtrl]);
+
+  const handlePinHover = useCallback((placeId: string | null) => {
+    hoverCtrl.setHover(placeId, 'pin');
+  }, [hoverCtrl]);
+
+  const bindMapHover = useCallback(
+    (apply: (placeId: string | null) => void) => hoverCtrl.bindFeatureState(apply),
+    [hoverCtrl]
+  );
+
+  useEffect(() => {
+    const unHighlight = hoverCtrl.bindCardHighlight((placeId) => {
+      syncMapHoveredCard(listSlotRef.current, placeId);
+    });
+    const unScroll = hoverCtrl.bindPinScroll((placeId) => {
+      const root = listSlotRef.current;
+      scrollPlaceCardIntoView(
+        placeId,
+        root?.querySelector<HTMLElement>('#places-list-body') ?? null,
+        root?.querySelector<HTMLElement>('[data-list-header]') ?? null
+      );
+    });
+    return () => {
+      unHighlight();
+      unScroll();
+    };
+  }, [hoverCtrl]);
+
+  useEffect(() => {
+    if (!selectedPlaceId) return;
+    const root = listSlotRef.current;
+    scrollPlaceCardIntoView(
+      selectedPlaceId,
+      root?.querySelector<HTMLElement>('#places-list-body') ?? null,
+      root?.querySelector<HTMLElement>('[data-list-header]') ?? null
+    );
+  }, [selectedPlaceId]);
 
   const headingText = listHeadingText(heading, extraCount);
   const chipLabel = heading?.chipLabel ?? location.label;
@@ -339,7 +588,7 @@ export default function HomePage() {
         shouldReapplyNarrowWorldwide(left, loc.id, prevViewportRef.current, next)
       ) {
         setFlyRequest({
-          nonce: Date.now(),
+          nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)),
           longitude: loc.lng,
           latitude: loc.lat,
           zoom: loc.zoom,
@@ -388,7 +637,7 @@ export default function HomePage() {
         <PlacesMap
           places={places}
           selectedPlaceId={selectedPlaceId}
-          hoveredPlaceId={hoveredPlaceId}
+          bindHover={bindMapHover}
           flyRequest={flyRequest}
           onFlyComplete={handleFlyComplete}
           panelOpen={panelOpen}
@@ -398,9 +647,10 @@ export default function HomePage() {
           mapCenterRequest={mapCenterRequest}
           onMapCenter={applyMapLocation}
           onSelectPlace={handleSelectFromMap}
-          onHoverPlace={setHoveredPlaceId}
+          onHoverPlace={handlePinHover}
           onViewportChange={handleViewportChange}
           onUserCameraMove={handleUserCameraMove}
+          onCameraBusy={setMapCameraBusy}
           hintTop={pinHintTop}
           mapboxToken={mapboxToken}
           collapseList={collapseList}
@@ -416,20 +666,24 @@ export default function HomePage() {
         <div
           ref={listSlotRef}
           data-places-list-slot
-          className={`absolute left-4 w-[min(100%-2rem,380px)] ${
+          className={`places-list-slot absolute left-4 w-[min(100%-2rem,380px)] overflow-hidden ${
             hideListForDrawer ? 'hidden' : 'pointer-events-auto'
           } ${listCollapsed ? '' : 'bottom-4'}`}
-          style={{ top: chromeTop, transition: 'top 200ms ease' }}
+          style={{
+            top: chromeTop,
+            maxHeight: placesListSlotMaxHeightPx(viewportHeight, chromeTop),
+            ['--places-list-max' as string]: `${placesListMaxHeightPx(viewportHeight, chromeTop)}px`,
+          }}
           aria-hidden={hideListForDrawer}
         >
           <PlacesList
-            places={places}
+            listKey={listMountKey}
+            places={listPlaces}
             total={displayTotal}
             selectedPlaceId={selectedPlaceId}
-            hoveredPlaceId={hoveredPlaceId}
             favorites={favorites}
             onSelectPlace={handleSelectFromList}
-            onHoverPlace={setHoveredPlaceId}
+            onHoverPlace={handleCardHover}
             onToggleFavorite={handleToggleFavorite}
             onLoadMore={() =>
               performSearch(page + 1, true, leftPreset ? mapBoundsRef.current : null)

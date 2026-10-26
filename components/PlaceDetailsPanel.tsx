@@ -91,8 +91,8 @@ export default function PlaceDetailsPanel({ placeId, onClose, offsetTop = 96 }: 
       aria-modal="true"
       aria-labelledby="place-details-title"
       data-place-details
-      className="absolute bottom-28 right-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
-      style={{ top: offsetTop, transition: 'top 200ms ease' }}
+      className="drawer-panel absolute bottom-28 right-4 z-30 flex w-[min(28rem,calc(100%-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
+      style={{ top: offsetTop }}
     >
       <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
         <h2 id="place-details-title" className="text-lg font-semibold text-gray-900">
