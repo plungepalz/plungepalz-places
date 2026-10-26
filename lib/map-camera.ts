@@ -280,10 +280,19 @@ function withBox(state: CanvasMachineState): CanvasMachineState {
   return { ...state, box: lowZoomCanvasLayout(state.viewport, state.anchorZoom) };
 }
 
+/** Programmatic cameras above this zoom must use the full-height canvas. */
+export const WORLDWIDE_CANVAS_GROW_ZOOM = 1;
+
+/** Empty leftover band is only for the narrow Worldwide floor, never city zooms. */
+export function shouldGrowCanvasForZoom(zoom: number): boolean {
+  return zoom > WORLDWIDE_CANVAS_GROW_ZOOM;
+}
+
 /**
- * Hysteresis canvas: shrink *before* a low-target programmatic flight and
- * keep that height until a user zoom-in (or a high-target flight) reaches
- * the full-height clamp. Live zoom during a flight never grows the canvas.
+ * Hysteresis canvas: shrink *before* a low-target programmatic flight.
+ * Any programmatic non-Worldwide move (target above the height clamp, or
+ * zoom > 1) grows to full height first — resize, then one camera call.
+ * Live zoom during a flight never grows the canvas.
  */
 export function reduceCanvasMachine(
   state: CanvasMachineState,
@@ -319,13 +328,12 @@ export function reduceCanvasMachine(
         };
       }
       return {
-        ...state,
         viewport,
+        shortened: false,
         flightLocked: true,
-        growArmed: state.shortened,
-        box: state.shortened
-          ? lowZoomCanvasLayout(viewport, state.anchorZoom ?? event.targetZoom)
-          : fullCanvasBox(viewport),
+        growArmed: false,
+        anchorZoom: null,
+        box: fullCanvasBox(viewport),
       };
     }
     case 'flightProgress':
@@ -333,7 +341,7 @@ export function reduceCanvasMachine(
     case 'flightEnd': {
       const unlocked = { ...state, flightLocked: false };
       const clamp = mapboxHeightMinZoom(state.viewport.height);
-      if (state.growArmed && event.zoom >= clamp - 1e-9) {
+      if (shouldGrowCanvasForZoom(event.zoom) || (state.growArmed && event.zoom >= clamp - 1e-9)) {
         return {
           ...unlocked,
           shortened: false,
@@ -1338,6 +1346,46 @@ export function flyToThenOnMoveend(
 }
 
 export type CameraEndReason = 'complete' | 'interrupted';
+
+/**
+ * Semantic end of a flyRequest. Animation `interrupted` is a replacement
+ * (Zoom / cluster / Locate / another preset). A Mapbox `stop()` on user
+ * mousedown still fires `complete`, so we also treat user input or a miss
+ * of the camera target as a user interrupt.
+ */
+export type FlightEndKind = 'complete' | 'user-interrupt' | 'replaced';
+
+export function cameraReachedTarget(
+  live: { lng: number; lat: number; zoom: number },
+  target: { lng: number; lat: number; zoom: number },
+  zoomEps = 0.05,
+  degEps = 0.5
+): boolean {
+  return (
+    Math.abs(live.zoom - target.zoom) <= zoomEps &&
+    Math.abs(shortestLngDelta(live.lng, target.lng)) <= degEps &&
+    Math.abs(live.lat - target.lat) <= degEps
+  );
+}
+
+export function classifyFlightEnd(input: {
+  animationReason: CameraEndReason;
+  reachedTarget: boolean;
+  userInputActive: boolean;
+}): FlightEndKind {
+  if (input.animationReason === 'interrupted') return 'replaced';
+  if (input.userInputActive || !input.reachedTarget) return 'user-interrupt';
+  return 'complete';
+}
+
+/** Cluster clicks are swallowed after mousedown-on-moving-map; queue them. */
+export function shouldQueueClusterExpand(
+  flightTag: string | null | undefined,
+  feature: { cluster?: boolean; cluster_id?: number | string } | null | undefined
+): boolean {
+  if (!isProgrammaticFlightTag(flightTag)) return false;
+  return feature?.cluster_id != null || feature?.cluster === true;
+}
 
 export interface CameraHandlerRef {
   current: (() => void) | null;

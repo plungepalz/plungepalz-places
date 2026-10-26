@@ -25,6 +25,7 @@ import {
   shouldCollapseList,
   shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
+  type FlightEndKind,
   type SizeBox,
 } from '@/lib/map-camera';
 import {
@@ -424,15 +425,22 @@ export default function HomePage() {
     }
   }, [places]);
 
-  const handleFlyComplete = useCallback((nonce?: number) => {
+  const handleFlyComplete = useCallback((nonce?: number, kind?: FlightEndKind) => {
     setFlyRequest((current) => {
       if (!current) return null;
       if (nonce != null && current.nonce !== nonce) return current;
       return null;
     });
+    if (kind === 'user-interrupt') {
+      headingMachineRef.current = startListHeadingRequest(headingMachineRef.current);
+      pendingSearchRef.current = null;
+      lastPresetBoundsKeyRef.current = '';
+      setLeftPreset(true);
+    }
   }, []);
 
   const handleUserCameraMove = useCallback(() => {
+    lastPresetBoundsKeyRef.current = '';
     setLeftPreset(true);
   }, []);
 
