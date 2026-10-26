@@ -12,9 +12,10 @@ import {
   cameraEaseOptions,
   cameraFlyOptions,
   cameraMoveendEffects,
-  cameraReachedTarget,
   classifyFlightEnd,
   clusterExpandCamera,
+  clusterPointerMoved,
+  isGenuineClusterClick,
   canvasBoxEquals,
   canvasFillStyle,
   canvasHostStyle,
@@ -42,13 +43,16 @@ import {
   scheduleMapResize,
   shouldApplyNarrowWorldwideAfterResize,
   shouldClearPaddingAfterFlight,
+  shouldJumpToNarrowWorldwideFit,
   shouldQueueClusterExpand,
   shouldReapplyNarrowWorldwide,
+  shouldSearchOnUserMoveend,
   abandonCameraAnimation,
   startCameraAnimation,
   type CameraEndReason,
   type CameraHandlerRef,
   type CameraMethod,
+  type ClusterClickPointer,
   type FlightEndKind,
   type FlightTag,
   type MapResizeState,
@@ -282,17 +286,16 @@ export default function PlacesMap({
   const liveZoomRef = useRef<number | null>(null);
   const userInputRef = useRef(false);
   const zoomMovedRef = useRef(false);
-  const pendingClusterRef = useRef<{
-    clusterId: number;
-    center: [number, number];
-  } | null>(null);
+  const pendingClusterRef = useRef<ClusterClickPointer | null>(null);
+  const pointerDownRef = useRef(false);
+  const needsBoundsReportRef = useRef(false);
+  const clusterExpandingRef = useRef(false);
   const pendingCameraRef = useRef<{
     tag: FlightTag;
     method: CameraMethod;
     options: Record<string, unknown>;
     onEnd: (reason: CameraEndReason) => void;
   } | null>(null);
-  const clusterFlushTimerRef = useRef<number | null>(null);
   const detailsOpen = panelOpen && !locationPickMode;
   const detailsOpenRef = useRef(detailsOpen);
   const slotSize = useMemo(
@@ -524,7 +527,11 @@ export default function PlacesMap({
       if (!pending) return;
       if (!canvasReadyForFlight(applied, canvasMachineRef.current.box)) return;
       const map = mapRef.current?.getMap();
-      if (!map) return;
+      if (!map) {
+        pendingCameraRef.current = null;
+        onCameraBusy?.(false);
+        return;
+      }
       pendingCameraRef.current = null;
       if (mapNeedsResize(map.getCanvas(), mapBoxRef.current)) {
         map.resize();
@@ -572,14 +579,35 @@ export default function PlacesMap({
 
   const expandCluster = useCallback(
     (clusterId: number, clusterCenter: [number, number]) => {
+      const failOpen = () => {
+        clusterExpandingRef.current = false;
+        pendingCameraRef.current = null;
+        onCameraBusy?.(false);
+        onUserCameraMove?.();
+        needsBoundsReportRef.current = false;
+        reportViewport();
+      };
+      clusterExpandingRef.current = true;
       const live = mapRef.current?.getMap();
-      if (!live) return;
+      if (!live) {
+        failOpen();
+        return;
+      }
       const source = live.getSource('places') as GeoJSONSource | undefined;
-      if (!source?.getClusterExpansionZoom) return;
+      if (!source?.getClusterExpansionZoom) {
+        failOpen();
+        return;
+      }
       source.getClusterExpansionZoom(clusterId, (error, zoom) => {
-        if (error || zoom == null) return;
+        if (error || zoom == null) {
+          failOpen();
+          return;
+        }
         const map = mapRef.current?.getMap();
-        if (!map) return;
+        if (!map) {
+          failOpen();
+          return;
+        }
         const size = readMeasuredViewport(containerRef.current) ?? slotSize;
         const padding = flyPadding(detailsOpenRef.current, false, size, collapseList);
         const camera = clusterExpandCamera(
@@ -599,9 +627,11 @@ export default function PlacesMap({
             retainPadding: camera.retainPadding,
           }),
           onEnd: () => {
+            clusterExpandingRef.current = false;
             onUserCameraMove?.();
             flightTagRef.current = null;
             onCameraBusy?.(false);
+            needsBoundsReportRef.current = false;
             reportViewport();
           },
         });
@@ -610,26 +640,14 @@ export default function PlacesMap({
     [collapseList, onCameraBusy, onUserCameraMove, queueProgrammaticCamera, reportViewport, slotSize]
   );
 
-  const scheduleQueuedClusterExpand = useCallback(() => {
-    if (clusterFlushTimerRef.current != null) {
-      window.clearTimeout(clusterFlushTimerRef.current);
+  const reportAfterUserGesture = useCallback(() => {
+    if (pointerDownRef.current) {
+      needsBoundsReportRef.current = true;
+      return;
     }
-    clusterFlushTimerRef.current = window.setTimeout(() => {
-      clusterFlushTimerRef.current = null;
-      const pending = pendingClusterRef.current;
-      if (!pending) return;
-      pendingClusterRef.current = null;
-      expandCluster(pending.clusterId, pending.center);
-    }, 0);
-  }, [expandCluster]);
-
-  useEffect(() => {
-    return () => {
-      if (clusterFlushTimerRef.current != null) {
-        window.clearTimeout(clusterFlushTimerRef.current);
-      }
-    };
-  }, []);
+    needsBoundsReportRef.current = false;
+    reportViewport();
+  }, [reportViewport]);
 
   useEffect(() => {
     flushPendingCamera(canvasLayout);
@@ -821,20 +839,11 @@ export default function PlacesMap({
     const keepFitPadding = Boolean(flyRequest.exactZoom && flyFitTop > 0);
     const endedTag = flightTag;
     const endedNonce = flyRequest.nonce;
-    const targetCenter = { lng: longitude, lat: latitude, zoom };
     const onFlyEnd = (reason: CameraEndReason = 'complete') => {
       const live = mapRef.current?.getMap();
       const endedZoom = live?.getZoom() ?? zoom;
-      const liveCenter = live?.getCenter();
-      const reached = liveCenter
-        ? cameraReachedTarget(
-            { lng: liveCenter.lng, lat: liveCenter.lat, zoom: endedZoom },
-            targetCenter
-          )
-        : reason === 'complete';
       const kind = classifyFlightEnd({
         animationReason: reason,
-        reachedTarget: reached,
         userInputActive: userInputRef.current,
       });
       commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
@@ -850,10 +859,24 @@ export default function PlacesMap({
           clearPaddingProgrammatic();
         }
         reportViewport();
+        const onChip = jumpContextRef.current;
+        if (
+          onChip.location?.id === 'worldwide' &&
+          !onChip.leftPreset &&
+          shouldJumpToNarrowWorldwideFit(false, 'worldwide', onChip.slotSize, endedZoom)
+        ) {
+          pendingNarrowWorldwideRef.current = true;
+          commitCanvas(
+            reduceCanvasMachine(canvasMachineRef.current, {
+              type: 'prepareFlight',
+              targetZoom: presetFlyCamera(onChip.location, onChip.slotSize).zoom,
+              viewport: onChip.slotSize,
+            })
+          );
+        }
       } else if (kind === 'user-interrupt') {
-        reportViewport();
         onUserCameraMove?.();
-        scheduleQueuedClusterExpand();
+        reportAfterUserGesture();
       }
       if (kind !== 'replaced' && flightTagRef.current === endedTag) {
         flightTagRef.current = null;
@@ -916,8 +939,8 @@ export default function PlacesMap({
     onFlyComplete,
     onUserCameraMove,
     panelOpen,
+    reportAfterUserGesture,
     reportViewport,
-    scheduleQueuedClusterExpand,
     slotSize,
   ]);
 
@@ -979,6 +1002,7 @@ export default function PlacesMap({
   };
 
   const handleMapMouseDown = (event: MapMouseEvent) => {
+    pointerDownRef.current = true;
     if (!isProgrammaticFlightTag(flightTagRef.current)) return;
     userInputRef.current = true;
     const map = mapRef.current?.getMap();
@@ -1003,7 +1027,32 @@ export default function PlacesMap({
     pendingClusterRef.current = {
       clusterId,
       center: coords ?? [event.lngLat.lng, event.lngLat.lat],
+      x: event.point.x,
+      y: event.point.y,
+      at: Date.now(),
     };
+  };
+
+  const handleMapMouseUp = (event: MapMouseEvent) => {
+    const pending = pendingClusterRef.current;
+    pointerDownRef.current = false;
+    if (pending) {
+      pendingClusterRef.current = null;
+      if (
+        isGenuineClusterClick({
+          start: pending,
+          end: { x: event.point.x, y: event.point.y, at: Date.now() },
+        })
+      ) {
+        expandCluster(pending.clusterId, pending.center);
+      } else if (needsBoundsReportRef.current) {
+        reportAfterUserGesture();
+      }
+      return;
+    }
+    if (needsBoundsReportRef.current) {
+      reportAfterUserGesture();
+    }
   };
 
   const handleMapClick = (event: MapMouseEvent) => {
@@ -1016,6 +1065,7 @@ export default function PlacesMap({
     const props = feature?.properties;
     if (props?.cluster_id != null && mapRef.current) {
       pendingClusterRef.current = null;
+      if (clusterExpandingRef.current) return;
       const coords = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : undefined;
       const clusterCenter: [number, number] = coords ?? [event.lngLat.lng, event.lngLat.lat];
       expandCluster(Number(props.cluster_id), clusterCenter);
@@ -1031,6 +1081,10 @@ export default function PlacesMap({
   };
 
   const handleMouseMove = (event: MapMouseEvent) => {
+    const queued = pendingClusterRef.current;
+    if (queued && clusterPointerMoved(queued, event.point)) {
+      pendingClusterRef.current = null;
+    }
     const map = mapRef.current?.getMap();
     if (!map) return;
     const feature = event.features?.[0] as
@@ -1136,9 +1190,12 @@ export default function PlacesMap({
       if (effects.leavePreset) {
         onUserCameraMove?.();
       }
-      if (effects.reportBounds) {
+      if (effects.reportBounds && shouldSearchOnUserMoveend({ pointerDown: pointerDownRef.current })) {
+        needsBoundsReportRef.current = false;
         reportViewport();
         setClusterQueryTick((tick) => tick + 1);
+      } else if (effects.reportBounds) {
+        needsBoundsReportRef.current = true;
       }
       if (tag === 'resize' || effects.leavePreset) {
         flightTagRef.current = null;
@@ -1253,6 +1310,7 @@ export default function PlacesMap({
         onMove={handleMove}
         onMoveEnd={handleMoveEnd}
         onMouseDown={handleMapMouseDown}
+        onMouseUp={handleMapMouseUp}
         onClick={handleMapClick}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => {

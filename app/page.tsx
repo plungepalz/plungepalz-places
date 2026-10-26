@@ -19,6 +19,7 @@ import {
   startListHeadingRequest,
   type ListHeadingSnapshot,
 } from '@/lib/list-heading-state';
+import { listLocationName, locationChipLabel } from '@/lib/list-location-name';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
 import {
   defaultCompactList,
@@ -434,13 +435,22 @@ export default function HomePage() {
     if (kind === 'user-interrupt') {
       headingMachineRef.current = startListHeadingRequest(headingMachineRef.current);
       pendingSearchRef.current = null;
-      lastPresetBoundsKeyRef.current = '';
+      lastPresetBoundsKeyRef.current = mapBoundsKey(mapBoundsRef.current);
       setLeftPreset(true);
+      setHeading((prev) =>
+        prev
+          ? {
+              ...prev,
+              chipLabel: locationChipLabel(locationRef.current, true),
+              locationName: listLocationName({ location: locationRef.current, leftPreset: true }),
+            }
+          : prev
+      );
     }
   }, []);
 
   const handleUserCameraMove = useCallback(() => {
-    lastPresetBoundsKeyRef.current = '';
+    lastPresetBoundsKeyRef.current = mapBoundsKey(mapBoundsRef.current);
     setLeftPreset(true);
   }, []);
 

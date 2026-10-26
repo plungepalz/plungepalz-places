@@ -32,6 +32,8 @@ import {
   cameraSeparation,
   cappedFlyDuration,
   classifyFlightEnd,
+  clusterPointerMoved,
+  isGenuineClusterClick,
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
@@ -46,6 +48,7 @@ import {
   shouldGrowCanvasForZoom,
   shouldQueueClusterExpand,
   shouldReportViewport,
+  shouldSearchOnUserMoveend,
   abandonCameraAnimation,
   startCameraAnimation,
   type CameraEndReason,
@@ -324,7 +327,7 @@ test('slow inertial wheel leaves the preset and reports bounds without originalE
   const inertial = cameraMoveendEffects({}, null, { userInputActive: true, zoomChanged: true });
   assert.equal(inertial.leavePreset, true);
   assert.equal(inertial.reportBounds, true);
-  assert.equal(isUserMapMove({}, null, { zoomChanged: true }), true);
+  assert.equal(isUserMapMove({}, null, { zoomChanged: true }), false);
   assert.equal(isUserMapMove({}, 'resize', { zoomChanged: true }), false);
   assert.equal(isUserMapMove({}, 'resize', { userInputActive: true }), true);
 
@@ -1260,7 +1263,7 @@ function createBusyFlightSession() {
     if (kind === 'user-interrupt') {
       heading = startListHeadingRequest(heading);
       pendingSearch = null;
-      lastKey = '';
+      lastKey = 'current-bounds';
       leftPreset = true;
     }
   };
@@ -1430,14 +1433,14 @@ test('abandonCameraAnimation on unmount drops the listener without clearing flyR
   assert.deepEqual(session.presetReasons, []);
 });
 
-test('classifyFlightEnd: Mapbox stop() without reaching the target is a user interrupt', () => {
+test('classifyFlightEnd: only real user input is an interrupt; clamp/resize misses stay complete', () => {
   assert.equal(
     classifyFlightEnd({ animationReason: 'interrupted', reachedTarget: false, userInputActive: false }),
     'replaced'
   );
   assert.equal(
     classifyFlightEnd({ animationReason: 'complete', reachedTarget: false, userInputActive: false }),
-    'user-interrupt'
+    'complete'
   );
   assert.equal(
     classifyFlightEnd({ animationReason: 'complete', reachedTarget: true, userInputActive: true }),
@@ -1448,20 +1451,70 @@ test('classifyFlightEnd: Mapbox stop() without reaching the target is a user int
     'complete'
   );
   assert.equal(
-    cameraReachedTarget({ lng: 0, lat: 40, zoom: 5.8 }, { lng: -0.12, lat: 51.5, zoom: 9 }),
+    cameraReachedTarget({ lng: -20, lat: 20, zoom: 0.81 }, { lng: -20, lat: 20, zoom: 0.459 }),
     false
   );
   assert.equal(
-    cameraReachedTarget({ lng: 139.69, lat: 35.68, zoom: 9.02 }, { lng: 139.7, lat: 35.7, zoom: 9 }),
-    true
+    classifyFlightEnd({
+      animationReason: 'complete',
+      reachedTarget: cameraReachedTarget(
+        { lng: -20, lat: 20, zoom: 0.81 },
+        { lng: -20, lat: 20, zoom: 0.459 }
+      ),
+      userInputActive: false,
+    }),
+    'complete'
   );
+});
+
+test('768 Worldwide with no interrupt keeps Worldwide', () => {
+  const kind = classifyFlightEnd({
+    animationReason: 'complete',
+    reachedTarget: false,
+    userInputActive: false,
+  });
+  assert.equal(kind, 'complete');
+  const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
+  let heading = createListHeadingMachine();
+  heading = startListHeadingRequest(heading);
+  heading = settleListHeadingRequest(
+    heading,
+    1,
+    { shown: 82, total: 82, hasMore: false, places: [] },
+    { hasMap: true, zoom: 0.459, location: worldwide, leftPreset: false }
+  );
+  assert.equal(heading.heading?.chipLabel, 'Worldwide');
+  const decision = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'ww-live-bounds',
+    lastPresetKey: '',
+    cameraBusy: false,
+    settleKey: 'preset:worldwide',
+  });
+  assert.equal(decision.action, 'filters');
+  assert.equal(decision.nextPresetKey, 'preset:worldwide');
+});
+
+test('resize on Worldwide keeps the chip and does not search', () => {
+  const resize = cameraMoveendEffects({}, 'resize', { zoomChanged: true });
+  assert.equal(resize.leavePreset, false);
+  assert.equal(isUserMapMove({}, null, { zoomChanged: true }), false);
+  const afterClamp = cameraMoveendEffects({}, null, { zoomChanged: true });
+  assert.equal(afterClamp.leavePreset, false);
+  const decision = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'resized-bounds',
+    lastPresetKey: 'preset:worldwide',
+    cameraBusy: false,
+    settleKey: 'preset:worldwide',
+  });
+  assert.equal(decision.action, 'skip');
 });
 
 test('user interrupt of a preset cancels settle and bounds-searches Map area once', () => {
   const session = createBusyFlightSession();
   const kind = classifyFlightEnd({
     animationReason: 'complete',
-    reachedTarget: false,
     userInputActive: true,
   });
   assert.equal(kind, 'user-interrupt');
@@ -1469,8 +1522,18 @@ test('user interrupt of a preset cancels settle and bounds-searches Map area onc
   assert.equal(session.flyRequest, null);
   assert.equal(session.leftPreset, true);
   assert.equal(session.pendingSearch, null);
-  assert.equal(session.lastKey, '');
   assert.equal(shouldApplySettledSearch(1, session.heading), false);
+
+  assert.equal(
+    searchAfterViewportChange({
+      leftPreset: session.leftPreset,
+      boundsKey: session.lastKey,
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+    }).action,
+    'skip',
+    'interrupt must not search until bounds change'
+  );
 
   const decision = searchAfterViewportChange({
     leftPreset: session.leftPreset,
@@ -1512,7 +1575,7 @@ test('zoomChanged during a preset tag does not leave the chip', () => {
   assert.equal(effects.leavePreset, false);
   assert.equal(effects.reportBounds, false);
   const afterWipe = cameraMoveendEffects({}, null, { zoomChanged: true });
-  assert.equal(afterWipe.leavePreset, true, 'wiping the tag on replace would eat the Tokyo settle');
+  assert.equal(afterWipe.leavePreset, false, 'clamp/resize zoomChanged without user input must not leave');
 });
 
 test('cluster mousedown during a programmatic flight is queued', () => {
@@ -1523,10 +1586,89 @@ test('cluster mousedown during a programmatic flight is queued', () => {
   assert.equal(shouldQueueClusterExpand('preset', {}), false);
 });
 
-test('zoom interrupting a card fly clears the settle key so the next drag searches', () => {
+test('drag-from-cluster does not expand', () => {
+  const start = { x: 100, y: 80, at: 1_000 };
+  assert.equal(
+    isGenuineClusterClick({ start, end: { x: 101, y: 81, at: 1_120 } }),
+    true
+  );
+  assert.equal(
+    isGenuineClusterClick({ start, end: { x: 120, y: 80, at: 1_120 } }),
+    false
+  );
+  assert.equal(clusterPointerMoved(start, { x: 106, y: 80 }), true);
+  assert.equal(clusterPointerMoved(start, { x: 103, y: 82 }), false);
+  assert.equal(
+    isGenuineClusterClick({ start, end: { x: 101, y: 81, at: 1_400 } }),
+    false
+  );
+  assert.equal(
+    isGenuineClusterClick({ start, end: { x: 101, y: 81, at: 1_120 }, cancelled: true }),
+    false
+  );
+});
+
+test('cluster click mid-flight never gets stuck', () => {
+  const session = createBusyFlightSession();
+  session.handleFlyComplete(
+    1,
+    classifyFlightEnd({ animationReason: 'complete', userInputActive: true })
+  );
+  assert.equal(session.leftPreset, true);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.cameraBusy(), false);
+  assert.equal(shouldApplySettledSearch(1, session.heading), false);
+
+  const queued = shouldQueueClusterExpand('preset', { cluster_id: 7 });
+  const dragged = clusterPointerMoved({ x: 10, y: 10 }, { x: 40, y: 12 });
+  assert.equal(queued, true);
+  assert.equal(dragged, true);
+
+  const afterFailOpen = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'stopped-here',
+    lastPresetKey: session.lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(afterFailOpen.action, 'moveend');
+
+  const afterDrag = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'later-drag',
+    lastPresetKey: afterFailOpen.nextPresetKey ?? session.lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(afterDrag.action, 'moveend');
+});
+
+test('a mid-flight drag searches once at the drag end', () => {
+  assert.equal(shouldSearchOnUserMoveend({ pointerDown: true }), false);
+  assert.equal(shouldSearchOnUserMoveend({ pointerDown: false }), true);
+
+  let lastKey = 'preset:london';
+  const searches: string[] = [];
+  const consider = (pointerDown: boolean, boundsKey: string) => {
+    if (!shouldSearchOnUserMoveend({ pointerDown })) return;
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey,
+      lastPresetKey: lastKey,
+      cameraBusy: false,
+    });
+    if (decision.action === 'skip') return;
+    lastKey = decision.nextPresetKey ?? boundsKey;
+    searches.push(boundsKey);
+  };
+  consider(true, 'stop-mid-flight');
+  consider(true, 'still-dragging');
+  consider(false, 'drag-end');
+  assert.deepEqual(searches, ['drag-end']);
+});
+
+test('zoom interrupting a card fly lets the next drag search', () => {
   let lastKey = 'place-bounds';
   const handleUserCameraMove = () => {
-    lastKey = '';
+    lastKey = 'place-bounds';
   };
   handleUserCameraMove();
   const afterZoom = searchAfterViewportChange({

@@ -897,8 +897,8 @@ export function isUserMapMove(
   const orig = event?.originalEvent as { type?: string } | undefined;
   if (orig && (orig.type === 'resize' || orig.type === 'orientationchange')) return false;
   if (event?.originalEvent != null) return true;
-  if (hints?.zoomChanged && !isProgrammaticFlightTag(flightTag)) return true;
-  if (flightTag) return false;
+  // Clamp / resize / leftover moveends change zoom without a pointer or wheel.
+  // Only a real gesture (or userInputActive from one) may leave the chip.
   return false;
 }
 
@@ -1350,8 +1350,8 @@ export type CameraEndReason = 'complete' | 'interrupted';
 /**
  * Semantic end of a flyRequest. Animation `interrupted` is a replacement
  * (Zoom / cluster / Locate / another preset). A Mapbox `stop()` on user
- * mousedown still fires `complete`, so we also treat user input or a miss
- * of the camera target as a user interrupt.
+ * mousedown still fires `complete`, so only real user input counts as a
+ * user interrupt — never a missed target, clamp, or resize moveend.
  */
 export type FlightEndKind = 'complete' | 'user-interrupt' | 'replaced';
 
@@ -1370,11 +1370,11 @@ export function cameraReachedTarget(
 
 export function classifyFlightEnd(input: {
   animationReason: CameraEndReason;
-  reachedTarget: boolean;
+  reachedTarget?: boolean;
   userInputActive: boolean;
 }): FlightEndKind {
   if (input.animationReason === 'interrupted') return 'replaced';
-  if (input.userInputActive || !input.reachedTarget) return 'user-interrupt';
+  if (input.userInputActive) return 'user-interrupt';
   return 'complete';
 }
 
@@ -1385,6 +1385,44 @@ export function shouldQueueClusterExpand(
 ): boolean {
   if (!isProgrammaticFlightTag(flightTag)) return false;
   return feature?.cluster_id != null || feature?.cluster === true;
+}
+
+/** Mid-flight cluster queue: expand only on a short, still click. */
+export const CLUSTER_CLICK_MAX_PX = 5;
+export const CLUSTER_CLICK_MAX_MS = 300;
+
+export interface ClusterClickPointer {
+  x: number;
+  y: number;
+  at: number;
+  clusterId: number;
+  center: [number, number];
+}
+
+export function clusterPointerMoved(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  maxPx = CLUSTER_CLICK_MAX_PX
+): boolean {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  return dx * dx + dy * dy > maxPx * maxPx;
+}
+
+export function isGenuineClusterClick(input: {
+  start: { x: number; y: number; at: number };
+  end: { x: number; y: number; at: number };
+  cancelled?: boolean;
+}): boolean {
+  if (input.cancelled) return false;
+  if (clusterPointerMoved(input.start, input.end)) return false;
+  if (input.end.at - input.start.at > CLUSTER_CLICK_MAX_MS) return false;
+  return true;
+}
+
+/** Search the interrupted camera once the pointer is up, not on every mid-drag moveend. */
+export function shouldSearchOnUserMoveend(input: { pointerDown: boolean }): boolean {
+  return !input.pointerDown;
 }
 
 export interface CameraHandlerRef {
