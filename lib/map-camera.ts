@@ -794,6 +794,18 @@ export function pinHintCenterX(canvasWidth: number, panelOpen: boolean, forceCol
 }
 
 /**
+ * Mapbox `move`/`moveend` sets `originalEvent` for drag / scroll / pinch.
+ * Window resize and orientation changes are not user gestures.
+ */
+export function isUserGestureEvent(
+  event: { originalEvent?: unknown } | null | undefined
+): boolean {
+  const orig = event?.originalEvent as { type?: string } | undefined;
+  if (!orig?.type) return false;
+  return orig.type !== 'resize' && orig.type !== 'orientationchange';
+}
+
+/**
  * User-initiated camera change vs a programmatic flight / resize.
  * Mapbox `moveend` sets `originalEvent` for drag / scroll / pinch.
  * Window resize and our own camera tags must never flip the chip to Map area.
@@ -841,6 +853,17 @@ export function shouldReportViewport(tag: string | null | undefined): boolean {
   return !isProgrammaticFlightTag(tag);
 }
 
+/**
+ * Canvas height follows the flight while tagged — unless a real wheel/drag
+ * comes through mid-flight or after a leftover resize-tagged jumpTo.
+ */
+export function isProgrammaticCanvasMove(
+  tag: string | null | undefined,
+  event: { originalEvent?: unknown } | null | undefined
+): boolean {
+  return (isProgrammaticFlightTag(tag) || tag === 'resize') && !isUserGestureEvent(event);
+}
+
 export function cameraMoveendEffects(
   event: { originalEvent?: unknown } | null | undefined,
   flightTag?: string | null
@@ -866,6 +889,18 @@ export function paddingIsZero(padding: CameraPadding | null | undefined): boolea
     (padding.bottom ?? 0) === 0 &&
     (padding.left ?? 0) === 0
   );
+}
+
+/**
+ * Only clear leftover padding after a flight that actually used some.
+ * An unpadded preset (drawer closed) must not jumpTo on fly-end.
+ */
+export function shouldClearPaddingAfterFlight(
+  flightPadding: CameraPadding | null | undefined,
+  livePadding: CameraPadding | null | undefined
+): boolean {
+  if (paddingIsZero(flightPadding)) return false;
+  return !paddingIsZero(livePadding);
 }
 
 export interface PaddingClearMap {

@@ -30,7 +30,9 @@ import {
   flyPadding,
   flyToThenOnMoveend,
   cameraMoveendEffects,
+  isProgrammaticCanvasMove,
   isProgrammaticFlightTag,
+  isUserGestureEvent,
   isShortCameraHop,
   isShortPlaceHop,
   paddingIsZero,
@@ -79,6 +81,7 @@ import {
   scheduleMapResize,
   shouldCollapseList,
   shouldApplyNarrowWorldwideAfterResize,
+  shouldClearPaddingAfterFlight,
   shouldJumpToNarrowWorldwideFit,
   shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
@@ -1331,9 +1334,9 @@ test('reduced motion + 768 Worldwide: short canvas, width-fit zoom, one camera c
 
   const map = new InterruptibleMap();
   map.reducedMotion = true;
-  map.padding = { ...ZERO_PADDING, left: 396 };
   const handlerRef: { current: (() => void) | null } = { current: null };
   let ends = 0;
+  const flightPadding = ZERO_PADDING;
   startCameraAnimation(
     map,
     handlerRef,
@@ -1342,25 +1345,109 @@ test('reduced motion + 768 Worldwide: short canvas, width-fit zoom, one camera c
       duration: 900,
       center: [camera.lng, camera.lat],
       zoom: camera.zoom,
-      padding: { ...ZERO_PADDING, left: 396 },
+      padding: flightPadding,
     },
     () => {
       ends += 1;
-      clearPaddingKeepView(map);
+      if (shouldClearPaddingAfterFlight(flightPadding, map.getPadding())) {
+        clearPaddingKeepView(map);
+      }
     }
   );
   const cameraCalls = map.methods.filter((name) =>
     name === 'flyTo' || name === 'easeTo' || name === 'jumpTo' || name === 'setCenter'
   );
-  assert.equal(cameraCalls[0], 'flyTo');
-  assert.ok(
-    cameraCalls.length === 1 || (cameraCalls.length === 2 && cameraCalls[1] === 'jumpTo'),
-    'a padded flight may add one jumpTo to clear padding'
-  );
+  assert.deepEqual(cameraCalls, ['flyTo']);
   assert.equal(ends, 1);
   assert.equal(map.isMoving(), false);
   map.endFlight();
   assert.equal(ends, 1);
+});
+
+test('preset with zero padding is exactly one camera call', () => {
+  assert.equal(shouldClearPaddingAfterFlight(ZERO_PADDING, ZERO_PADDING), false);
+  assert.equal(shouldClearPaddingAfterFlight(ZERO_PADDING, { ...ZERO_PADDING, right: 400 }), false);
+  assert.equal(shouldClearPaddingAfterFlight({ ...ZERO_PADDING, right: 400 }, ZERO_PADDING), false);
+  assert.equal(
+    shouldClearPaddingAfterFlight({ ...ZERO_PADDING, right: 400 }, { ...ZERO_PADDING, right: 400 }),
+    true
+  );
+
+  const camera = presetCamera(
+    { id: 'worldwide', lat: 20, lng: -20, zoom: 1.15, radiusKm: 20000 },
+    768,
+    900,
+    { left: 0, right: 0 }
+  );
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const flightPadding = flyPadding(false, true, { width: 768, height: 704 }, true, 0);
+  assert.equal(paddingIsZero(flightPadding), true);
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    {
+      duration: 900,
+      center: [camera.lng, camera.lat],
+      zoom: camera.zoom,
+      padding: flightPadding,
+    },
+    () => {
+      if (shouldClearPaddingAfterFlight(flightPadding, map.getPadding())) {
+        clearPaddingKeepView(map);
+      }
+    }
+  );
+  map.endFlight();
+  assert.deepEqual(
+    map.methods.filter((name) => name === 'flyTo' || name === 'easeTo' || name === 'jumpTo' || name === 'setCenter'),
+    ['flyTo']
+  );
+});
+
+test('user zoom-in grows the short canvas after a padding clear', () => {
+  const viewport = { width: 768, height: 900 };
+  const target = narrowWidthFitZoom(768);
+  const clamp = mapboxHeightMinZoom(900);
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: target,
+  });
+  state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: target });
+  const short = state.box.height;
+  assert.ok(short < 900);
+
+  const applyMove = (
+    current: typeof state,
+    tag: string | null,
+    event: { originalEvent?: { type?: string } },
+    prevZoom: number,
+    nextZoom: number
+  ) => {
+    if (isProgrammaticCanvasMove(tag, event)) {
+      return reduceCanvasMachine(current, { type: 'flightProgress', zoom: nextZoom });
+    }
+    return reduceCanvasMachine(current, { type: 'userZoom', zoom: nextZoom, prevZoom });
+  };
+
+  // Padding-clear jumpTo is tagged resize and has no gesture — no grow.
+  state = applyMove(state, 'resize', {}, target, target);
+  assert.equal(state.box.height, short);
+  assert.equal(state.shortened, true);
+
+  // Mid-flight tags stay locked unless a real wheel/gesture comes through.
+  for (const tag of ['preset', 'place', 'drawer', 'cluster', 'zoom', 'locate', 'programmatic'] as const) {
+    const locked = applyMove(state, tag, {}, target, clamp);
+    assert.equal(locked.box.height, short, tag);
+  }
+
+  // A leaked resize tag must not block a real wheel zoom-in at the floor.
+  state = applyMove(state, 'resize', { originalEvent: { type: 'wheel' } }, target, clamp);
+  assert.equal(state.box.height, 900);
+  assert.equal(state.shortened, false);
+  assert.equal(isUserGestureEvent({ originalEvent: { type: 'wheel' } }), true);
+  assert.equal(isUserGestureEvent({}), false);
 });
 
 function visualCenter(map: InterruptibleMap) {
