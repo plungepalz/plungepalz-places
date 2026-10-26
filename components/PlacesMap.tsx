@@ -12,6 +12,7 @@ import {
   cameraEaseOptions,
   cameraFlyOptions,
   cameraMoveendEffects,
+  attachPointerHoldClearListeners,
   attachUserFlightInputListeners,
   beginUserGesture,
   classifyFlightEnd,
@@ -20,7 +21,9 @@ import {
   createGestureBoundsState,
   gestureSettleMs,
   isGenuineClusterClick,
+  isMapControlTarget,
   shouldFlushGestureBounds,
+  shouldHoldPointerForFlight,
   shouldReapplyNarrowFitAfterFlight,
   canvasBoxEquals,
   canvasFillStyle,
@@ -295,7 +298,7 @@ export default function PlacesMap({
   const pointerDownRef = useRef(false);
   const needsBoundsReportRef = useRef(false);
   const clusterExpandingRef = useRef(false);
-  const lastOriginalEventRef = useRef<{ type?: string } | null>(null);
+  const lastOriginalEventRef = useRef<{ type?: string; key?: string; code?: string } | null>(null);
   const gestureRef = useRef(createGestureBoundsState());
   const gestureTimerRef = useRef<number | null>(null);
   const pendingWorldwideRefitRef = useRef(false);
@@ -587,6 +590,7 @@ export default function PlacesMap({
       };
       flightTagRef.current = spec.tag;
       userInputRef.current = false;
+      lastOriginalEventRef.current = null;
       zoomMovedRef.current = false;
       if (canvasBoxEquals(canvasLayout, next.box)) {
         flushPendingCamera(canvasLayout);
@@ -704,11 +708,17 @@ export default function PlacesMap({
     return attachUserFlightInputListeners(
       el,
       () => Boolean(flyEndHandlerRef.current) || isProgrammaticFlightTag(flightTagRef.current),
-      (type) => {
+      (type, event) => {
+        if ((type === 'pointerdown' || type === 'touchstart') && isMapControlTarget(event.target)) {
+          return;
+        }
         userInputRef.current = true;
-        lastOriginalEventRef.current = { type };
+        const keyEvent = event as KeyboardEvent;
+        lastOriginalEventRef.current = { type, key: keyEvent.key, code: keyEvent.code };
         if (type === 'pointerdown' || type === 'touchstart') {
-          pointerDownRef.current = true;
+          if (shouldHoldPointerForFlight({ type, target: event.target })) {
+            pointerDownRef.current = true;
+          }
           gestureRef.current = beginUserGesture(gestureRef.current, 'pointer');
         } else if (type === 'wheel') {
           gestureRef.current = beginUserGesture(gestureRef.current, 'wheel');
@@ -717,6 +727,16 @@ export default function PlacesMap({
         }
       }
     );
+  }, []);
+
+  useEffect(() => {
+    const clearHold = () => {
+      pointerDownRef.current = false;
+      if (needsBoundsReportRef.current) {
+        scheduleGestureBoundsRef.current();
+      }
+    };
+    return attachPointerHoldClearListeners(window, clearHold);
   }, []);
 
   useEffect(() => {
@@ -865,6 +885,7 @@ export default function PlacesMap({
           : 'place';
     flightTagRef.current = flightTag;
     userInputRef.current = false;
+    lastOriginalEventRef.current = null;
     zoomMovedRef.current = false;
     onCameraBusy?.(true);
     if (mapNeedsResize(map.getCanvas(), mapBoxRef.current)) {
@@ -921,10 +942,12 @@ export default function PlacesMap({
     const onFlyEnd = (reason: CameraEndReason = 'complete') => {
       const live = mapRef.current?.getMap();
       const endedZoom = live?.getZoom() ?? zoom;
+      const originalEvent = lastOriginalEventRef.current;
+      lastOriginalEventRef.current = null;
       const kind = classifyFlightEnd({
         animationReason: reason,
         userInputActive: userInputRef.current,
-        originalEvent: lastOriginalEventRef.current,
+        originalEvent,
       });
       commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
       if (kind === 'complete') {

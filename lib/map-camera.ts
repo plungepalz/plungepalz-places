@@ -861,16 +861,68 @@ export function pinHintCenterX(canvasWidth: number, panelOpen: boolean, forceCol
   return (left + right) / 2;
 }
 
+/** Mapbox KeyboardHandler keys that pan, zoom, pitch, or rotate the camera. */
+const CAMERA_KEY_NAMES = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Left',
+  'Right',
+  'Up',
+  'Down',
+  '+',
+  '-',
+  '=',
+  '_']);
+
+const CAMERA_KEY_CODES = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Equal',
+  'Minus',
+  'NumpadAdd',
+  'NumpadSubtract',
+]);
+
+export type CameraKeyEvent = {
+  type?: string;
+  key?: string;
+  code?: string;
+  altKey?: boolean;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  shiftKey?: boolean;
+};
+
+/**
+ * True only for keys Mapbox actually moves the camera with: arrows (and
+ * Shift+arrows for rotate/pitch), +/-/=/_, and the numpad zoom keys.
+ * Escape, Tab, letters, and PageUp/Down/Home/End are ignored.
+ */
+export function isCameraKey(event: CameraKeyEvent | null | undefined): boolean {
+  if (!event) return false;
+  if (event.altKey || event.ctrlKey || event.metaKey) return false;
+  if (event.key && CAMERA_KEY_NAMES.has(event.key)) return true;
+  if (event.code && CAMERA_KEY_CODES.has(event.code)) return true;
+  return false;
+}
+
 /**
  * Mapbox `move`/`moveend` sets `originalEvent` for drag / scroll / pinch.
- * Window resize and orientation changes are not user gestures.
+ * Window resize and orientation changes are not user gestures. A keydown is
+ * only a camera gesture when it is a Mapbox camera key.
  */
 export function isUserGestureEvent(
   event: { originalEvent?: unknown } | null | undefined
 ): boolean {
-  const orig = event?.originalEvent as { type?: string } | undefined;
+  const orig = event?.originalEvent as CameraKeyEvent | undefined;
   if (!orig?.type) return false;
-  return orig.type !== 'resize' && orig.type !== 'orientationchange';
+  if (orig.type === 'resize' || orig.type === 'orientationchange') return false;
+  if (orig.type === 'keydown' || orig.type === 'keyup') return isCameraKey(orig);
+  return true;
 }
 
 /**
@@ -1372,7 +1424,7 @@ export function classifyFlightEnd(input: {
   animationReason: CameraEndReason;
   reachedTarget?: boolean;
   userInputActive: boolean;
-  originalEvent?: { type?: string } | null;
+  originalEvent?: CameraKeyEvent | { type?: string } | null;
 }): FlightEndKind {
   if (input.animationReason === 'interrupted') return 'replaced';
   if (input.userInputActive || isUserGestureEvent({ originalEvent: input.originalEvent })) {
@@ -1384,11 +1436,53 @@ export function classifyFlightEnd(input: {
 /** Capture-phase events that stamp user input while a programmatic camera is running. */
 export const USER_FLIGHT_INPUT_EVENTS = ['pointerdown', 'wheel', 'touchstart', 'keydown'] as const;
 
+export type FlightInputEvent = CameraKeyEvent & {
+  type: string;
+  target?: EventTarget | null;
+};
+
 export function shouldStampUserInputDuringFlight(
   flightActive: boolean,
-  eventType: string
+  event: string | FlightInputEvent
 ): boolean {
-  return flightActive && (USER_FLIGHT_INPUT_EVENTS as readonly string[]).includes(eventType);
+  if (!flightActive) return false;
+  const ev = typeof event === 'string' ? { type: event } : event;
+  if (!(USER_FLIGHT_INPUT_EVENTS as readonly string[]).includes(ev.type)) return false;
+  if (ev.type === 'keydown') return isCameraKey(ev);
+  return true;
+}
+
+/** Zoom / Locate live in `[data-map-controls]` and must not hold the pointer. */
+export function isMapControlTarget(target: EventTarget | null | undefined): boolean {
+  if (!target || typeof (target as Element).closest !== 'function') return false;
+  return Boolean((target as Element).closest('[data-map-controls]'));
+}
+
+export function shouldHoldPointerForFlight(event: {
+  type: string;
+  target?: EventTarget | null;
+}): boolean {
+  if (event.type !== 'pointerdown' && event.type !== 'touchstart') return false;
+  return !isMapControlTarget(event.target);
+}
+
+export const POINTER_HOLD_CLEAR_EVENTS = ['pointerup', 'pointercancel', 'touchend', 'blur'] as const;
+
+export function attachPointerHoldClearListeners(
+  target: {
+    addEventListener: (type: string, listener: () => void) => void;
+    removeEventListener: (type: string, listener: () => void) => void;
+  },
+  onClear: () => void
+): () => void {
+  for (const type of POINTER_HOLD_CLEAR_EVENTS) {
+    target.addEventListener(type, onClear);
+  }
+  return () => {
+    for (const type of POINTER_HOLD_CLEAR_EVENTS) {
+      target.removeEventListener(type, onClear);
+    }
+  };
 }
 
 export function attachUserFlightInputListeners(
@@ -1405,11 +1499,11 @@ export function attachUserFlightInputListeners(
     ) => void;
   },
   isFlightActive: () => boolean,
-  onUserInput: (type: string) => void
+  onUserInput: (type: string, event: Event) => void
 ): () => void {
   const listener = (event: Event) => {
-    if (!shouldStampUserInputDuringFlight(isFlightActive(), event.type)) return;
-    onUserInput(event.type);
+    if (!shouldStampUserInputDuringFlight(isFlightActive(), event as FlightInputEvent)) return;
+    onUserInput(event.type, event);
   };
   for (const type of USER_FLIGHT_INPUT_EVENTS) {
     target.addEventListener(type, listener, { capture: true });

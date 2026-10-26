@@ -31,6 +31,7 @@ import {
   cameraReachedTarget,
   cameraSeparation,
   cappedFlyDuration,
+  attachPointerHoldClearListeners,
   attachUserFlightInputListeners,
   beginUserGesture,
   classifyFlightEnd,
@@ -38,14 +39,17 @@ import {
   createGestureBoundsState,
   isGenuineClusterClick,
   shouldFlushGestureBounds,
+  shouldHoldPointerForFlight,
   shouldReapplyNarrowFitAfterFlight,
   shouldStampUserInputDuringFlight,
+  isCameraKey,
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
   cameraMoveendEffects,
   isProgrammaticCanvasMove,
   isProgrammaticFlightTag,
+  isMapControlTarget,
   isUserGestureEvent,
   isShortCameraHop,
   isShortPlaceHop,
@@ -1761,6 +1765,169 @@ test('capture-phase listeners stamp user input only while a flight is active', (
   flightActive = false;
   listeners.get('wheel')?.fn({ type: 'wheel' } as Event);
   assert.deepEqual(calls, ['wheel', 'pointerdown']);
+  stop();
+  assert.equal(listeners.size, 0);
+});
+
+test('Escape, Tab, and letters mid-flight are not camera input; a later preset still searches', () => {
+  for (const key of ['Escape', 'Tab', 'a', 'Enter', ' ']) {
+    assert.equal(isCameraKey({ type: 'keydown', key }), false, key);
+    assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key }), false, key);
+    assert.equal(
+      classifyFlightEnd({
+        animationReason: 'complete',
+        userInputActive: false,
+        originalEvent: { type: 'keydown', key },
+      }),
+      'complete',
+      key
+    );
+    assert.equal(isUserGestureEvent({ originalEvent: { type: 'keydown', key } }), false, key);
+  }
+  for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '-', '=', '_']) {
+    assert.equal(isCameraKey({ type: 'keydown', key }), true, key);
+    assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key }), true, key);
+  }
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'ArrowLeft', shiftKey: true }), true);
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'PageDown' }), false);
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'Home' }), false);
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'End' }), false);
+  assert.equal(shouldStampUserInputDuringFlight(true, 'wheel'), true);
+
+  const listeners = new Map<string, { fn: (event: Event) => void }>();
+  const el = {
+    addEventListener(type: string, listener: (event: Event) => void) {
+      listeners.set(type, { fn: listener });
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+  };
+  const calls: string[] = [];
+  const stop = attachUserFlightInputListeners(el, () => true, (type) => calls.push(type));
+  listeners.get('keydown')?.fn({ type: 'keydown', key: 'Escape' } as KeyboardEvent);
+  listeners.get('keydown')?.fn({ type: 'keydown', key: 'Tab' } as KeyboardEvent);
+  listeners.get('keydown')?.fn({ type: 'keydown', key: 'a' } as KeyboardEvent);
+  listeners.get('keydown')?.fn({ type: 'keydown', key: 'ArrowLeft' } as KeyboardEvent);
+  assert.deepEqual(calls, ['keydown']);
+  stop();
+
+  const session = createBusyFlightSession();
+  const escapeKind = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: false,
+    originalEvent: { type: 'keydown', key: 'Escape' },
+  });
+  session.handleFlyComplete(1, escapeKind);
+  assert.equal(session.leftPreset, false, 'Escape must commit the preset, not leave it');
+  assert.equal(session.lastKey, 'preset:london');
+
+  session.lastKey = '';
+  session.leftPreset = false;
+  session.flyRequest = { nonce: 2 };
+  const leftover = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: false,
+    originalEvent: { type: 'keydown' },
+  });
+  assert.equal(leftover, 'complete', 'stale keydown without a camera key must not interrupt');
+  session.handleFlyComplete(2, leftover);
+  assert.equal(session.leftPreset, false);
+  const tokyo = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'tokyo-live-bounds',
+    lastPresetKey: session.lastKey,
+    cameraBusy: false,
+    settleKey: 'preset:tokyo',
+  });
+  assert.equal(tokyo.action, 'filters');
+  assert.equal(tokyo.nextPresetKey, 'preset:tokyo');
+});
+
+test('interrupt with no search still lets a later preset filters-search', () => {
+  const session = createBusyFlightSession();
+  session.handleFlyComplete(1, 'user-interrupt');
+  assert.equal(session.leftPreset, true);
+  assert.equal(session.lastKey, 'current-bounds');
+  assert.equal(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'current-bounds',
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+    }).action,
+    'skip',
+    'same-bounds interrupt must not search until bounds change'
+  );
+
+  session.lastKey = '';
+  session.leftPreset = false;
+  session.flyRequest = { nonce: 2 };
+  const kind = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: false,
+    originalEvent: { type: 'keydown', key: 'Tab' },
+  });
+  assert.equal(kind, 'complete');
+  session.handleFlyComplete(2, kind);
+  assert.equal(session.leftPreset, false);
+  assert.equal(session.lastKey, '');
+  const next = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: 'map-bounds',
+    lastPresetKey: session.lastKey,
+    cameraBusy: false,
+    settleKey: 'preset:tokyo',
+  });
+  assert.equal(next.action, 'filters');
+});
+
+test('pointerdown on Zoom controls does not hold the pointer; window pointerup clears a stuck hold', () => {
+  const control = { closest: (sel: string) => (sel === '[data-map-controls]' ? control : null) };
+  const canvas = { closest: () => null };
+  assert.equal(isMapControlTarget(control as unknown as EventTarget), true);
+  assert.equal(isMapControlTarget(canvas as unknown as EventTarget), false);
+  assert.equal(
+    shouldHoldPointerForFlight({ type: 'pointerdown', target: control as unknown as EventTarget }),
+    false
+  );
+  assert.equal(
+    shouldHoldPointerForFlight({ type: 'pointerdown', target: canvas as unknown as EventTarget }),
+    true
+  );
+  assert.equal(
+    shouldHoldPointerForFlight({ type: 'wheel', target: canvas as unknown as EventTarget }),
+    false
+  );
+
+  let pointerDown = true;
+  const listeners = new Map<string, () => void>();
+  const win = {
+    addEventListener(type: string, listener: () => void) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+  };
+  const stop = attachPointerHoldClearListeners(win, () => {
+    pointerDown = false;
+  });
+  for (const type of ['pointerup', 'pointercancel', 'touchend', 'blur'] as const) {
+    pointerDown = true;
+    listeners.get(type)?.();
+    assert.equal(pointerDown, false, type);
+    assert.equal(
+      shouldFlushGestureBounds({
+        pointerDown,
+        mapMoving: false,
+        gestureId: 1,
+        reportedId: null,
+      }).flush,
+      true,
+      `${type} must let the next wheel search`
+    );
+  }
   stop();
   assert.equal(listeners.size, 0);
 });
