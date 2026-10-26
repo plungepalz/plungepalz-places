@@ -12,6 +12,7 @@ import { searchAfterViewportChange } from './search-debounce';
 import {
   DRAWER_OCCUPIED,
   DRAWER_WIDTH,
+  DESKTOP_LIST_OVERLAP,
   LIST_PANEL_RIGHT,
   MAP_CONTROL_MARGIN,
   MAP_CONTROL_SIZE,
@@ -23,6 +24,7 @@ import {
   CAMERA_DURATION,
   CAMERA_DURATION_CAP,
   CAMERA_FLY,
+  clusterExpandCamera,
   cameraEaseOptions,
   cameraFlyOptions,
   cameraSeparation,
@@ -134,9 +136,41 @@ function assertPlacesInGap(
 }
 
 test('Mapbox chrome sits to the right of the open list panel', () => {
+  assert.equal(DESKTOP_LIST_OVERLAP, 1280);
   assert.equal(mapboxChromeInsetLeft(1440, false), LIST_PANEL_RIGHT);
+  assert.equal(mapboxChromeInsetLeft(1280, false), LIST_PANEL_RIGHT);
+  assert.equal(mapboxChromeInsetLeft(1440, true), 0);
   assert.equal(mapboxChromeInsetLeft(768, true), 0);
+  assert.equal(mapboxChromeInsetLeft(768, false), 0, 'stacked list at 768 must not inset the logo');
   assert.ok(mapboxChromeInsetLeft(1440, false) >= 380);
+});
+
+test('Mapbox logo never overlaps attribution at 768 with the list shown', () => {
+  const height = 900;
+  const logoW = 88;
+  const logoH = 23;
+  const attribW = 280;
+  const attribH = 20;
+  const logo = (width: number, collapseList: boolean) => {
+    const left = 10 + mapboxChromeInsetLeft(width, collapseList);
+    return { left, right: left + logoW, top: height - 8 - logoH, bottom: height - 8 };
+  };
+  const attrib = (width: number) => ({
+    left: width - 8 - attribW,
+    right: width - 8,
+    top: height - 8 - attribH,
+    bottom: height - 8,
+  });
+  const stacked = logo(768, false);
+  const bar = attrib(768);
+  assert.equal(stacked.left, 10);
+  assert.ok(!rectsOverlap(stacked, bar), '768 stacked: logo vs attribution');
+  const wronglyInset = { left: 402, right: 402 + logoW, top: stacked.top, bottom: stacked.bottom };
+  assert.ok(rectsOverlap(wronglyInset, bar), 'the old 396px inset sat the logo under the attrib bar');
+  const desktopLogo = logo(1440, false);
+  const desktopBar = attrib(1440);
+  assert.equal(desktopLogo.left, 10 + LIST_PANEL_RIGHT);
+  assert.ok(!rectsOverlap(desktopLogo, desktopBar), '1440: inset logo vs attribution');
 });
 
 test('list panel right edge matches the floating list (16 + 380)', () => {
@@ -270,6 +304,34 @@ test('resize and programmatic camera never count as a user move', () => {
   assert.equal(isUserMapMove({ originalEvent: { type: 'wheel' } }), true);
 });
 
+test('slow inertial wheel leaves the preset and reports bounds without originalEvent', () => {
+  const inertial = cameraMoveendEffects({}, null, { userInputActive: true, zoomChanged: true });
+  assert.equal(inertial.leavePreset, true);
+  assert.equal(inertial.reportBounds, true);
+  assert.equal(isUserMapMove({}, null, { zoomChanged: true }), true);
+  assert.equal(isUserMapMove({}, 'resize', { zoomChanged: true }), false);
+  assert.equal(isUserMapMove({}, 'resize', { userInputActive: true }), true);
+
+  const leftoverResize = cameraMoveendEffects({}, 'resize');
+  assert.equal(leftoverResize.leavePreset, false);
+
+  let lastKey = 'preset:united-states';
+  const ticks = ['bbox-a', 'bbox-b', 'bbox-c'];
+  const searches: string[] = [];
+  for (const boundsKey of ticks) {
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey,
+      lastPresetKey: lastKey,
+      cameraBusy: false,
+    });
+    if (decision.action === 'skip') continue;
+    lastKey = boundsKey;
+    searches.push(boundsKey);
+  }
+  assert.deepEqual(searches, ticks, 'none of the small moveends may be swallowed');
+});
+
 test('user wheel zoom-in leaves Worldwide and bounds-searches even with a leftover resize tag', () => {
   const wheel = { originalEvent: { type: 'wheel' } };
   const effects = cameraMoveendEffects(wheel, 'resize');
@@ -293,7 +355,7 @@ test('user wheel zoom-in leaves Worldwide and bounds-searches even with a leftov
       lastPresetKey: '',
       cameraBusy: false,
     }),
-    { action: 'moveend' }
+    { action: 'moveend', nextPresetKey: 'zoomed-16-places' }
   );
   assert.deepEqual(
     searchAfterViewportChange({
@@ -1553,6 +1615,28 @@ test('padding-clear jumpTo updates bounds and search without flipping the chip',
   assert.equal(shouldApplySettledSearch(1, heading), false);
   assert.equal(listHeadingText(heading.heading), '4 places in this area');
   assert.equal(heading.heading?.chipLabel, 'Map area');
+});
+
+test('cluster expand with the drawer open is deterministic and does not stack padding', () => {
+  const cluster = { lng: -111.94, lat: 33.425 };
+  const size = { width: 1280, height: 900 };
+  const intended = flyPadding(true, false, size);
+  const leftover = { ...ZERO_PADDING, right: 496 };
+  const first = clusterExpandCamera(cluster, 8, intended);
+  const again = clusterExpandCamera(cluster, 8, intended);
+  const fromLeftoverIfStacked = clusterExpandCamera(first.center, 8, leftover);
+  assert.deepEqual(first, again);
+  assert.deepEqual(first.padding, ZERO_PADDING);
+  assert.equal(first.retainPadding, false);
+  assert.notDeepEqual(
+    fromLeftoverIfStacked.center,
+    first.center,
+    'a second easeTo that kept leftover padding would shift again'
+  );
+  const secondClick = clusterExpandCamera(cluster, 8, intended);
+  assert.deepEqual(secondClick, first);
+  assert.ok(intended.right > 0);
+  assert.notEqual(first.center.lng, cluster.lng);
 });
 
 test('drawer close after a card fly does not shift the view', () => {

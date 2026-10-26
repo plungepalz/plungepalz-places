@@ -1,7 +1,8 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { placesListHeading } from '@/lib/list-heading';
+import { listSwapForCls, PLACE_CARD_LAYOUT } from '@/lib/merge-local-places';
 import { FILTER_OVERLAY_HEADER_INSET } from '@/lib/map-style';
 import type { PlaceSearchResult } from '@/lib/types';
 import PlaceCard from './PlaceCard';
@@ -48,6 +49,21 @@ function PlacesList({
   onToggleExpanded,
 }: PlacesListProps) {
   const compact = collapsible && !expanded;
+  const [swap, setSwap] = useState(() => ({
+    seen: places,
+    exiting: [] as PlaceSearchResult[],
+  }));
+  if (swap.seen !== places) {
+    const next = listSwapForCls(swap.seen, places);
+    setSwap({ seen: places, exiting: next.exiting });
+  }
+  useEffect(() => {
+    if (swap.exiting.length === 0) return;
+    const handle = window.setTimeout(() => {
+      setSwap((current) => (current.exiting.length === 0 ? current : { ...current, exiting: [] }));
+    }, PLACE_CARD_LAYOUT.exitMs);
+    return () => window.clearTimeout(handle);
+  }, [swap.exiting]);
   const title =
     heading ??
     (isLoading && places.length === 0
@@ -117,7 +133,7 @@ function PlacesList({
         <div
           id="places-list-body"
           hidden={compact}
-          className="places-list-body flex-1 space-y-1 overflow-y-auto px-2 py-2"
+          className="places-list-body relative flex-1 space-y-1 overflow-y-auto px-2 py-2"
         >
           {error && (
             <div className="m-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
@@ -134,6 +150,22 @@ function PlacesList({
               onToggleFavorite={onToggleFavorite}
             />
           ))}
+
+          {swap.exiting.length > 0 ? (
+            <div className="places-list-exit" aria-hidden>
+              {swap.exiting.map((place) => (
+                <PlaceCard
+                  key={`exit-${place.place_id}`}
+                  place={place}
+                  isSelected={false}
+                  isFavorited={favorites.has(place.place_id)}
+                  onSelectPlace={onSelectPlace}
+                  onHoverPlace={onHoverPlace}
+                  onToggleFavorite={onToggleFavorite}
+                />
+              ))}
+            </div>
+          ) : null}
 
           {isLoading && places.length === 0 ? (
             <div className="flex h-32 items-center justify-center">

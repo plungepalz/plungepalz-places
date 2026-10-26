@@ -23,6 +23,8 @@ export const WORLDWIDE_COMFORT_LNG = -20;
 export const WORLDWIDE_LAT = 20;
 /** Hide/collapse the list while framing Worldwide so the whole world can fit. */
 export const NARROW_VIEWPORT = 768;
+/** List panel overlays the map (and chrome) only from this width up. */
+export const DESKTOP_LIST_OVERLAP = 1280;
 /** Show/Hide max-height duration — keep in sync with `.places-list-body-wrap` in globals.css. */
 export const LIST_EXPAND_MS = 280;
 /** Follow-up `map.resize()` after the list expand/collapse transition settles. */
@@ -43,7 +45,9 @@ export function listPanelRightEdge(canvasWidth: number): number {
 
 /** Mapbox logo/attrib sit in the visible map, not under the list or the Next.js badge. */
 export function mapboxChromeInsetLeft(canvasWidth: number, collapseList: boolean): number {
-  if (collapseList) return 0;
+  // At 768 the list is stacked, not over the map — a 396px inset slides the
+  // logo under the attribution bar. Only inset when the panel actually overlaps.
+  if (collapseList || canvasWidth < DESKTOP_LIST_OVERLAP) return 0;
   return listPanelRightEdge(canvasWidth);
 }
 
@@ -818,15 +822,24 @@ export function isUserGestureEvent(
  * chip stays Worldwide and moveend never bounds-searches.
  * Window resize and our own untagged programmatic moves never flip the chip.
  */
+export type UserMoveHints = {
+  /** Wheel / drag / pinch was seen on `move` — inertial moveend often has no originalEvent. */
+  userInputActive?: boolean;
+  /** Zoom changed this moveend (slow wheel fires several small ones). */
+  zoomChanged?: boolean;
+};
+
 export function isUserMapMove(
   event: { originalEvent?: unknown } | null | undefined,
-  flightTag?: string | null
+  flightTag?: string | null,
+  hints?: UserMoveHints
 ): boolean {
-  if (isUserGestureEvent(event)) return true;
+  if (isUserGestureEvent(event) || hints?.userInputActive) return true;
   if (flightTag === 'resize' || flightTag === 'programmatic') return false;
   const orig = event?.originalEvent as { type?: string } | undefined;
   if (orig && (orig.type === 'resize' || orig.type === 'orientationchange')) return false;
   if (event?.originalEvent != null) return true;
+  if (hints?.zoomChanged && !isProgrammaticFlightTag(flightTag)) return true;
   if (flightTag) return false;
   return false;
 }
@@ -875,12 +888,13 @@ export function isProgrammaticCanvasMove(
 
 export function cameraMoveendEffects(
   event: { originalEvent?: unknown } | null | undefined,
-  flightTag?: string | null
+  flightTag?: string | null,
+  hints?: UserMoveHints
 ): { leavePreset: boolean; reportBounds: boolean } {
-  const userGesture = isUserGestureEvent(event);
+  const userMove = isUserMapMove(event, flightTag, hints);
   return {
-    leavePreset: userGesture || isUserMapMove(event, flightTag),
-    reportBounds: userGesture || shouldReportViewport(flightTag),
+    leavePreset: userMove,
+    reportBounds: userMove || shouldReportViewport(flightTag),
   };
 }
 
@@ -975,6 +989,28 @@ export function unpaddedCenter(
   const lng = wrapLng(center.lng - (dx / worldPx) * 360);
   const lat = mercatorLatFromY(mercatorYFromLat(center.lat) - dy / worldPx);
   return { lng, lat };
+}
+
+/**
+ * One deterministic cluster expand. Fold intended padding into the center
+ * and send zero padding so a leftover drawer inset cannot stack (0 vs 176px).
+ */
+export function clusterExpandCamera(
+  clusterCenter: { lng: number; lat: number },
+  zoom: number,
+  padding: CameraPadding
+): {
+  center: { lng: number; lat: number };
+  zoom: number;
+  padding: typeof ZERO_PADDING;
+  retainPadding: false;
+} {
+  return {
+    center: unpaddedCenter(clusterCenter, zoom, padding),
+    zoom,
+    padding: ZERO_PADDING,
+    retainPadding: false,
+  };
 }
 
 /** Preset camera from the size measured after resize, folded into one unpadded fly. */

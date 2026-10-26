@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   SEARCH_DEBOUNCE_MS,
   createDebounced,
+  rememberSettleKeyOnDispatch,
   searchAfterViewportChange,
   searchDebounceMs,
   viewportSearchIdentity,
@@ -62,7 +63,7 @@ test('user map moves debounce on moveend; preset chips search without bbox', () 
   );
   assert.deepEqual(
     searchAfterViewportChange({ leftPreset: true, boundsKey: 'b', lastPresetKey: 'a' }),
-    { action: 'moveend' }
+    { action: 'moveend', nextPresetKey: 'b' }
   );
 });
 
@@ -83,7 +84,7 @@ test('cluster expand is a programmatic camera and keeps the header old→final',
       lastPresetKey: 'us',
       cameraBusy: false,
     }),
-    { action: 'moveend' }
+    { action: 'moveend', nextPresetKey: 'cluster-final' }
   );
 });
 
@@ -124,7 +125,7 @@ test('programmatic camera suppresses moveend search so the header stays old→fi
       lastPresetKey: 'us',
       cameraBusy: false,
     }),
-    { action: 'moveend' }
+    { action: 'moveend', nextPresetKey: 'tempe' }
   );
 });
 
@@ -165,7 +166,7 @@ test('one /search per settle: busy, resize, and a repeat chip are skipped', () =
       lastPresetKey: '',
       cameraBusy: false,
     }),
-    { action: 'moveend' }
+    { action: 'moveend', nextPresetKey: 'wheel-zoom-16' }
   );
 });
 
@@ -182,6 +183,113 @@ test('createDebounced cancels overlapping calls and only invokes the last', asyn
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.deepEqual(seen, [3]);
   assert.equal(debounced.pending(), false);
+});
+
+test('initial load searches once even when the camera never moves', () => {
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: '',
+      cameraBusy: false,
+      settleKey: 'preset:united-states',
+      forceSettle: true,
+    }),
+    { action: 'filters', nextPresetKey: 'preset:united-states' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: 'preset:united-states',
+      cameraBusy: false,
+      settleKey: 'preset:united-states',
+    }),
+    { action: 'skip' }
+  );
+});
+
+test('re-clicking a preset after a Map-area excursion searches again', () => {
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '-120,30,-70,50',
+      lastPresetKey: '-120,30,-70,50',
+      cameraBusy: false,
+      settleKey: 'preset:united-states',
+    }),
+    { action: 'filters', nextPresetKey: 'preset:united-states' }
+  );
+});
+
+test('a cancelled debounce does not mark the settle key or suppress the idle search', () => {
+  const first = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: '',
+    lastPresetKey: '',
+    cameraBusy: false,
+    settleKey: 'preset:united-states',
+  });
+  assert.equal(first.action, 'filters');
+  assert.equal(
+    rememberSettleKeyOnDispatch('', first, false),
+    '',
+    'cancelled timer must not remember the key'
+  );
+
+  const busy = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: '',
+    lastPresetKey: '',
+    cameraBusy: true,
+    settleKey: 'preset:united-states',
+  });
+  assert.equal(busy.action, 'skip');
+  assert.equal(rememberSettleKeyOnDispatch('', busy, false), '');
+
+  const idle = searchAfterViewportChange({
+    leftPreset: false,
+    boundsKey: '',
+    lastPresetKey: '',
+    cameraBusy: false,
+    settleKey: 'preset:united-states',
+    forceSettle: true,
+  });
+  assert.equal(idle.action, 'filters');
+  assert.equal(rememberSettleKeyOnDispatch('', idle, true), 'preset:united-states');
+});
+
+test('slow-wheel moveends are not swallowed by a cancelled debounce', () => {
+  let lastKey = 'preset:united-states';
+  const first = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'bbox-1',
+    lastPresetKey: lastKey,
+    cameraBusy: false,
+  });
+  assert.deepEqual(first, { action: 'moveend', nextPresetKey: 'bbox-1' });
+  lastKey = rememberSettleKeyOnDispatch(lastKey, first, false);
+  assert.equal(lastKey, 'preset:united-states');
+
+  const second = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'bbox-2',
+    lastPresetKey: lastKey,
+    cameraBusy: false,
+  });
+  assert.deepEqual(second, { action: 'moveend', nextPresetKey: 'bbox-2' });
+  lastKey = rememberSettleKeyOnDispatch(lastKey, second, true);
+  assert.equal(lastKey, 'bbox-2');
+
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'bbox-2',
+      lastPresetKey: lastKey,
+      cameraBusy: false,
+    }),
+    { action: 'skip' }
+  );
 });
 
 test('createDebounced cancel drops the pending search', async () => {

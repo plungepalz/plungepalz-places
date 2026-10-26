@@ -12,6 +12,7 @@ import {
   cameraEaseOptions,
   cameraFlyOptions,
   cameraMoveendEffects,
+  clusterExpandCamera,
   canvasFillStyle,
   canvasHostStyle,
   canvasReadyForFlight,
@@ -21,6 +22,7 @@ import {
   isNarrowViewport,
   isProgrammaticCanvasMove,
   isProgrammaticFlightTag,
+  isUserGestureEvent,
   presetFlyCamera,
   readMeasuredViewport,
   createCanvasMachine,
@@ -266,6 +268,8 @@ export default function PlacesMap({
   const [waterColor, setWaterColor] = useState<string | undefined>(undefined);
   const resizeStateRef = useRef<MapResizeState>({ rafId: null });
   const liveZoomRef = useRef<number | null>(null);
+  const userInputRef = useRef(false);
+  const zoomMovedRef = useRef(false);
   const slotSize = useMemo(
     () => ({
       width: viewportWidth ?? outerSize.width,
@@ -809,12 +813,15 @@ export default function PlacesMap({
       const clusterCenter: [number, number] = coords ?? [event.lngLat.lng, event.lngLat.lat];
       source.getClusterExpansionZoom(Number(props.cluster_id), (error, zoom) => {
         if (error || zoom == null) return;
-        const map = mapRef.current?.getMap();
-        if (map && !detailsOpen) {
-          clearPaddingProgrammatic();
-        }
         const live = mapRef.current?.getMap();
         if (!live) return;
+        const size = readMeasuredViewport(containerRef.current) ?? slotSize;
+        const padding = flyPadding(detailsOpenRef.current, false, size, collapseList);
+        const camera = clusterExpandCamera(
+          { lng: clusterCenter[0], lat: clusterCenter[1] },
+          zoom,
+          padding
+        );
         onCameraBusy?.(true);
         flightTagRef.current = 'cluster';
         startCameraAnimation(
@@ -822,8 +829,10 @@ export default function PlacesMap({
           flyEndHandlerRef,
           'easeTo',
           cameraEaseOptions(CAMERA_DURATION.cluster, {
-            center: clusterCenter,
-            zoom,
+            center: [camera.center.lng, camera.center.lat],
+            zoom: camera.zoom,
+            padding: camera.padding,
+            retainPadding: camera.retainPadding,
           }),
           () => {
             onUserCameraMove?.();
@@ -909,9 +918,15 @@ export default function PlacesMap({
 
   const handleMove = useCallback(
     (event: ViewStateChangeEvent) => {
+      if (isUserGestureEvent(event as { originalEvent?: unknown })) {
+        userInputRef.current = true;
+      }
       const nextZoom = event.viewState.zoom;
       const prevZoom = liveZoomRef.current;
       liveZoomRef.current = nextZoom;
+      if (prevZoom != null && Math.abs(prevZoom - nextZoom) > 1e-6) {
+        zoomMovedRef.current = true;
+      }
       const tag = flightTagRef.current;
       if (isProgrammaticCanvasMove(tag, event as { originalEvent?: unknown })) {
         commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightProgress', zoom: nextZoom }));
@@ -935,8 +950,12 @@ export default function PlacesMap({
   const handleMoveEnd = useCallback(
     (event: ViewStateChangeEvent) => {
       handleMove(event);
+      const zoomChanged = zoomMovedRef.current;
       const tag = flightTagRef.current;
-      const effects = cameraMoveendEffects(event as { originalEvent?: unknown }, tag);
+      const effects = cameraMoveendEffects(event as { originalEvent?: unknown }, tag, {
+        userInputActive: userInputRef.current,
+        zoomChanged,
+      });
       if (effects.leavePreset) {
         onUserCameraMove?.();
       }
@@ -946,6 +965,11 @@ export default function PlacesMap({
       }
       if (tag === 'resize' || effects.leavePreset) {
         flightTagRef.current = null;
+      }
+      const map = mapRef.current?.getMap();
+      if (!map?.isMoving?.()) {
+        userInputRef.current = false;
+        zoomMovedRef.current = false;
       }
     },
     [handleMove, onUserCameraMove, reportViewport]

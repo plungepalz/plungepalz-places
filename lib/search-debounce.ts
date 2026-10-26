@@ -30,19 +30,39 @@ export function searchAfterViewportChange(input: {
   cameraBusy?: boolean;
   /** Stable id for this settle (`preset:tokyo` or a bbox key). */
   settleKey?: string;
+  /**
+   * Initial load or a re-selected preset: search even if the settle key
+   * still matches a cancelled debounce that never dispatched.
+   */
+  forceSettle?: boolean;
 }): { action: SearchTrigger; nextPresetKey?: string } {
   if (input.cameraBusy) {
     return { action: 'skip' };
   }
   if (!input.leftPreset) {
     const key = input.settleKey ?? 'preset-chip';
-    if (key === input.lastPresetKey) return { action: 'skip' };
+    if (!input.forceSettle && key === input.lastPresetKey) return { action: 'skip' };
     return { action: 'filters', nextPresetKey: key };
   }
-  if (!input.boundsKey || input.boundsKey === input.lastPresetKey) {
+  if (!input.boundsKey) return { action: 'skip' };
+  if (!input.forceSettle && input.boundsKey === input.lastPresetKey) {
     return { action: 'skip' };
   }
-  return { action: 'moveend' };
+  return { action: 'moveend', nextPresetKey: input.boundsKey };
+}
+
+/**
+ * Remember the settle key only when /search actually goes out.
+ * A cancelled 200ms debounce must leave `lastKey` untouched so idle
+ * can still search (fresh load, re-selected preset, slow wheel).
+ */
+export function rememberSettleKeyOnDispatch(
+  lastKey: string,
+  decision: { action: SearchTrigger; nextPresetKey?: string },
+  dispatched: boolean
+): string {
+  if (!dispatched || decision.action === 'skip') return lastKey;
+  return decision.nextPresetKey ?? lastKey;
 }
 
 export function searchDebounceMs(action: SearchTrigger): number {

@@ -118,17 +118,44 @@ export function placeCardKey(place: { place_id: string }): string {
 
 /**
  * Keep the previous cards on screen while a programmatic flight is in
- * progress so a 98px card cannot collapse to 0 (CLS) mid-flight.
- * Header and list commit together once, at idle.
+ * progress, and while the idle /search has not committed, so a 98px card
+ * cannot collapse to 0 (CLS) mid-flight or while Worldwide loads.
  */
 export function placesVisibleDuringFlight<T>(
   live: T[],
   held: T[] | null,
-  cameraBusy: boolean
+  cameraBusy: boolean,
+  searchPending = false
 ): { visible: T[]; hold: T[] | null } {
-  if (cameraBusy) {
+  if (cameraBusy || searchPending) {
     const keep = held ?? live;
     return { visible: keep, hold: keep };
   }
   return { visible: live, hold: null };
+}
+
+/** Cards that leave the list — render them out of flow (opacity/transform only). */
+export function listSwapForCls<T extends { place_id: string }>(
+  prev: T[] | null | undefined,
+  next: T[]
+): { incoming: T[]; exiting: T[] } {
+  if (!prev || prev.length === 0) return { incoming: next, exiting: [] };
+  const nextIds = new Set(next.map((place) => place.place_id));
+  return {
+    incoming: next,
+    exiting: prev.filter((place) => !nextIds.has(place.place_id)),
+  };
+}
+
+/** Place cards may fade/slide, never animate height (98px → 0 is CLS). */
+export const PLACE_CARD_LAYOUT = {
+  minHeightPx: 98,
+  exitMs: 180,
+  transitionProperties: ['opacity', 'transform', 'border-color', 'box-shadow', 'background-color'],
+} as const;
+
+export function placeCardMayAnimateHeight(
+  properties: readonly string[] = PLACE_CARD_LAYOUT.transitionProperties
+): boolean {
+  return properties.some((prop) => prop === 'height' || prop === 'max-height' || prop === 'min-height');
 }

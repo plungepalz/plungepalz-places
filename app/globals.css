@@ -78,6 +78,19 @@ body {
     background-color 180ms ease;
 }
 
+.places-list-exit {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.places-list-exit .place-card {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
 @starting-style {
   .place-card {
     opacity: 0;

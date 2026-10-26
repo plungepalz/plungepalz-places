@@ -36,6 +36,7 @@ import {
 } from '@/lib/map-style';
 import { createPlaceHoverController } from '@/lib/place-hover';
 import {
+  rememberSettleKeyOnDispatch,
   searchAfterViewportChange,
   searchDebounceMs,
   viewportSearchIdentity,
@@ -151,7 +152,7 @@ export default function HomePage() {
     cameraBusyRef.current = cameraBusy;
   }, [cameraBusy]);
   const [heldList, setHeldList] = useState<PlaceSearchResult[] | null>(null);
-  const listView = placesVisibleDuringFlight(places, heldList, cameraBusy);
+  const listView = placesVisibleDuringFlight(places, heldList, cameraBusy, isLoading);
   if (heldList !== listView.hold) {
     setHeldList(listView.hold);
   }
@@ -315,12 +316,16 @@ export default function HomePage() {
       lastPresetKey: lastPresetBoundsKeyRef.current,
       cameraBusy,
       settleKey: searchIdentity,
+      forceSettle:
+        headingMachineRef.current.heading == null && lastPresetBoundsKeyRef.current === '',
     });
     if (decision.action === 'skip') return;
-    if (decision.nextPresetKey != null) {
-      lastPresetBoundsKeyRef.current = decision.nextPresetKey;
-    }
     const handle = window.setTimeout(() => {
+      lastPresetBoundsKeyRef.current = rememberSettleKeyOnDispatch(
+        lastPresetBoundsKeyRef.current,
+        decision,
+        true
+      );
       performSearch(0, false, decision.action === 'moveend' ? bounds : null);
     }, searchDebounceMs(decision.action));
     return () => window.clearTimeout(handle);
@@ -334,6 +339,7 @@ export default function HomePage() {
 
   const handleLocationChange = (next: LocationPreset) => {
     headingMachineRef.current = startListHeadingRequest(headingMachineRef.current);
+    lastPresetBoundsKeyRef.current = '';
     pendingSearchRef.current = null;
     setDetailsPlaceId(null);
     setAddPlaceOpen(false);
