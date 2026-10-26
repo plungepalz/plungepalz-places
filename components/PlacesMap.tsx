@@ -16,6 +16,7 @@ import {
   attachUserFlightInputListeners,
   beginUserGesture,
   classifyFlightEnd,
+  shouldApplyFlightEndToCanvas,
   clusterExpandCamera,
   clusterPointerMoved,
   createGestureBoundsState,
@@ -684,9 +685,6 @@ export default function PlacesMap({
           reportedId: gestureRef.current.reportedId,
         });
         if (!decision.flush) {
-          if (pointerDownRef.current || map?.isMoving?.()) {
-            scheduleGestureBoundsRef.current(settleKind);
-          }
           return;
         }
         gestureRef.current = { ...gestureRef.current, reportedId: decision.reportedId };
@@ -959,7 +957,9 @@ export default function PlacesMap({
         userInputActive: userInputRef.current,
         originalEvent,
       });
-      commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
+      if (shouldApplyFlightEndToCanvas(kind)) {
+        commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
+      }
       if (kind === 'complete') {
         const shouldClear =
           !detailsOpenRef.current &&

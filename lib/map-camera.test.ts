@@ -35,6 +35,7 @@ import {
   attachUserFlightInputListeners,
   beginUserGesture,
   classifyFlightEnd,
+  shouldApplyFlightEndToCanvas,
   clusterPointerMoved,
   createGestureBoundsState,
   isGenuineClusterClick,
@@ -715,6 +716,163 @@ test('programmatic non-Worldwide prepareFlight grows the short canvas immediatel
 
   const zoomPastFloor = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: world + 1 });
   assert.deepEqual(zoomPastFloor.box, { top: 0, height: 900 });
+});
+
+test('768 city then Worldwide mid-flight keeps the short canvas; one camera call; no snap', () => {
+  const viewport = { width: 768, height: 900 };
+  const london = LOCATION_PRESETS.find((item) => item.id === 'london')!;
+  const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
+  const cityCam = presetCamera(london, 768, 900, { left: 0, right: 0 });
+  const worldCam = presetCamera(worldwide, 768, 900, { left: 0, right: 0 });
+  assert.ok(cityCam.zoom > 1);
+  assert.ok(worldCam.zoom < mapboxHeightMinZoom(900));
+
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: cityCam.zoom,
+  });
+  assert.equal(state.shortened, false);
+  assert.deepEqual(state.box, { top: 0, height: 900 });
+
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: worldCam.zoom });
+  const short = state.box;
+  assert.equal(state.shortened, true);
+  assert.ok(short.height < 900);
+  assert.ok(short.top > 0);
+  assert.ok(mapboxHeightMinZoom(short.height) <= worldCam.zoom + 1e-9);
+  assert.equal(canvasReadyForFlight(short, short), true);
+
+  const map = new InterruptibleMap();
+  map.width = 768;
+  map.height = 900;
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const cityReasons: CameraEndReason[] = [];
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [cityCam.lng, cityCam.lat],
+      zoom: cityCam.zoom,
+      duration: 2000,
+      padding: ZERO_PADDING,
+    }),
+    (reason = 'complete') => {
+      cityReasons.push(reason);
+      const kind = classifyFlightEnd({ animationReason: reason, userInputActive: false });
+      assert.equal(kind, 'replaced');
+      assert.equal(shouldApplyFlightEndToCanvas(kind), false);
+      const grown = reduceCanvasMachine(state, { type: 'flightEnd', zoom: 4 });
+      assert.equal(grown.box.height, 900);
+      state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: 4, replaced: true });
+    }
+  );
+  assert.equal(map.methods.filter((method) => method === 'flyTo').length, 1);
+
+  const beforeWorldwide = map.methods.length;
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [worldCam.lng, worldCam.lat],
+      zoom: worldCam.zoom,
+      duration: 2000,
+      padding: ZERO_PADDING,
+    }),
+    (reason = 'complete') => {
+      const kind = classifyFlightEnd({ animationReason: reason, userInputActive: false });
+      assert.equal(kind, 'complete');
+      if (shouldApplyFlightEndToCanvas(kind)) {
+        state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: worldCam.zoom });
+      }
+    }
+  );
+  assert.deepEqual(cityReasons, ['interrupted']);
+  assert.equal(map.methods.length - beforeWorldwide, 1, 'exactly 1 camera call for the new preset');
+  assert.equal(map.methods.at(-1), 'flyTo');
+  assert.ok(!map.methods.includes('jumpTo'));
+  assert.deepEqual(state.box, short, 'replaced city end must not grow the canvas');
+
+  for (const zoom of [cityCam.zoom, 8, 4, 2, 1.1, worldCam.zoom]) {
+    state = reduceCanvasMachine(state, { type: 'flightProgress', zoom });
+    assert.deepEqual(state.box, short, `canvas grew at live zoom ${zoom}`);
+  }
+
+  map.endFlight();
+  assert.deepEqual(state.box, short, 'no snap after landing');
+  assert.equal(state.shortened, true);
+  assert.ok(!map.methods.includes('jumpTo'));
+});
+
+test('768 Worldwide then city mid-flight grows the canvas once before the city flight', () => {
+  const viewport = { width: 768, height: 900 };
+  const tokyo = LOCATION_PRESETS.find((item) => item.id === 'tokyo')!;
+  const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
+  const cityCam = presetCamera(tokyo, 768, 900, { left: 0, right: 0 });
+  const worldCam = presetCamera(worldwide, 768, 900, { left: 0, right: 0 });
+
+  let state = reduceCanvasMachine(createCanvasMachine(viewport), {
+    type: 'prepareFlight',
+    targetZoom: worldCam.zoom,
+  });
+  assert.equal(state.shortened, true);
+  const short = state.box;
+
+  const map = new InterruptibleMap();
+  map.width = 768;
+  map.height = 900;
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const worldReasons: CameraEndReason[] = [];
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [worldCam.lng, worldCam.lat],
+      zoom: worldCam.zoom,
+      duration: 2000,
+      padding: ZERO_PADDING,
+    }),
+    (reason = 'complete') => {
+      worldReasons.push(reason);
+      const kind = classifyFlightEnd({ animationReason: reason, userInputActive: false });
+      assert.equal(shouldApplyFlightEndToCanvas(kind), false);
+      state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: worldCam.zoom, replaced: true });
+    }
+  );
+
+  state = reduceCanvasMachine(state, { type: 'prepareFlight', targetZoom: cityCam.zoom });
+  assert.equal(state.shortened, false);
+  assert.deepEqual(state.box, { top: 0, height: 900 });
+  assert.ok(short.height < 900);
+
+  const beforeCity = map.methods.length;
+  startCameraAnimation(
+    map,
+    handlerRef,
+    'flyTo',
+    cameraFlyOptions({
+      center: [cityCam.lng, cityCam.lat],
+      zoom: cityCam.zoom,
+      duration: 2000,
+      padding: ZERO_PADDING,
+    }),
+    (reason = 'complete') => {
+      const kind = classifyFlightEnd({ animationReason: reason, userInputActive: false });
+      if (shouldApplyFlightEndToCanvas(kind)) {
+        state = reduceCanvasMachine(state, { type: 'flightEnd', zoom: cityCam.zoom });
+      }
+    }
+  );
+  assert.deepEqual(worldReasons, ['interrupted']);
+  assert.equal(map.methods.length - beforeCity, 1, 'exactly 1 camera call for the city preset');
+  assert.deepEqual(state.box, { top: 0, height: 900 }, 'Worldwide interrupt must not re-shorten');
+  assert.ok(!map.methods.includes('jumpTo'));
+
+  map.endFlight();
+  assert.equal(state.shortened, false);
+  assert.deepEqual(state.box, { top: 0, height: 900 });
 });
 
 test('flightEnd at zoom > 1 never leaves an empty band', () => {

@@ -224,7 +224,7 @@ export type CanvasMachineEvent =
   | { type: 'viewport'; viewport: SizeBox }
   | { type: 'prepareFlight'; targetZoom: number; viewport?: SizeBox }
   | { type: 'flightProgress'; zoom: number }
-  | { type: 'flightEnd'; zoom: number }
+  | { type: 'flightEnd'; zoom: number; replaced?: boolean }
   | { type: 'pan'; zoom: number }
   | { type: 'userZoom'; zoom: number; prevZoom?: number }
   | { type: 'resizeNarrowFit'; viewport: SizeBox; targetZoom: number };
@@ -339,6 +339,9 @@ export function reduceCanvasMachine(
     case 'flightProgress':
       return state;
     case 'flightEnd': {
+      // A replaced animation is not the active camera — its live zoom must
+      // not grow or shrink the canvas. prepareFlight of the newest fly owns size.
+      if (event.replaced) return state;
       const unlocked = { ...state, flightLocked: false };
       const clamp = mapboxHeightMinZoom(state.viewport.height);
       if (shouldGrowCanvasForZoom(event.zoom) || (state.growArmed && event.zoom >= clamp - 1e-9)) {
@@ -1441,6 +1444,11 @@ export function classifyFlightEnd(input: {
   return 'complete';
 }
 
+/** Canvas size follows the newest camera. A replaced flight must not grow or shrink it. */
+export function shouldApplyFlightEndToCanvas(kind: FlightEndKind): boolean {
+  return kind !== 'replaced';
+}
+
 /** Capture-phase events that stamp user input while a programmatic camera is running. */
 export const USER_FLIGHT_INPUT_EVENTS = ['pointerdown', 'wheel', 'touchstart', 'keydown'] as const;
 
@@ -1642,7 +1650,8 @@ export function gestureSettleMs(kind: GestureBoundsKind): number {
 /**
  * One bounds report per gesture, after pointer-up and the camera is idle.
  * The interrupted flight's stop() moveend and the drag's own moveend share
- * the same gesture id so they produce one search.
+ * the same gesture id so they produce one search. Callers wait for pointerup
+ * / moveend instead of re-arming a 0ms timer while the pointer is held.
  */
 export function shouldFlushGestureBounds(input: {
   pointerDown: boolean;
