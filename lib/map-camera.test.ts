@@ -5,6 +5,7 @@ import {
   listHeadingText,
   settleListHeadingRequest,
   shouldApplySettledSearch,
+  shouldCommitSearchUi,
   startListHeadingRequest,
 } from './list-heading-state';
 import { LOCATION_PRESETS } from './locations';
@@ -41,7 +42,9 @@ import {
   paddingIsZero,
   pickCameraAnimation,
   shouldReportViewport,
+  abandonCameraAnimation,
   startCameraAnimation,
+  type CameraEndReason,
   MERCATOR_TILE_SIZE,
   LIST_EXPAND_MS,
   LIST_EXPAND_RESIZE_MS,
@@ -1129,8 +1132,8 @@ function startPlacesMapFlight(
     handlerRef,
     'flyTo',
     { padding: { ...ZERO_PADDING, left: 396 } },
-    () => {
-      clearPaddingKeepView(map);
+    (reason: CameraEndReason = 'complete') => {
+      if (reason === 'complete') clearPaddingKeepView(map);
     }
   );
 }
@@ -1152,20 +1155,188 @@ test('preset change mid-flight leaves padding at 0', () => {
   assert.deepEqual(map.getPadding(), ZERO_PADDING);
 });
 
-test('replacing an in-flight camera animation cancels the previous onEnd', () => {
+test('replacing an in-flight camera animation runs the previous onEnd once as interrupted', () => {
   const map = new InterruptibleMap();
   const handlerRef: { current: (() => void) | null } = { current: null };
-  let first = 0;
-  let second = 0;
-  startCameraAnimation(map, handlerRef, 'flyTo', { center: [0, 0] }, () => {
-    first += 1;
+  const first: CameraEndReason[] = [];
+  const second: CameraEndReason[] = [];
+  startCameraAnimation(map, handlerRef, 'flyTo', { center: [0, 0] }, (reason = 'complete') => {
+    first.push(reason);
   });
-  startCameraAnimation(map, handlerRef, 'easeTo', { center: [1, 1] }, () => {
-    second += 1;
+  startCameraAnimation(map, handlerRef, 'easeTo', { center: [1, 1] }, (reason = 'complete') => {
+    second.push(reason);
   });
+  assert.deepEqual(first, ['interrupted']);
   map.endFlight();
-  assert.equal(first, 0);
-  assert.equal(second, 1);
+  assert.deepEqual(first, ['interrupted']);
+  assert.deepEqual(second, ['complete']);
+  map.endFlight();
+  assert.deepEqual(first, ['interrupted']);
+  assert.deepEqual(second, ['complete']);
+});
+
+/**
+ * Page + PlacesMap session: flyRequest keeps cameraBusy true until
+ * onFlyComplete(nonce) runs. Zoom / cluster / locate replace the camera
+ * through startCameraAnimation.
+ */
+function createBusyFlightSession() {
+  let flyRequest: { nonce: number } | null = { nonce: 1 };
+  let mapCameraBusy = false;
+  let jumpTo = 0;
+  const presetReasons: CameraEndReason[] = [];
+  const cameraBusy = () => Boolean(flyRequest) || mapCameraBusy;
+  const handleFlyComplete = (nonce?: number) => {
+    if (!flyRequest) return;
+    if (nonce != null && flyRequest.nonce !== nonce) return;
+    flyRequest = null;
+  };
+  const onPresetEnd = (reason: CameraEndReason = 'complete') => {
+    presetReasons.push(reason);
+    if (reason === 'complete') jumpTo += 1;
+    mapCameraBusy = false;
+    handleFlyComplete(1);
+  };
+  return {
+    cameraBusy,
+    handleFlyComplete,
+    onPresetEnd,
+    presetReasons,
+    get flyRequest() {
+      return flyRequest;
+    },
+    set flyRequest(next: { nonce: number } | null) {
+      flyRequest = next;
+    },
+    get jumpTo() {
+      return jumpTo;
+    },
+    get mapCameraBusy() {
+      return mapCameraBusy;
+    },
+    set mapCameraBusy(next: boolean) {
+      mapCameraBusy = next;
+    },
+  };
+}
+
+function assertIdleSearchCommits(session: { cameraBusy: () => boolean }) {
+  assert.equal(session.cameraBusy(), false);
+  const decision = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'after-interrupt',
+    lastPresetKey: 'preset:united-states',
+    cameraBusy: session.cameraBusy(),
+  });
+  assert.equal(decision.action, 'moveend');
+  let heading = createListHeadingMachine();
+  heading = startListHeadingRequest(heading);
+  heading = startListHeadingRequest(heading);
+  assert.equal(shouldCommitSearchUi({ requestId: 2, machine: heading, cameraBusy: true }), false);
+  assert.equal(shouldCommitSearchUi({ requestId: 2, machine: heading, cameraBusy: session.cameraBusy() }), true);
+}
+
+for (const interrupt of [
+  { name: 'Zoom', method: 'easeTo' as const, options: { duration: 220, zoom: 6 } },
+  { name: 'cluster click', method: 'easeTo' as const, options: { duration: 480, zoom: 8 } },
+  { name: 'Locate me', method: 'flyTo' as const, options: { duration: 1600, center: [0, 0] } },
+]) {
+  test(`interrupted preset flight (${interrupt.name}) clears flyRequest and lets the next settle search`, () => {
+    const map = new InterruptibleMap();
+    const handlerRef: { current: (() => void) | null } = { current: null };
+    const session = createBusyFlightSession();
+    session.mapCameraBusy = true;
+    startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [-20, 20] }, session.onPresetEnd);
+    assert.equal(session.cameraBusy(), true);
+    assert.ok(session.flyRequest);
+
+    let replacementEnds = 0;
+    startCameraAnimation(map, handlerRef, interrupt.method, interrupt.options, () => {
+      replacementEnds += 1;
+      session.mapCameraBusy = false;
+    });
+    if (handlerRef.current) session.mapCameraBusy = true;
+    assert.deepEqual(session.presetReasons, ['interrupted']);
+    assert.equal(session.flyRequest, null, 'interrupted preset must release flyRequest');
+    assert.equal(session.jumpTo, 0, 'interrupt must not padding-clear jumpTo');
+    assert.equal(session.cameraBusy(), true, 'replacement camera is still busy');
+    assert.equal(replacementEnds, 0);
+
+    map.endFlight();
+    assert.equal(replacementEnds, 1);
+    assert.equal(session.presetReasons.length, 1);
+    assertIdleSearchCommits(session);
+  });
+}
+
+test('preset interrupted by another preset keeps the new flyRequest', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const session = createBusyFlightSession();
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [139, 35] }, session.onPresetEnd);
+  session.flyRequest = { nonce: 2 };
+  session.mapCameraBusy = true;
+  let secondEnds = 0;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 1800, center: [-100, 40] }, (reason = 'complete') => {
+    secondEnds += 1;
+    if (reason === 'complete') session.mapCameraBusy = false;
+    session.handleFlyComplete(2);
+  });
+  assert.deepEqual(session.presetReasons, ['interrupted']);
+  assert.deepEqual(session.flyRequest, { nonce: 2 });
+  assert.equal(session.jumpTo, 0);
+  map.endFlight();
+  assert.equal(secondEnds, 1);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.cameraBusy(), false);
+});
+
+test('resize mid-flight replaces the camera without a padding-clear jumpTo', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const session = createBusyFlightSession();
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [139, 35] }, session.onPresetEnd);
+  session.flyRequest = { nonce: 3 };
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'easeTo', { duration: 0, center: [-20, 20] }, (reason = 'complete') => {
+    session.mapCameraBusy = false;
+    session.handleFlyComplete(3);
+    assert.equal(reason, 'complete');
+  });
+  assert.deepEqual(session.presetReasons, ['interrupted']);
+  assert.equal(session.jumpTo, 0);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.cameraBusy(), false);
+});
+
+test('user wheel mid-flight still completes the end handler once', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const session = createBusyFlightSession();
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [-20, 20] }, session.onPresetEnd);
+  map.endFlight();
+  assert.deepEqual(session.presetReasons, ['complete']);
+  assert.equal(session.flyRequest, null);
+  assert.equal(session.cameraBusy(), false);
+  map.endFlight();
+  assert.deepEqual(session.presetReasons, ['complete']);
+});
+
+test('abandonCameraAnimation on unmount drops the listener without clearing flyRequest', () => {
+  const map = new InterruptibleMap();
+  const handlerRef: { current: (() => void) | null } = { current: null };
+  const session = createBusyFlightSession();
+  session.mapCameraBusy = true;
+  startCameraAnimation(map, handlerRef, 'flyTo', { duration: 2000, center: [-20, 20] }, session.onPresetEnd);
+  abandonCameraAnimation(map, handlerRef);
+  session.mapCameraBusy = false;
+  assert.ok(session.flyRequest);
+  assert.deepEqual(session.presetReasons, []);
+  map.endFlight();
+  assert.deepEqual(session.presetReasons, []);
 });
 
 test('flyTo options use a gentle curve and an explicit duration cap', () => {

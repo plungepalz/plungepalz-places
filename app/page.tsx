@@ -424,8 +424,12 @@ export default function HomePage() {
     }
   }, [places]);
 
-  const handleFlyComplete = useCallback(() => {
-    setFlyRequest(null);
+  const handleFlyComplete = useCallback((nonce?: number) => {
+    setFlyRequest((current) => {
+      if (!current) return null;
+      if (nonce != null && current.nonce !== nonce) return current;
+      return null;
+    });
   }, []);
 
   const handleUserCameraMove = useCallback(() => {

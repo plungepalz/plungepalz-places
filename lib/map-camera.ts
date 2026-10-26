@@ -1337,8 +1337,12 @@ export function flyToThenOnMoveend(
   map.once('moveend', onMoveend);
 }
 
+export type CameraEndReason = 'complete' | 'interrupted';
+
 export interface CameraHandlerRef {
   current: (() => void) | null;
+  /** Consumed exactly once — on moveend or when a newer animation replaces this one. */
+  pendingEnd?: ((reason: CameraEndReason) => void) | null;
 }
 
 export interface CameraControllerMap {
@@ -1349,34 +1353,70 @@ export interface CameraControllerMap {
   isMoving?: () => boolean;
 }
 
+function consumeCameraEnd(handlerRef: CameraHandlerRef, reason: CameraEndReason): void {
+  const end = handlerRef.pendingEnd;
+  handlerRef.pendingEnd = null;
+  end?.(reason);
+}
+
+/**
+ * Drop the moveend listener without running onEnd (unmount / remount).
+ * flyRequest stays so a remounted map can resume the same nonce.
+ */
+export function abandonCameraAnimation(
+  map: Pick<CameraControllerMap, 'off'> | null | undefined,
+  handlerRef: CameraHandlerRef
+): void {
+  if (handlerRef.current && map) {
+    map.off('moveend', handlerRef.current);
+  }
+  handlerRef.current = null;
+  handlerRef.pendingEnd = null;
+}
+
+/**
+ * Finish the active animation as interrupted. Used when Zoom / cluster /
+ * Locate (or another fly) replaces a running flight so flyRequest / busy
+ * can clear without a padding-clear jumpTo.
+ */
+export function interruptCameraAnimation(
+  map: Pick<CameraControllerMap, 'off'> | null | undefined,
+  handlerRef: CameraHandlerRef
+): void {
+  if (handlerRef.current && map) {
+    map.off('moveend', handlerRef.current);
+  }
+  handlerRef.current = null;
+  consumeCameraEnd(handlerRef, 'interrupted');
+}
+
 /**
  * Cancel the previous moveend handler, start flyTo or easeTo, then attach
  * the new listener. Same interrupt rule as flyToThenOnMoveend: attach after
  * start so mapbox-gl's synchronous stop()/moveend does not consume it.
  * Duration 0 / reduced-motion already fired moveend inside the camera call,
  * so run onEnd now and do not leave a second listener.
+ * A replaced flight's onEnd runs exactly once with reason `interrupted`.
  */
 export function startCameraAnimation(
   map: CameraControllerMap,
   handlerRef: CameraHandlerRef,
   method: CameraMethod,
   options: Record<string, unknown>,
-  onEnd: () => void = () => undefined
+  onEnd: (reason: CameraEndReason) => void = () => undefined
 ): void {
-  if (handlerRef.current) {
-    map.off('moveend', handlerRef.current);
-    handlerRef.current = null;
-  }
+  interruptCameraAnimation(map, handlerRef);
   const onMoveEnd = () => {
     if (handlerRef.current !== onMoveEnd) return;
     handlerRef.current = null;
-    onEnd();
+    consumeCameraEnd(handlerRef, 'complete');
   };
   if (method === 'flyTo') {
     map.flyTo(options);
   } else {
     map.easeTo(options);
   }
+  handlerRef.pendingEnd = onEnd;
   handlerRef.current = onMoveEnd;
   if (cameraMoveAlreadyIdle(map, options)) {
     onMoveEnd();

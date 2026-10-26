@@ -39,7 +39,10 @@ import {
   shouldApplyNarrowWorldwideAfterResize,
   shouldClearPaddingAfterFlight,
   shouldReapplyNarrowWorldwide,
+  abandonCameraAnimation,
   startCameraAnimation,
+  type CameraEndReason,
+  type CameraHandlerRef,
   type FlightTag,
   type MapResizeState,
   type SizeBox,
@@ -69,7 +72,7 @@ interface PlacesMapProps {
   selectedPlaceId: string | null;
   bindHover?: (apply: (placeId: string | null) => void) => () => void;
   flyRequest: FlyRequest | null;
-  onFlyComplete: () => void;
+  onFlyComplete: (nonce?: number) => void;
   panelOpen: boolean;
   locationPickMode?: boolean;
   draftLocation?: DraftLocation | null;
@@ -246,7 +249,9 @@ export default function PlacesMap({
   const mapRef = useRef<MapRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapBoxRef = useRef<HTMLDivElement>(null);
-  const flyEndHandlerRef = useRef<(() => void) | null>(null);
+  const flyEndHandlerRef = useRef<(() => void) | null>(null) as CameraHandlerRef;
+  const onCameraBusyRef = useRef(onCameraBusy);
+  const liveMapRef = useRef<MapboxMap | null>(null);
   const flightTagRef = useRef<string | null>(null);
   const startedFlyNonceRef = useRef<number | null>(null);
   const [imagesReady, setImagesReady] = useState(false);
@@ -292,6 +297,17 @@ export default function PlacesMap({
     setCanvasLayout((prev) =>
       prev.top === next.box.top && prev.height === next.box.height ? prev : next.box
     );
+  }, []);
+
+  useEffect(() => {
+    onCameraBusyRef.current = onCameraBusy;
+  }, [onCameraBusy]);
+
+  useEffect(() => {
+    return () => {
+      abandonCameraAnimation(liveMapRef.current, flyEndHandlerRef);
+      onCameraBusyRef.current?.(false);
+    };
   }, []);
 
   const targetZoomForFly = useCallback(
@@ -481,6 +497,7 @@ export default function PlacesMap({
   const handleLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    liveMapRef.current = map;
     map.setMinZoom(0);
     muteMotorwayLayers(map);
     flightTagRef.current = 'resize';
@@ -602,6 +619,7 @@ export default function PlacesMap({
     if (!canvasReadyForFlight(canvasLayout, prepared)) return;
     if (!claimFlyNonce(startedFlyNonceRef, flyRequest.nonce)) return;
     const map = mapRef.current.getMap();
+    liveMapRef.current = map;
     if (resizeStateRef.current.rafId != null) {
       cancelAnimationFrame(resizeStateRef.current.rafId);
       resizeStateRef.current.rafId = null;
@@ -665,24 +683,30 @@ export default function PlacesMap({
     }
     liveZoomRef.current = zoom;
     const keepFitPadding = Boolean(flyRequest.exactZoom && flyFitTop > 0);
-    const onFlyEnd = () => {
+    const endedTag = flightTag;
+    const endedNonce = flyRequest.nonce;
+    const onFlyEnd = (reason: CameraEndReason = 'complete') => {
       const live = mapRef.current?.getMap();
       const endedZoom = live?.getZoom() ?? zoom;
       commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
-      const shouldClear =
-        !detailsOpenRef.current &&
-        !keepFitPadding &&
-        shouldClearPaddingAfterFlight(
-          flyRequest.exactZoom ? ZERO_PADDING : padding,
-          live?.getPadding()
-        );
-      if (shouldClear) {
-        clearPaddingProgrammatic();
+      if (reason === 'complete') {
+        const shouldClear =
+          !detailsOpenRef.current &&
+          !keepFitPadding &&
+          shouldClearPaddingAfterFlight(
+            flyRequest.exactZoom ? ZERO_PADDING : padding,
+            live?.getPadding()
+          );
+        if (shouldClear) {
+          clearPaddingProgrammatic();
+        }
+        reportViewport();
       }
-      reportViewport();
-      flightTagRef.current = null;
+      if (flightTagRef.current === endedTag) {
+        flightTagRef.current = null;
+      }
       onCameraBusy?.(false);
-      onFlyComplete();
+      onFlyComplete(endedNonce);
     };
     const current = map.getCenter();
     const move = programmatic
@@ -722,6 +746,7 @@ export default function PlacesMap({
         : cameraFlyOptions({ ...cameraOptions, duration: move.duration }),
       onFlyEnd
     );
+    if (flyEndHandlerRef.current) onCameraBusy?.(true);
   }, [
     canvasLayout,
     collapseList,
@@ -744,9 +769,7 @@ export default function PlacesMap({
     if (!detailsOpen) {
       clearPaddingProgrammatic();
     }
-    onCameraBusy?.(true);
     onUserCameraMove?.();
-    flightTagRef.current = 'zoom';
     startCameraAnimation(
       map,
       flyEndHandlerRef,
@@ -758,6 +781,8 @@ export default function PlacesMap({
         reportViewport();
       }
     );
+    flightTagRef.current = 'zoom';
+    if (flyEndHandlerRef.current) onCameraBusy?.(true);
   };
 
   const locateMe = () => {
@@ -771,8 +796,6 @@ export default function PlacesMap({
         onUserCameraMove?.();
         const live = mapRef.current?.getMap();
         if (!live) return;
-        onCameraBusy?.(true);
-        flightTagRef.current = 'locate';
         startCameraAnimation(
           live,
           flyEndHandlerRef,
@@ -788,6 +811,8 @@ export default function PlacesMap({
             reportViewport();
           }
         );
+        flightTagRef.current = 'locate';
+        if (flyEndHandlerRef.current) onCameraBusy?.(true);
       },
       (err) => {
         setLocateError(
@@ -822,8 +847,6 @@ export default function PlacesMap({
           zoom,
           padding
         );
-        onCameraBusy?.(true);
-        flightTagRef.current = 'cluster';
         startCameraAnimation(
           live,
           flyEndHandlerRef,
@@ -841,6 +864,8 @@ export default function PlacesMap({
             reportViewport();
           }
         );
+        flightTagRef.current = 'cluster';
+        if (flyEndHandlerRef.current) onCameraBusy?.(true);
       });
       return;
     }
