@@ -24,6 +24,7 @@ import {
   clusterTextColorForCount,
   contrastRatio,
   expressionContainsFeatureState,
+  pinMapboxChromeToContainer,
   pinHaloRadius,
   pinIconSize,
   pinImageForState,
@@ -290,4 +291,28 @@ test('motorway and trunk layers mute toward warm grey, not brand orange', () => 
   assert.equal(changed, 1);
   assert.equal(paint.get('road-motorway'), MUTED_MOTORWAY);
   assert.equal(paint.get('road-primary'), '#ffffff');
+});
+
+test('pinMapboxChromeToContainer moves logo and attribution onto the outer box', () => {
+  const moved: string[] = [];
+  const left = { parentElement: null as { id: string } | null };
+  const right = { parentElement: null as { id: string } | null };
+  const host = {
+    id: 'host',
+    querySelector: (sel: string) => (sel.includes('left') ? left : right),
+  };
+  const container = {
+    id: 'container',
+    appendChild: (el: { parentElement: unknown }) => {
+      el.parentElement = container;
+      moved.push(el === left ? 'left' : 'right');
+      return el;
+    },
+  };
+  left.parentElement = host;
+  right.parentElement = host;
+  assert.equal(pinMapboxChromeToContainer(container as never, host as never), true);
+  assert.deepEqual(moved, ['left', 'right']);
+  assert.equal(left.parentElement, container);
+  assert.equal(pinMapboxChromeToContainer(container as never, host as never), false);
 });

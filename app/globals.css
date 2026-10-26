@@ -32,6 +32,23 @@ body {
   opacity: 0.7;
 }
 
+[data-places-map] > .mapboxgl-ctrl-bottom-left,
+[data-places-map] > .mapboxgl-ctrl-bottom-right {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+}
+
+[data-places-map] > .mapboxgl-ctrl-bottom-left {
+  left: 0;
+  bottom: 0;
+}
+
+[data-places-map] > .mapboxgl-ctrl-bottom-right {
+  right: 0;
+  bottom: 0;
+}
+
 [data-map-canvas] {
   contain: layout;
 }
@@ -50,6 +67,7 @@ body {
 
 .place-card {
   min-height: 98px;
+  content-visibility: auto;
   contain-intrinsic-size: auto 98px;
   opacity: 1;
   transform: translateY(0);

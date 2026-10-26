@@ -115,3 +115,20 @@ export function retainPlaceNodes<T>(
 export function placeCardKey(place: { place_id: string }): string {
   return place.place_id;
 }
+
+/**
+ * Keep the previous cards on screen while a programmatic flight is in
+ * progress so a 98px card cannot collapse to 0 (CLS) mid-flight.
+ * Heading / search may settle; the list swaps only when the camera is idle.
+ */
+export function placesVisibleDuringFlight<T>(
+  live: T[],
+  held: T[] | null,
+  cameraBusy: boolean
+): { visible: T[]; hold: T[] | null } {
+  if (cameraBusy) {
+    const keep = held ?? live;
+    return { visible: keep, hold: keep };
+  }
+  return { visible: live, hold: null };
+}

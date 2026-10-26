@@ -93,6 +93,27 @@ test('programmatic camera suppresses moveend search so the header stays old→fi
   );
 });
 
+test('leaving a preset after a leftover resize report still bounds-searches', () => {
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: '',
+      cameraBusy: false,
+    }),
+    { action: 'filters', nextPresetKey: '' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'wheel-zoom-16',
+      lastPresetKey: '',
+      cameraBusy: false,
+    }),
+    { action: 'moveend' }
+  );
+});
+
 test('createDebounced cancels overlapping calls and only invokes the last', async () => {
   const seen: number[] = [];
   const debounced = createDebounced((value: number) => {

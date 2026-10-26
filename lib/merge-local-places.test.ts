@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { placeCardKey, reconcilePlacesById, retainPlaceNodes, reuseIfSamePlaceRefs } from './merge-local-places';
+import {
+  placeCardKey,
+  placesVisibleDuringFlight,
+  reconcilePlacesById,
+  retainPlaceNodes,
+  reuseIfSamePlaceRefs,
+} from './merge-local-places';
 import type { PlaceSearchResult } from './types';
 
 function place(id: string): PlaceSearchResult {
@@ -58,4 +64,18 @@ test('same place id keeps its DOM node across a results update', () => {
   assert.equal(nextNodes.get('b'), nodeB);
   assert.equal(nextNodes.get('c')?.el, 'dom-c');
   assert.notEqual(nextNodes.get('c'), nodeA);
+});
+
+test('placesVisibleDuringFlight keeps previous cards until the camera is idle', () => {
+  const us = [place('us-1'), place('us-2')];
+  const world = [place('w-1'), place('w-2'), place('w-3')];
+  const mid = placesVisibleDuringFlight(world, us, true);
+  assert.equal(mid.visible, us);
+  assert.equal(mid.hold, us);
+  assert.equal(mid.visible.length, 2);
+  const settled = placesVisibleDuringFlight(world, mid.hold, false);
+  assert.equal(settled.visible, world);
+  assert.equal(settled.hold, null);
+  const first = placesVisibleDuringFlight(us, null, true);
+  assert.equal(first.visible, us);
 });

@@ -501,3 +501,24 @@ export function syncMapHoveredCard(root: ParentNode | null, placeId: string | nu
   if (!placeId) return;
   root.querySelector(`[data-place-id="${cssEscape(placeId)}"]`)?.setAttribute('data-map-hover', 'true');
 }
+
+const MAPBOX_CHROME_SELECTORS = ['.mapboxgl-ctrl-bottom-left', '.mapboxgl-ctrl-bottom-right'] as const;
+
+/**
+ * Move Mapbox logo + attribution out of the GL host onto the full map
+ * container so a canvas regrow cannot shift them (CLS).
+ */
+export function pinMapboxChromeToContainer(
+  container: HTMLElement | null | undefined,
+  mapRoot: HTMLElement | null | undefined
+): boolean {
+  if (!container || !mapRoot || container === mapRoot) return false;
+  let moved = false;
+  for (const selector of MAPBOX_CHROME_SELECTORS) {
+    const el = mapRoot.querySelector(selector);
+    if (!el || el.parentElement === container) continue;
+    container.appendChild(el);
+    moved = true;
+  }
+  return moved;
+}

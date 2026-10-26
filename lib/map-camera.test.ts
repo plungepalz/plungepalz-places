@@ -8,6 +8,7 @@ import {
   startListHeadingRequest,
 } from './list-heading-state';
 import { LOCATION_PRESETS } from './locations';
+import { searchAfterViewportChange } from './search-debounce';
 import {
   DRAWER_OCCUPIED,
   DRAWER_WIDTH,
@@ -68,6 +69,7 @@ import {
   lowZoomCanvasLayout,
   mapControlsRightPx,
   mapboxHeightMinZoom,
+  mapNeedsResize,
   mercatorWorldPx,
   narrowWidthFitZoom,
   needsLowZoomCanvas,
@@ -257,9 +259,43 @@ test('resize and programmatic camera never count as a user move', () => {
   assert.equal(isUserMapMove({ originalEvent: { type: 'resize' } }, 'preset'), false);
   assert.equal(isUserMapMove({ originalEvent: { type: 'orientationchange' } }), false);
   assert.equal(isUserMapMove({}, 'resize'), false);
-  assert.equal(isUserMapMove({ originalEvent: { type: 'mouseup' } }, 'resize'), false);
   assert.equal(isUserMapMove({}, 'programmatic'), false);
   assert.equal(isUserMapMove({ originalEvent: { type: 'wheel' } }), true);
+});
+
+test('user wheel zoom-in leaves Worldwide and bounds-searches even with a leftover resize tag', () => {
+  const wheel = { originalEvent: { type: 'wheel' } };
+  const effects = cameraMoveendEffects(wheel, 'resize');
+  assert.equal(isUserMapMove(wheel, 'resize'), true);
+  assert.equal(isUserMapMove(wheel, 'programmatic'), true);
+  assert.equal(effects.leavePreset, true);
+  assert.equal(effects.reportBounds, true);
+
+  // The regrow's own resize-tagged jumpTo / map.resize() has no gesture.
+  const leaked = cameraMoveendEffects({}, 'resize');
+  assert.equal(leaked.leavePreset, false);
+  assert.equal(leaked.reportBounds, true);
+
+  let leftPreset = false;
+  if (effects.leavePreset) leftPreset = true;
+  assert.equal(leftPreset, true);
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset,
+      boundsKey: 'zoomed-16-places',
+      lastPresetKey: '',
+      cameraBusy: false,
+    }),
+    { action: 'moveend' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: '',
+    }),
+    { action: 'filters', nextPresetKey: '' }
+  );
 });
 
 test('resize does not flip the chip to Map area', () => {
@@ -278,6 +314,15 @@ test('resize does not flip the chip to Map area', () => {
   assert.equal(leftPreset, false);
   if (isUserMapMove({ originalEvent: { type: 'mouseup' } })) onUserCameraMove();
   assert.equal(leftPreset, true);
+});
+
+test('mapNeedsResize is false when the canvas already matches the host', () => {
+  const canvas = { clientWidth: 768, clientHeight: 704 };
+  const host = { clientWidth: 768, clientHeight: 704 };
+  assert.equal(mapNeedsResize(canvas, host), false);
+  assert.equal(mapNeedsResize({ clientWidth: 768, clientHeight: 900 }, host), true);
+  assert.equal(mapNeedsResize(null, host), true);
+  assert.equal(mapNeedsResize({ clientWidth: 0, clientHeight: 0 }, host), true);
 });
 
 test('scheduleMapResize coalesces to one map.resize() per frame', () => {

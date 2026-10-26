@@ -24,6 +24,7 @@ import {
   readMeasuredViewport,
   createCanvasMachine,
   mapControlsRightPx,
+  mapNeedsResize,
   paddingIsZero,
   pickCameraAnimation,
   pinHintCenterX,
@@ -46,6 +47,7 @@ import {
   PIN_STROKE,
   clusterLeafHasPlace,
   muteMotorwayLayers,
+  pinMapboxChromeToContainer,
   placesMapLayerSpecs,
   placesToGeoJSON,
 } from '@/lib/map-style';
@@ -364,6 +366,10 @@ export default function PlacesMap({
     if (isProgrammaticFlightTag(flightTagRef.current) && !pendingNarrowWorldwideRef.current) {
       return;
     }
+    if (!mapNeedsResize(map.getCanvas(), mapBoxRef.current)) {
+      applyNarrowWorldwideAfterResize();
+      return;
+    }
     flightTagRef.current = 'resize';
     scheduleMapResize(
       map,
@@ -470,6 +476,7 @@ export default function PlacesMap({
     muteMotorwayLayers(map);
     flightTagRef.current = 'resize';
     map.resize();
+    pinMapboxChromeToContainer(containerRef.current, map.getContainer());
     applyWaterColor();
     map.once('idle', applyWaterColor);
     void Promise.all([
@@ -600,7 +607,9 @@ export default function PlacesMap({
           : 'place';
     flightTagRef.current = flightTag;
     onCameraBusy?.(true);
-    map.resize();
+    if (mapNeedsResize(map.getCanvas(), mapBoxRef.current)) {
+      map.resize();
+    }
     const measured =
       readMeasuredViewport(containerRef.current) ??
       readMeasuredViewport(map.getCanvas()) ??
@@ -920,14 +929,14 @@ export default function PlacesMap({
       handleMove(event);
       const tag = flightTagRef.current;
       const effects = cameraMoveendEffects(event as { originalEvent?: unknown }, tag);
+      if (effects.leavePreset) {
+        onUserCameraMove?.();
+      }
       if (effects.reportBounds) {
         reportViewport();
         setClusterQueryTick((tick) => tick + 1);
       }
-      if (effects.leavePreset) {
-        onUserCameraMove?.();
-      }
-      if (tag === 'resize') {
+      if (tag === 'resize' || effects.leavePreset) {
         flightTagRef.current = null;
       }
     },

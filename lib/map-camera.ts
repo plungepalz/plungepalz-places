@@ -807,13 +807,16 @@ export function isUserGestureEvent(
 
 /**
  * User-initiated camera change vs a programmatic flight / resize.
- * Mapbox `moveend` sets `originalEvent` for drag / scroll / pinch.
- * Window resize and our own camera tags must never flip the chip to Map area.
+ * A real wheel / drag / pinch wins even if a leftover `resize` tag (canvas
+ * regrow or padding-clear jumpTo) is still on the flight — otherwise the
+ * chip stays Worldwide and moveend never bounds-searches.
+ * Window resize and our own untagged programmatic moves never flip the chip.
  */
 export function isUserMapMove(
   event: { originalEvent?: unknown } | null | undefined,
   flightTag?: string | null
 ): boolean {
+  if (isUserGestureEvent(event)) return true;
   if (flightTag === 'resize' || flightTag === 'programmatic') return false;
   const orig = event?.originalEvent as { type?: string } | undefined;
   if (orig && (orig.type === 'resize' || orig.type === 'orientationchange')) return false;
@@ -868,9 +871,10 @@ export function cameraMoveendEffects(
   event: { originalEvent?: unknown } | null | undefined,
   flightTag?: string | null
 ): { leavePreset: boolean; reportBounds: boolean } {
+  const userGesture = isUserGestureEvent(event);
   return {
-    leavePreset: isUserMapMove(event, flightTag),
-    reportBounds: shouldReportViewport(flightTag),
+    leavePreset: userGesture || isUserMapMove(event, flightTag),
+    reportBounds: userGesture || shouldReportViewport(flightTag),
   };
 }
 
@@ -987,6 +991,24 @@ export interface MapResizeState {
 }
 
 /** Coalesce map.resize() to one call per animation frame. */
+/**
+ * Skip a no-op `map.resize()` — Mapbox still emits a zero-length
+ * movestart/moveend when the canvas already matches the host.
+ */
+export function mapNeedsResize(
+  canvas: { clientWidth: number; clientHeight: number } | null | undefined,
+  host: { clientWidth: number; clientHeight: number } | null | undefined
+): boolean {
+  if (!canvas || !host) return true;
+  if (canvas.clientWidth < 2 || canvas.clientHeight < 2 || host.clientWidth < 2 || host.clientHeight < 2) {
+    return true;
+  }
+  return (
+    Math.abs(canvas.clientWidth - host.clientWidth) > 1 ||
+    Math.abs(canvas.clientHeight - host.clientHeight) > 1
+  );
+}
+
 export function scheduleMapResize(
   map: { resize: () => void } | null | undefined,
   state: MapResizeState,

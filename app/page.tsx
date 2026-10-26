@@ -26,7 +26,7 @@ import {
   shouldReapplyPresetOnSizeChange,
   type SizeBox,
 } from '@/lib/map-camera';
-import { mergeLocalPlaces, reconcilePlacesById } from '@/lib/merge-local-places';
+import { mergeLocalPlaces, placesVisibleDuringFlight, reconcilePlacesById } from '@/lib/merge-local-places';
 import {
   placesListMaxHeightPx,
   placesListSlotMaxHeightPx,
@@ -134,6 +134,13 @@ export default function HomePage() {
     setPlaceStore({ src: merged, places: reconcilePlacesById(placeStore.places, merged.places) });
   }
   const places = placeStore.src === merged ? placeStore.places : reconcilePlacesById(placeStore.places, merged.places);
+  const cameraBusy = Boolean(flyRequest) || mapCameraBusy;
+  const [heldList, setHeldList] = useState<PlaceSearchResult[] | null>(null);
+  const listView = placesVisibleDuringFlight(places, heldList, cameraBusy);
+  if (heldList !== listView.hold) {
+    setHeldList(listView.hold);
+  }
+  const listPlaces = listView.visible;
   const displayTotal = total + extraCount;
   const [hoverCtrl] = useState(createPlaceHoverController);
 
@@ -222,7 +229,7 @@ export default function HomePage() {
       leftPreset,
       boundsKey: mapBoundsKey(leftPreset ? bounds : null),
       lastPresetKey: lastPresetBoundsKeyRef.current,
-      cameraBusy: Boolean(flyRequest) || mapCameraBusy,
+      cameraBusy,
     });
     if (decision.action === 'skip') return;
     if (decision.nextPresetKey != null) {
@@ -232,7 +239,7 @@ export default function HomePage() {
       performSearch(0, false, decision.action === 'moveend' ? bounds : null);
     }, searchDebounceMs(decision.action));
     return () => window.clearTimeout(handle);
-  }, [flyRequest, mapCameraBusy, performSearch, leftPreset, searchIdentity]);
+  }, [cameraBusy, flyRequest, mapCameraBusy, performSearch, leftPreset, searchIdentity]);
 
   useEffect(() => {
     if (!successMessage) return;
@@ -499,7 +506,7 @@ export default function HomePage() {
           aria-hidden={hideListForDrawer}
         >
           <PlacesList
-            places={places}
+            places={listPlaces}
             total={displayTotal}
             selectedPlaceId={selectedPlaceId}
             favorites={favorites}
