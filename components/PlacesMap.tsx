@@ -22,6 +22,7 @@ import {
   createGestureBoundsState,
   gestureSettleMs,
   isGenuineClusterClick,
+  isGestureSearchPending,
   isMapControlTarget,
   shouldFlushGestureBounds,
   shouldHoldPointerForFlight,
@@ -92,7 +93,11 @@ interface PlacesMapProps {
   selectedPlaceId: string | null;
   bindHover?: (apply: (placeId: string | null) => void) => () => void;
   flyRequest: FlyRequest | null;
-  onFlyComplete: (nonce?: number, kind?: FlightEndKind) => void;
+  onFlyComplete: (
+    nonce?: number,
+    kind?: FlightEndKind,
+    info?: { gestureSearchPending?: boolean }
+  ) => void;
   panelOpen: boolean;
   locationPickMode?: boolean;
   draftLocation?: DraftLocation | null;
@@ -102,7 +107,7 @@ interface PlacesMapProps {
   onSelectPlace: (placeId: string) => void;
   onHoverPlace: (placeId: string | null) => void;
   onViewportChange: (bounds: MapBounds, zoom: number) => void;
-  onUserCameraMove?: () => void;
+  onUserCameraMove?: (info?: { gestureSearchPending?: boolean }) => void;
   /** True while a programmatic fly / cluster ease is running — suppress bbox search. */
   onCameraBusy?: (busy: boolean) => void;
   /** Pixels from the top so the pin-drop hint sits below the filter chrome. */
@@ -605,13 +610,22 @@ export default function PlacesMap({
     [canvasLayout, commitCanvas, flushPendingCamera, onCameraBusy, slotSize]
   );
 
+  const notifyLeavePreset = useCallback(() => {
+    const pending = isGestureSearchPending({
+      pointerDown: pointerDownRef.current,
+      gesture: gestureRef.current,
+    });
+    onUserCameraMove?.({ gestureSearchPending: pending });
+    return pending;
+  }, [onUserCameraMove]);
+
   const expandCluster = useCallback(
     (clusterId: number, clusterCenter: [number, number]) => {
       const failOpen = () => {
         clusterExpandingRef.current = false;
         pendingCameraRef.current = null;
         onCameraBusy?.(false);
-        onUserCameraMove?.();
+        notifyLeavePreset();
         needsBoundsReportRef.current = false;
         reportViewport();
       };
@@ -643,7 +657,7 @@ export default function PlacesMap({
           zoom,
           padding
         );
-        onUserCameraMove?.();
+        notifyLeavePreset();
         queueProgrammaticCamera({
           tag: 'cluster',
           method: 'easeTo',
@@ -656,7 +670,7 @@ export default function PlacesMap({
           }),
           onEnd: () => {
             clusterExpandingRef.current = false;
-            onUserCameraMove?.();
+            notifyLeavePreset();
             flightTagRef.current = null;
             onCameraBusy?.(false);
             needsBoundsReportRef.current = false;
@@ -665,7 +679,7 @@ export default function PlacesMap({
         });
       });
     },
-    [collapseList, onCameraBusy, onUserCameraMove, queueProgrammaticCamera, reportViewport, slotSize]
+    [collapseList, notifyLeavePreset, onCameraBusy, queueProgrammaticCamera, reportViewport, slotSize]
   );
 
   const scheduleGestureBoundsRef = useRef<(kind?: GestureBoundsKind) => void>(() => undefined);
@@ -920,7 +934,7 @@ export default function PlacesMap({
     let longitude = flyRequest.longitude;
     let latitude = flyRequest.latitude;
     if (!flyRequest.exactZoom && !flyRequest.ease && !flyRequest.programmatic) {
-      onUserCameraMove?.();
+      notifyLeavePreset();
     }
     if (flyRequest.exactZoom && location) {
       const camera = presetFlyCamera(location, measured, panelOpen);
@@ -957,6 +971,7 @@ export default function PlacesMap({
         userInputActive: userInputRef.current,
         originalEvent,
       });
+      let interruptPending: boolean | undefined;
       if (shouldApplyFlightEndToCanvas(kind)) {
         commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
       }
@@ -996,7 +1011,7 @@ export default function PlacesMap({
       } else if (kind === 'user-interrupt') {
         pendingWorldwideRefitRef.current = false;
         pendingNarrowWorldwideRef.current = false;
-        onUserCameraMove?.();
+        interruptPending = notifyLeavePreset();
         reportAfterUserGesture();
       } else {
         pendingWorldwideRefitRef.current = false;
@@ -1009,7 +1024,11 @@ export default function PlacesMap({
         zoomMovedRef.current = false;
       }
       onCameraBusy?.(pendingCameraRef.current != null);
-      onFlyComplete(endedNonce, kind);
+      onFlyComplete(
+        endedNonce,
+        kind,
+        interruptPending != null ? { gestureSearchPending: interruptPending } : undefined
+      );
     };
     const current = map.getCenter();
     const move = programmatic
@@ -1058,9 +1077,9 @@ export default function PlacesMap({
     flyRequest,
     location,
     clearPaddingProgrammatic,
+    notifyLeavePreset,
     onCameraBusy,
     onFlyComplete,
-    onUserCameraMove,
     panelOpen,
     reportAfterUserGesture,
     reportViewport,
@@ -1073,7 +1092,7 @@ export default function PlacesMap({
     if (!detailsOpen) {
       clearPaddingProgrammatic();
     }
-    onUserCameraMove?.();
+    notifyLeavePreset();
     const targetZoom = map.getZoom() + delta;
     queueProgrammaticCamera({
       tag: 'zoom',
@@ -1096,7 +1115,7 @@ export default function PlacesMap({
     setLocateError(null);
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        onUserCameraMove?.();
+        notifyLeavePreset();
         if (!mapRef.current) return;
         queueProgrammaticCamera({
           tag: 'locate',
@@ -1316,7 +1335,7 @@ export default function PlacesMap({
         };
       }
       if (effects.leavePreset) {
-        onUserCameraMove?.();
+        notifyLeavePreset();
       }
       if (needsBoundsReportRef.current) {
         scheduleGestureBounds(gestureRef.current.kind);
@@ -1333,7 +1352,7 @@ export default function PlacesMap({
         zoomMovedRef.current = false;
       }
     },
-    [handleMove, onUserCameraMove, reportViewport, scheduleGestureBounds]
+    [handleMove, notifyLeavePreset, reportViewport, scheduleGestureBounds]
   );
 
   const pinHint = locationPickMode ? (

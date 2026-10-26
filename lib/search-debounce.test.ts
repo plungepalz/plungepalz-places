@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   SEARCH_DEBOUNCE_MS,
   createDebounced,
+  lastKeyAfterLeavingPreset,
   rememberSettleKeyOnDispatch,
   searchAfterViewportChange,
   searchDebounceMs,
@@ -289,6 +290,54 @@ test('slow-wheel moveends are not swallowed by a cancelled debounce', () => {
       cameraBusy: false,
     }),
     { action: 'skip' }
+  );
+});
+
+test('lastKeyAfterLeavingPreset keeps live bounds only when a gesture search is pending', () => {
+  assert.equal(lastKeyAfterLeavingPreset({ boundsKey: 'live', gestureSearchPending: true }), 'live');
+  assert.equal(lastKeyAfterLeavingPreset({ boundsKey: 'live', gestureSearchPending: false }), '');
+});
+
+test('a settle search does not run while a pointer or wheel gesture is in progress', () => {
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'mid-drag',
+      lastPresetKey: '',
+      cameraBusy: false,
+      gestureInProgress: true,
+    }),
+    { action: 'skip' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'mid-wheel',
+      lastPresetKey: 'live-bounds',
+      cameraBusy: false,
+      gestureInProgress: true,
+    }),
+    { action: 'skip' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'mouseup',
+      lastPresetKey: 'live-bounds',
+      cameraBusy: false,
+      gestureInProgress: false,
+    }),
+    { action: 'moveend', nextPresetKey: 'mouseup' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'live-bounds',
+      lastPresetKey: '',
+      cameraBusy: false,
+      gestureInProgress: false,
+    }),
+    { action: 'moveend', nextPresetKey: 'live-bounds' }
   );
 });
 

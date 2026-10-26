@@ -22,12 +22,30 @@ export function viewportSearchIdentity(
   return `${presetId ? `preset:${presetId}` : 'preset-chip'}${suffix}`;
 }
 
+/**
+ * Chip flip to Map area: remember the live bounds only when a pointer/wheel
+ * gesture will search on settle. Otherwise leave the key empty so a no-move
+ * flip still produces exactly one /search.
+ */
+export function lastKeyAfterLeavingPreset(input: {
+  boundsKey: string;
+  gestureSearchPending: boolean;
+}): string {
+  return input.gestureSearchPending ? input.boundsKey : '';
+}
+
 export function searchAfterViewportChange(input: {
   leftPreset: boolean;
   boundsKey: string;
   lastPresetKey: string;
   /** Programmatic fly / ease / shrink-first resize — wait for idle. */
   cameraBusy?: boolean;
+  /**
+   * Pointer held, or a wheel/drag burst that has not flushed yet.
+   * The interrupt end must not settle-search; the gesture's own
+   * pointerup/moveend does, latest-wins, one search.
+   */
+  gestureInProgress?: boolean;
   /** Stable id for this settle (`preset:tokyo` or a bbox key). */
   settleKey?: string;
   /**
@@ -37,6 +55,9 @@ export function searchAfterViewportChange(input: {
   forceSettle?: boolean;
 }): { action: SearchTrigger; nextPresetKey?: string } {
   if (input.cameraBusy) {
+    return { action: 'skip' };
+  }
+  if (input.gestureInProgress) {
     return { action: 'skip' };
   }
   if (!input.leftPreset) {

@@ -9,7 +9,7 @@ import {
   startListHeadingRequest,
 } from './list-heading-state';
 import { LOCATION_PRESETS } from './locations';
-import { searchAfterViewportChange } from './search-debounce';
+import { lastKeyAfterLeavingPreset, searchAfterViewportChange } from './search-debounce';
 import {
   DRAWER_OCCUPIED,
   DRAWER_WIDTH,
@@ -39,6 +39,7 @@ import {
   clusterPointerMoved,
   createGestureBoundsState,
   isGenuineClusterClick,
+  isGestureSearchPending,
   shouldFlushGestureBounds,
   shouldHoldPointerForFlight,
   shouldReapplyNarrowFitAfterFlight,
@@ -1426,16 +1427,30 @@ function createBusyFlightSession() {
   let pendingSearch: { requestId: number } | null = { requestId: 1 };
   let heading = createListHeadingMachine();
   heading = startListHeadingRequest(heading);
-  const handleFlyComplete = (nonce?: number, kind?: FlightEndKind) => {
+  const liveBoundsKey = 'live-bounds';
+  const applyLeavePreset = (gestureSearchPending = false) => {
+    lastKey = lastKeyAfterLeavingPreset({
+      boundsKey: liveBoundsKey,
+      gestureSearchPending,
+    });
+    leftPreset = true;
+  };
+  const handleFlyComplete = (
+    nonce?: number,
+    kind?: FlightEndKind,
+    opts?: { gestureSearchPending?: boolean }
+  ) => {
     if (!flyRequest) return;
     if (nonce != null && flyRequest.nonce !== nonce) return;
     flyRequest = null;
     if (kind === 'user-interrupt') {
       heading = startListHeadingRequest(heading);
       pendingSearch = null;
-      lastKey = '';
-      leftPreset = true;
+      applyLeavePreset(Boolean(opts?.gestureSearchPending));
     }
+  };
+  const handleUserCameraMove = (info?: { gestureSearchPending?: boolean }) => {
+    applyLeavePreset(Boolean(info?.gestureSearchPending));
   };
   const onPresetEnd = (reason: CameraEndReason = 'complete') => {
     presetReasons.push(reason);
@@ -1446,6 +1461,7 @@ function createBusyFlightSession() {
   return {
     cameraBusy,
     handleFlyComplete,
+    handleUserCameraMove,
     onPresetEnd,
     presetReasons,
     get flyRequest() {
@@ -1839,6 +1855,163 @@ test('a mid-flight drag searches once at the drag end', () => {
   consider(false, false, 'mouseup');
   consider(false, false, 'drag-moveend');
   assert.deepEqual(searches, ['mouseup']);
+});
+
+test('isGestureSearchPending is true while a pointer is held or a wheel/drag has not flushed', () => {
+  assert.equal(
+    isGestureSearchPending({ pointerDown: true, gesture: createGestureBoundsState() }),
+    true
+  );
+  assert.equal(
+    isGestureSearchPending({ pointerDown: false, gesture: createGestureBoundsState() }),
+    false
+  );
+  const pointer = beginUserGesture(createGestureBoundsState(), 'pointer');
+  assert.equal(isGestureSearchPending({ pointerDown: false, gesture: pointer }), true);
+  assert.equal(
+    isGestureSearchPending({
+      pointerDown: false,
+      gesture: { ...pointer, reportedId: pointer.gestureId },
+    }),
+    false
+  );
+  const wheel = beginUserGesture(createGestureBoundsState(), 'wheel');
+  assert.equal(isGestureSearchPending({ pointerDown: false, gesture: wheel }), true);
+  const key = beginUserGesture(createGestureBoundsState(), 'key');
+  assert.equal(isGestureSearchPending({ pointerDown: false, gesture: key }), false);
+});
+
+test('a drag mid-flight searches once after mouseup and not while the pointer is held', () => {
+  const session = createBusyFlightSession();
+  let gesture = beginUserGesture(createGestureBoundsState(), 'pointer');
+  const pending = isGestureSearchPending({ pointerDown: true, gesture });
+  assert.equal(pending, true);
+  session.handleUserCameraMove({ gestureSearchPending: pending });
+  session.handleFlyComplete(1, 'user-interrupt', { gestureSearchPending: pending });
+  assert.equal(session.lastKey, 'live-bounds');
+  assert.equal(session.leftPreset, true);
+  assert.equal(session.cameraBusy(), false);
+
+  const searches: string[] = [];
+  const pageSearch = (boundsKey: string, gestureInProgress: boolean) => {
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey,
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+      gestureInProgress,
+    });
+    if (decision.action === 'skip') return;
+    searches.push(boundsKey);
+    session.lastKey = decision.nextPresetKey ?? boundsKey;
+  };
+
+  pageSearch('live-bounds', true);
+  pageSearch('drag-mid', true);
+  assert.deepEqual(searches, [], 'interrupt settle must not search while the pointer is held');
+
+  const flush = shouldFlushGestureBounds({
+    pointerDown: false,
+    mapMoving: false,
+    gestureId: gesture.gestureId,
+    reportedId: gesture.reportedId,
+  });
+  assert.equal(flush.flush, true);
+  gesture = { ...gesture, reportedId: flush.reportedId };
+  pageSearch('mouseup-bounds', false);
+  assert.deepEqual(searches, ['mouseup-bounds']);
+
+  const again = shouldFlushGestureBounds({
+    pointerDown: false,
+    mapMoving: false,
+    gestureId: gesture.gestureId,
+    reportedId: gesture.reportedId,
+  });
+  assert.equal(again.flush, false);
+  pageSearch('mouseup-bounds', false);
+  assert.deepEqual(searches, ['mouseup-bounds']);
+});
+
+test('a wheel mid-flight searches once at wheel settle', () => {
+  const session = createBusyFlightSession();
+  const gesture = beginUserGesture(createGestureBoundsState(), 'wheel');
+  assert.equal(isGestureSearchPending({ pointerDown: false, gesture }), true);
+  session.handleUserCameraMove({ gestureSearchPending: true });
+  session.handleFlyComplete(1, 'user-interrupt', { gestureSearchPending: true });
+  assert.equal(session.lastKey, 'live-bounds');
+
+  const searches: string[] = [];
+  const pageSearch = (boundsKey: string, gestureInProgress: boolean) => {
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey,
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+      gestureInProgress,
+    });
+    if (decision.action === 'skip') return;
+    searches.push(boundsKey);
+    session.lastKey = decision.nextPresetKey ?? boundsKey;
+  };
+
+  pageSearch('live-bounds', true);
+  pageSearch('wheel-mid', true);
+  assert.deepEqual(searches, [], 'interrupt settle must not search during the wheel burst');
+
+  const flush = shouldFlushGestureBounds({
+    pointerDown: false,
+    mapMoving: false,
+    gestureId: gesture.gestureId,
+    reportedId: gesture.reportedId,
+  });
+  assert.equal(flush.flush, true);
+  pageSearch('wheel-end', false);
+  assert.deepEqual(searches, ['wheel-end']);
+});
+
+test('Enter or space Zoom flip, or a no-move Map area flip, still searches once', () => {
+  for (const key of ['Enter', ' ']) {
+    assert.equal(isCameraKey({ type: 'keydown', key }), false, key);
+  }
+
+  const zoomSession = createBusyFlightSession();
+  zoomSession.handleUserCameraMove();
+  assert.equal(zoomSession.lastKey, '');
+  zoomSession.flyRequest = null;
+  zoomSession.mapCameraBusy = true;
+  assert.equal(
+    searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: 'live-bounds',
+      lastPresetKey: zoomSession.lastKey,
+      cameraBusy: true,
+      gestureInProgress: false,
+    }).action,
+    'skip'
+  );
+  zoomSession.mapCameraBusy = false;
+  const zoomSearch = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'zoom-end-bounds',
+    lastPresetKey: zoomSession.lastKey,
+    cameraBusy: false,
+    gestureInProgress: false,
+  });
+  assert.equal(zoomSearch.action, 'moveend');
+  assert.equal(zoomSearch.nextPresetKey, 'zoom-end-bounds');
+
+  const flip = createBusyFlightSession();
+  flip.handleFlyComplete(1, 'user-interrupt');
+  assert.equal(flip.lastKey, '');
+  const noMove = searchAfterViewportChange({
+    leftPreset: true,
+    boundsKey: 'live-bounds',
+    lastPresetKey: flip.lastKey,
+    cameraBusy: false,
+    gestureInProgress: false,
+  });
+  assert.equal(noMove.action, 'moveend');
+  assert.equal(noMove.nextPresetKey, 'live-bounds');
 });
 
 test('wheel mid-flight at 1440 and 768 interrupts London and Worldwide', () => {

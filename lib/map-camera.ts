@@ -1632,6 +1632,17 @@ export function createGestureBoundsState(): GestureBoundsState {
   return { gestureId: 0, reportedId: null, kind: 'pointer' };
 }
 
+/** True while a pointer/wheel gesture still owes a bounds search. */
+export function isGestureSearchPending(input: {
+  pointerDown: boolean;
+  gesture: Pick<GestureBoundsState, 'kind' | 'gestureId' | 'reportedId'>;
+}): boolean {
+  if (input.pointerDown) return true;
+  if (input.gesture.gestureId === 0) return false;
+  if (input.gesture.reportedId === input.gesture.gestureId) return false;
+  return input.gesture.kind === 'pointer' || input.gesture.kind === 'wheel';
+}
+
 /** New pointer/key starts a settle. Extra wheels in the same burst keep the id. */
 export function beginUserGesture(
   state: GestureBoundsState,

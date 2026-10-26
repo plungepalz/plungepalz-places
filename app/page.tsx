@@ -45,6 +45,7 @@ import {
 } from '@/lib/map-style';
 import { createPlaceHoverController } from '@/lib/place-hover';
 import {
+  lastKeyAfterLeavingPreset,
   rememberSettleKeyOnDispatch,
   searchAfterViewportChange,
   searchDebounceMs,
@@ -97,6 +98,7 @@ export default function HomePage() {
   const [viewportHeight, setViewportHeight] = useState(900);
   const mapBoundsRef = useRef<MapBounds | null>(null);
   const lastPresetBoundsKeyRef = useRef('');
+  const gestureSearchPendingRef = useRef(false);
   const headingMachineRef = useRef(createListHeadingMachine());
   const searchContextRef = useRef({
     hasMap: false,
@@ -294,6 +296,7 @@ export default function HomePage() {
   );
 
   const handleViewportChange = useCallback((bounds: MapBounds, zoom: number) => {
+    gestureSearchPendingRef.current = false;
     mapBoundsRef.current = bounds;
     setMapBounds(bounds);
     setMapZoom(zoom);
@@ -355,6 +358,7 @@ export default function HomePage() {
       boundsKey: mapBoundsKey(leftPreset ? bounds : null),
       lastPresetKey: lastPresetBoundsKeyRef.current,
       cameraBusy,
+      gestureInProgress: gestureSearchPendingRef.current,
       settleKey: searchIdentity,
       forceSettle:
         headingMachineRef.current.heading == null && lastPresetBoundsKeyRef.current === '',
@@ -428,7 +432,11 @@ export default function HomePage() {
     }
   }, [places]);
 
-  const handleFlyComplete = useCallback((nonce?: number, kind?: FlightEndKind) => {
+  const handleFlyComplete = useCallback((
+    nonce?: number,
+    kind?: FlightEndKind,
+    info?: { gestureSearchPending?: boolean }
+  ) => {
     setFlyRequest((current) => {
       if (!current) return null;
       if (nonce != null && current.nonce !== nonce) return current;
@@ -437,9 +445,14 @@ export default function HomePage() {
     if (kind === 'user-interrupt') {
       headingMachineRef.current = startListHeadingRequest(headingMachineRef.current);
       pendingSearchRef.current = null;
-    lastPresetBoundsKeyRef.current = '';
-    setLeftPreset(true);
-    setHeading((prev) =>
+      const pending = Boolean(info?.gestureSearchPending);
+      gestureSearchPendingRef.current = pending;
+      lastPresetBoundsKeyRef.current = lastKeyAfterLeavingPreset({
+        boundsKey: mapBoundsKey(mapBoundsRef.current),
+        gestureSearchPending: pending,
+      });
+      setLeftPreset(true);
+      setHeading((prev) =>
         prev
           ? {
               ...prev,
@@ -451,8 +464,13 @@ export default function HomePage() {
     }
   }, []);
 
-  const handleUserCameraMove = useCallback(() => {
-    lastPresetBoundsKeyRef.current = '';
+  const handleUserCameraMove = useCallback((info?: { gestureSearchPending?: boolean }) => {
+    const pending = Boolean(info?.gestureSearchPending);
+    gestureSearchPendingRef.current = pending;
+    lastPresetBoundsKeyRef.current = lastKeyAfterLeavingPreset({
+      boundsKey: mapBoundsKey(mapBoundsRef.current),
+      gestureSearchPending: pending,
+    });
     setLeftPreset(true);
   }, []);
 
