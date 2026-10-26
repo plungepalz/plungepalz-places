@@ -12,10 +12,16 @@ import {
   cameraEaseOptions,
   cameraFlyOptions,
   cameraMoveendEffects,
+  attachUserFlightInputListeners,
+  beginUserGesture,
   classifyFlightEnd,
   clusterExpandCamera,
   clusterPointerMoved,
+  createGestureBoundsState,
+  gestureSettleMs,
   isGenuineClusterClick,
+  shouldFlushGestureBounds,
+  shouldReapplyNarrowFitAfterFlight,
   canvasBoxEquals,
   canvasFillStyle,
   canvasHostStyle,
@@ -43,10 +49,8 @@ import {
   scheduleMapResize,
   shouldApplyNarrowWorldwideAfterResize,
   shouldClearPaddingAfterFlight,
-  shouldJumpToNarrowWorldwideFit,
   shouldQueueClusterExpand,
   shouldReapplyNarrowWorldwide,
-  shouldSearchOnUserMoveend,
   abandonCameraAnimation,
   startCameraAnimation,
   type CameraEndReason,
@@ -54,6 +58,7 @@ import {
   type CameraMethod,
   type ClusterClickPointer,
   type FlightEndKind,
+  type GestureBoundsKind,
   type FlightTag,
   type MapResizeState,
   type SizeBox,
@@ -290,6 +295,10 @@ export default function PlacesMap({
   const pointerDownRef = useRef(false);
   const needsBoundsReportRef = useRef(false);
   const clusterExpandingRef = useRef(false);
+  const lastOriginalEventRef = useRef<{ type?: string } | null>(null);
+  const gestureRef = useRef(createGestureBoundsState());
+  const gestureTimerRef = useRef<number | null>(null);
+  const pendingWorldwideRefitRef = useRef(false);
   const pendingCameraRef = useRef<{
     tag: FlightTag;
     method: CameraMethod;
@@ -481,6 +490,15 @@ export default function PlacesMap({
     if (shouldReapplyNarrowWorldwide(leftPreset, location?.id ?? '', prev, slotSize)) {
       pendingNarrowWorldwideRef.current = true;
     }
+    if (
+      flyRequest?.exactZoom &&
+      location?.id === 'worldwide' &&
+      !leftPreset &&
+      prev &&
+      (prev.width !== slotSize.width || prev.height !== slotSize.height)
+    ) {
+      pendingWorldwideRefitRef.current = true;
+    }
     prevSlotForJumpRef.current = slotSize;
     let next = reduceCanvasMachine(canvasMachineRef.current, { type: 'viewport', viewport: slotSize });
     if (!pendingCameraRef.current && flyRequest) {
@@ -640,18 +658,79 @@ export default function PlacesMap({
     [collapseList, onCameraBusy, onUserCameraMove, queueProgrammaticCamera, reportViewport, slotSize]
   );
 
+  const scheduleGestureBoundsRef = useRef<(kind?: GestureBoundsKind) => void>(() => undefined);
+  const scheduleGestureBounds = useCallback(
+    (kind?: GestureBoundsKind) => {
+      const settleKind = kind ?? gestureRef.current.kind;
+      if (gestureTimerRef.current != null) {
+        window.clearTimeout(gestureTimerRef.current);
+      }
+      gestureTimerRef.current = window.setTimeout(() => {
+        gestureTimerRef.current = null;
+        const map = mapRef.current?.getMap();
+        const decision = shouldFlushGestureBounds({
+          pointerDown: pointerDownRef.current,
+          mapMoving: Boolean(map?.isMoving?.()),
+          gestureId: gestureRef.current.gestureId,
+          reportedId: gestureRef.current.reportedId,
+        });
+        if (!decision.flush) {
+          if (pointerDownRef.current || map?.isMoving?.()) {
+            scheduleGestureBoundsRef.current(settleKind);
+          }
+          return;
+        }
+        gestureRef.current = { ...gestureRef.current, reportedId: decision.reportedId };
+        needsBoundsReportRef.current = false;
+        reportViewport();
+        setClusterQueryTick((tick) => tick + 1);
+      }, gestureSettleMs(settleKind));
+    },
+    [reportViewport]
+  );
+
+  useEffect(() => {
+    scheduleGestureBoundsRef.current = scheduleGestureBounds;
+  }, [scheduleGestureBounds]);
+
   const reportAfterUserGesture = useCallback(() => {
-    if (pointerDownRef.current) {
-      needsBoundsReportRef.current = true;
-      return;
-    }
-    needsBoundsReportRef.current = false;
-    reportViewport();
-  }, [reportViewport]);
+    needsBoundsReportRef.current = true;
+    scheduleGestureBounds();
+  }, [scheduleGestureBounds]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    return attachUserFlightInputListeners(
+      el,
+      () => Boolean(flyEndHandlerRef.current) || isProgrammaticFlightTag(flightTagRef.current),
+      (type) => {
+        userInputRef.current = true;
+        lastOriginalEventRef.current = { type };
+        if (type === 'pointerdown' || type === 'touchstart') {
+          pointerDownRef.current = true;
+          gestureRef.current = beginUserGesture(gestureRef.current, 'pointer');
+        } else if (type === 'wheel') {
+          gestureRef.current = beginUserGesture(gestureRef.current, 'wheel');
+        } else {
+          gestureRef.current = beginUserGesture(gestureRef.current, 'key');
+        }
+      }
+    );
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (gestureTimerRef.current != null) {
+        window.clearTimeout(gestureTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     flushPendingCamera(canvasLayout);
-  }, [canvasLayout, flushPendingCamera]);
+    applyNarrowWorldwideAfterResize();
+  }, [applyNarrowWorldwideAfterResize, canvasLayout, flushPendingCamera]);
 
   const handleLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -845,6 +924,7 @@ export default function PlacesMap({
       const kind = classifyFlightEnd({
         animationReason: reason,
         userInputActive: userInputRef.current,
+        originalEvent: lastOriginalEventRef.current,
       });
       commitCanvas(reduceCanvasMachine(canvasMachineRef.current, { type: 'flightEnd', zoom: endedZoom }));
       if (kind === 'complete') {
@@ -860,11 +940,17 @@ export default function PlacesMap({
         }
         reportViewport();
         const onChip = jumpContextRef.current;
-        if (
-          onChip.location?.id === 'worldwide' &&
-          !onChip.leftPreset &&
-          shouldJumpToNarrowWorldwideFit(false, 'worldwide', onChip.slotSize, endedZoom)
-        ) {
+        const needFit =
+          pendingWorldwideRefitRef.current ||
+          shouldReapplyNarrowFitAfterFlight({
+            kind: 'complete',
+            leftPreset: onChip.leftPreset,
+            locationId: onChip.location?.id ?? '',
+            viewport: onChip.slotSize,
+            liveZoom: endedZoom,
+          });
+        pendingWorldwideRefitRef.current = false;
+        if (needFit && onChip.location?.id === 'worldwide' && !onChip.leftPreset) {
           pendingNarrowWorldwideRef.current = true;
           commitCanvas(
             reduceCanvasMachine(canvasMachineRef.current, {
@@ -875,8 +961,12 @@ export default function PlacesMap({
           );
         }
       } else if (kind === 'user-interrupt') {
+        pendingWorldwideRefitRef.current = false;
+        pendingNarrowWorldwideRef.current = false;
         onUserCameraMove?.();
         reportAfterUserGesture();
+      } else {
+        pendingWorldwideRefitRef.current = false;
       }
       if (kind !== 'replaced' && flightTagRef.current === endedTag) {
         flightTagRef.current = null;
@@ -1187,15 +1277,19 @@ export default function PlacesMap({
         userInputActive: userInputRef.current,
         zoomChanged,
       });
+      if (isUserGestureEvent(event as { originalEvent?: unknown })) {
+        lastOriginalEventRef.current = (event as { originalEvent?: { type?: string } }).originalEvent ?? {
+          type: 'move',
+        };
+      }
       if (effects.leavePreset) {
         onUserCameraMove?.();
       }
-      if (effects.reportBounds && shouldSearchOnUserMoveend({ pointerDown: pointerDownRef.current })) {
-        needsBoundsReportRef.current = false;
+      if (needsBoundsReportRef.current) {
+        scheduleGestureBounds(gestureRef.current.kind);
+      } else if (effects.reportBounds) {
         reportViewport();
         setClusterQueryTick((tick) => tick + 1);
-      } else if (effects.reportBounds) {
-        needsBoundsReportRef.current = true;
       }
       if (tag === 'resize' || effects.leavePreset) {
         flightTagRef.current = null;
@@ -1206,7 +1300,7 @@ export default function PlacesMap({
         zoomMovedRef.current = false;
       }
     },
-    [handleMove, onUserCameraMove, reportViewport]
+    [handleMove, onUserCameraMove, reportViewport, scheduleGestureBounds]
   );
 
   const pinHint = locationPickMode ? (

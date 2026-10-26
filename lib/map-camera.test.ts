@@ -31,9 +31,15 @@ import {
   cameraReachedTarget,
   cameraSeparation,
   cappedFlyDuration,
+  attachUserFlightInputListeners,
+  beginUserGesture,
   classifyFlightEnd,
   clusterPointerMoved,
+  createGestureBoundsState,
   isGenuineClusterClick,
+  shouldFlushGestureBounds,
+  shouldReapplyNarrowFitAfterFlight,
+  shouldStampUserInputDuringFlight,
   easeOutCubic,
   flyPadding,
   flyToThenOnMoveend,
@@ -1645,10 +1651,18 @@ test('a mid-flight drag searches once at the drag end', () => {
   assert.equal(shouldSearchOnUserMoveend({ pointerDown: true }), false);
   assert.equal(shouldSearchOnUserMoveend({ pointerDown: false }), true);
 
-  let lastKey = 'preset:london';
+  let gesture = beginUserGesture(createGestureBoundsState(), 'pointer');
   const searches: string[] = [];
-  const consider = (pointerDown: boolean, boundsKey: string) => {
-    if (!shouldSearchOnUserMoveend({ pointerDown })) return;
+  let lastKey = 'preset:london';
+  const consider = (pointerDown: boolean, mapMoving: boolean, boundsKey: string) => {
+    const flush = shouldFlushGestureBounds({
+      pointerDown,
+      mapMoving,
+      gestureId: gesture.gestureId,
+      reportedId: gesture.reportedId,
+    });
+    if (!flush.flush) return;
+    gesture = { ...gesture, reportedId: flush.reportedId };
     const decision = searchAfterViewportChange({
       leftPreset: true,
       boundsKey,
@@ -1659,10 +1673,121 @@ test('a mid-flight drag searches once at the drag end', () => {
     lastKey = decision.nextPresetKey ?? boundsKey;
     searches.push(boundsKey);
   };
-  consider(true, 'stop-mid-flight');
-  consider(true, 'still-dragging');
-  consider(false, 'drag-end');
-  assert.deepEqual(searches, ['drag-end']);
+  consider(true, true, 'stop-mid-flight');
+  consider(false, false, 'mouseup');
+  consider(false, false, 'drag-moveend');
+  assert.deepEqual(searches, ['mouseup']);
+});
+
+test('wheel mid-flight at 1440 and 768 interrupts London and Worldwide', () => {
+  const london = LOCATION_PRESETS.find((item) => item.id === 'london') ?? {
+    id: 'london',
+    label: 'London',
+    lat: 51.5,
+    lng: -0.12,
+    zoom: 9,
+    radiusKm: 40,
+  };
+  const worldwide = LOCATION_PRESETS.find((item) => item.id === 'worldwide')!;
+  const cases = [
+    { preset: london, viewport: { width: 1440, height: 900 }, liveZoom: 6.4 },
+    { preset: london, viewport: { width: 768, height: 900 }, liveZoom: 10.5 },
+    { preset: worldwide, viewport: { width: 1440, height: 900 }, liveZoom: 1.9 },
+    { preset: worldwide, viewport: { width: 768, height: 900 }, liveZoom: 1.3 },
+  ];
+  for (const item of cases) {
+    assert.equal(shouldStampUserInputDuringFlight(true, 'wheel'), true, item.preset.id);
+    const kind = classifyFlightEnd({
+      animationReason: 'complete',
+      userInputActive: true,
+      originalEvent: { type: 'wheel' },
+    });
+    assert.equal(kind, 'user-interrupt', item.preset.id);
+    assert.equal(
+      shouldReapplyNarrowFitAfterFlight({
+        kind,
+        leftPreset: false,
+        locationId: item.preset.id,
+        viewport: item.viewport,
+        liveZoom: item.liveZoom,
+      }),
+      false,
+      `${item.preset.id} ${item.viewport.width} must not jumpTo the Worldwide floor`
+    );
+    assert.equal(
+      classifyFlightEnd({
+        animationReason: 'complete',
+        userInputActive: false,
+        originalEvent: { type: 'wheel' },
+      }),
+      'user-interrupt',
+      'Mapbox originalEvent wheel is an interrupt'
+    );
+    const session = createBusyFlightSession();
+    session.handleFlyComplete(1, kind);
+    assert.equal(session.leftPreset, true);
+    const decision = searchAfterViewportChange({
+      leftPreset: true,
+      boundsKey: `wheel-end-${item.preset.id}-${item.viewport.width}`,
+      lastPresetKey: session.lastKey,
+      cameraBusy: false,
+    });
+    assert.equal(decision.action, 'moveend');
+  }
+});
+
+test('capture-phase listeners stamp user input only while a flight is active', () => {
+  const calls: string[] = [];
+  const listeners = new Map<string, { fn: (event: Event) => void; capture?: boolean }>();
+  const el = {
+    addEventListener(
+      type: string,
+      listener: (event: Event) => void,
+      options?: { capture?: boolean }
+    ) {
+      listeners.set(type, { fn: listener, capture: options?.capture });
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+  };
+  let flightActive = true;
+  const stop = attachUserFlightInputListeners(el, () => flightActive, (type) => calls.push(type));
+  assert.equal(listeners.get('wheel')?.capture, true);
+  assert.equal(listeners.get('pointerdown')?.capture, true);
+  listeners.get('wheel')?.fn({ type: 'wheel' } as Event);
+  listeners.get('pointerdown')?.fn({ type: 'pointerdown' } as Event);
+  assert.deepEqual(calls, ['wheel', 'pointerdown']);
+  flightActive = false;
+  listeners.get('wheel')?.fn({ type: 'wheel' } as Event);
+  assert.deepEqual(calls, ['wheel', 'pointerdown']);
+  stop();
+  assert.equal(listeners.size, 0);
+});
+
+test('resize mid-Worldwide flight re-applies the narrow fit when it settles', () => {
+  const compact = { width: 768, height: 900 };
+  assert.equal(
+    shouldReapplyNarrowFitAfterFlight({
+      kind: 'complete',
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      liveZoom: 0.81,
+    }),
+    true
+  );
+  assert.equal(
+    shouldReapplyNarrowFitAfterFlight({
+      kind: 'user-interrupt',
+      leftPreset: false,
+      locationId: 'worldwide',
+      viewport: compact,
+      liveZoom: 0.81,
+    }),
+    false
+  );
+  assert.equal(isUserMapMove({ originalEvent: { type: 'resize' } }, 'preset'), false);
 });
 
 test('zoom interrupting a card fly lets the next drag search', () => {

@@ -1372,10 +1372,70 @@ export function classifyFlightEnd(input: {
   animationReason: CameraEndReason;
   reachedTarget?: boolean;
   userInputActive: boolean;
+  originalEvent?: { type?: string } | null;
 }): FlightEndKind {
   if (input.animationReason === 'interrupted') return 'replaced';
-  if (input.userInputActive) return 'user-interrupt';
+  if (input.userInputActive || isUserGestureEvent({ originalEvent: input.originalEvent })) {
+    return 'user-interrupt';
+  }
   return 'complete';
+}
+
+/** Capture-phase events that stamp user input while a programmatic camera is running. */
+export const USER_FLIGHT_INPUT_EVENTS = ['pointerdown', 'wheel', 'touchstart', 'keydown'] as const;
+
+export function shouldStampUserInputDuringFlight(
+  flightActive: boolean,
+  eventType: string
+): boolean {
+  return flightActive && (USER_FLIGHT_INPUT_EVENTS as readonly string[]).includes(eventType);
+}
+
+export function attachUserFlightInputListeners(
+  target: {
+    addEventListener: (
+      type: string,
+      listener: (event: Event) => void,
+      options?: { capture?: boolean }
+    ) => void;
+    removeEventListener: (
+      type: string,
+      listener: (event: Event) => void,
+      options?: { capture?: boolean }
+    ) => void;
+  },
+  isFlightActive: () => boolean,
+  onUserInput: (type: string) => void
+): () => void {
+  const listener = (event: Event) => {
+    if (!shouldStampUserInputDuringFlight(isFlightActive(), event.type)) return;
+    onUserInput(event.type);
+  };
+  for (const type of USER_FLIGHT_INPUT_EVENTS) {
+    target.addEventListener(type, listener, { capture: true });
+  }
+  return () => {
+    for (const type of USER_FLIGHT_INPUT_EVENTS) {
+      target.removeEventListener(type, listener, { capture: true });
+    }
+  };
+}
+
+/** Narrow-fit jumpTo only after a completed (not interrupted) Worldwide flight. */
+export function shouldReapplyNarrowFitAfterFlight(input: {
+  kind: FlightEndKind;
+  leftPreset: boolean;
+  locationId: string;
+  viewport: SizeBox;
+  liveZoom: number;
+}): boolean {
+  if (input.kind !== 'complete') return false;
+  return shouldJumpToNarrowWorldwideFit(
+    input.leftPreset,
+    input.locationId,
+    input.viewport,
+    input.liveZoom
+  );
 }
 
 /** Cluster clicks are swallowed after mousedown-on-moving-map; queue them. */
@@ -1423,6 +1483,58 @@ export function isGenuineClusterClick(input: {
 /** Search the interrupted camera once the pointer is up, not on every mid-drag moveend. */
 export function shouldSearchOnUserMoveend(input: { pointerDown: boolean }): boolean {
   return !input.pointerDown;
+}
+
+export const GESTURE_SETTLE_MS = {
+  pointer: 0,
+  wheel: 200,
+} as const;
+
+export type GestureBoundsKind = 'pointer' | 'wheel' | 'key';
+
+export interface GestureBoundsState {
+  gestureId: number;
+  reportedId: number | null;
+  kind: GestureBoundsKind;
+}
+
+export function createGestureBoundsState(): GestureBoundsState {
+  return { gestureId: 0, reportedId: null, kind: 'pointer' };
+}
+
+/** New pointer/key starts a settle. Extra wheels in the same burst keep the id. */
+export function beginUserGesture(
+  state: GestureBoundsState,
+  kind: GestureBoundsKind
+): GestureBoundsState {
+  if (kind === 'wheel' && state.kind === 'wheel' && state.reportedId !== state.gestureId) {
+    return { ...state, kind };
+  }
+  return { gestureId: state.gestureId + 1, reportedId: null, kind };
+}
+
+export function gestureSettleMs(kind: GestureBoundsKind): number {
+  return kind === 'wheel' ? GESTURE_SETTLE_MS.wheel : GESTURE_SETTLE_MS.pointer;
+}
+
+/**
+ * One bounds report per gesture, after pointer-up and the camera is idle.
+ * The interrupted flight's stop() moveend and the drag's own moveend share
+ * the same gesture id so they produce one search.
+ */
+export function shouldFlushGestureBounds(input: {
+  pointerDown: boolean;
+  mapMoving: boolean;
+  gestureId: number;
+  reportedId: number | null;
+}): { flush: boolean; reportedId: number | null } {
+  if (input.pointerDown || input.mapMoving) {
+    return { flush: false, reportedId: input.reportedId };
+  }
+  if (input.reportedId === input.gestureId) {
+    return { flush: false, reportedId: input.reportedId };
+  }
+  return { flush: true, reportedId: input.gestureId };
 }
 
 export interface CameraHandlerRef {
