@@ -50,6 +50,7 @@ import {
   isProgrammaticCanvasMove,
   isProgrammaticFlightTag,
   isMapControlTarget,
+  isMapboxKeyboardTarget,
   isUserGestureEvent,
   isShortCameraHop,
   isShortPlaceHop,
@@ -80,6 +81,7 @@ import {
   formatCssRgb,
   parseCssColor,
   claimFlyNonce,
+  nextFlyNonce,
   defaultCompactList,
   STREETS_LOW_ZOOM_OCEAN,
   STREETS_LOW_ZOOM_OCEAN_MAX,
@@ -1273,7 +1275,7 @@ function createBusyFlightSession() {
     if (kind === 'user-interrupt') {
       heading = startListHeadingRequest(heading);
       pendingSearch = null;
-      lastKey = 'current-bounds';
+      lastKey = '';
       leftPreset = true;
     }
   };
@@ -1534,21 +1536,19 @@ test('user interrupt of a preset cancels settle and bounds-searches Map area onc
   assert.equal(session.pendingSearch, null);
   assert.equal(shouldApplySettledSearch(1, session.heading), false);
 
-  assert.equal(
-    searchAfterViewportChange({
-      leftPreset: session.leftPreset,
-      boundsKey: session.lastKey,
-      lastPresetKey: session.lastKey,
-      cameraBusy: false,
-    }).action,
-    'skip',
-    'interrupt must not search until bounds change'
-  );
+  assert.equal(session.lastKey, '', 'chip flip must not mark the live bounds as already searched');
+  const sameBounds = searchAfterViewportChange({
+    leftPreset: session.leftPreset,
+    boundsKey: 'live-bounds',
+    lastPresetKey: session.lastKey,
+    cameraBusy: false,
+  });
+  assert.equal(sameBounds.action, 'moveend', 'Map area chip flip must search even when the camera did not move');
 
   const decision = searchAfterViewportChange({
     leftPreset: session.leftPreset,
     boundsKey: 'mid-flight-stop',
-    lastPresetKey: session.lastKey,
+    lastPresetKey: sameBounds.nextPresetKey ?? session.lastKey,
     cameraBusy: false,
   });
   assert.equal(decision.action, 'moveend');
@@ -1784,11 +1784,35 @@ test('Escape, Tab, and letters mid-flight are not camera input; a later preset s
     );
     assert.equal(isUserGestureEvent({ originalEvent: { type: 'keydown', key } }), false, key);
   }
+  const canvasTarget = {
+    closest(sel: string) {
+      return sel === 'canvas' || sel === '[data-map-canvas]' || sel === '[data-map-canvas-host]'
+        ? canvasTarget
+        : null;
+    },
+  };
   for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '-', '=', '_']) {
     assert.equal(isCameraKey({ type: 'keydown', key }), true, key);
-    assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key }), true, key);
+    assert.equal(
+      shouldStampUserInputDuringFlight(true, {
+        type: 'keydown',
+        key,
+        target: canvasTarget as unknown as EventTarget,
+      }),
+      true,
+      key
+    );
   }
-  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'ArrowLeft', shiftKey: true }), true);
+  assert.equal(
+    shouldStampUserInputDuringFlight(true, {
+      type: 'keydown',
+      key: 'ArrowLeft',
+      shiftKey: true,
+      target: canvasTarget as unknown as EventTarget,
+    }),
+    true
+  );
+  assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'ArrowLeft' }), false);
   assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'PageDown' }), false);
   assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'Home' }), false);
   assert.equal(shouldStampUserInputDuringFlight(true, { type: 'keydown', key: 'End' }), false);
@@ -1808,7 +1832,11 @@ test('Escape, Tab, and letters mid-flight are not camera input; a later preset s
   listeners.get('keydown')?.fn({ type: 'keydown', key: 'Escape' } as KeyboardEvent);
   listeners.get('keydown')?.fn({ type: 'keydown', key: 'Tab' } as KeyboardEvent);
   listeners.get('keydown')?.fn({ type: 'keydown', key: 'a' } as KeyboardEvent);
-  listeners.get('keydown')?.fn({ type: 'keydown', key: 'ArrowLeft' } as KeyboardEvent);
+  listeners.get('keydown')?.fn({
+    type: 'keydown',
+    key: 'ArrowLeft',
+    target: canvasTarget,
+  } as unknown as KeyboardEvent);
   assert.deepEqual(calls, ['keydown']);
   stop();
 
@@ -1844,11 +1872,119 @@ test('Escape, Tab, and letters mid-flight are not camera input; a later preset s
   assert.equal(tokyo.nextPresetKey, 'preset:tokyo');
 });
 
+test('Arrow and +/- keys on Zoom or Locate do not stamp mid-flight; canvas keys do', () => {
+  const canvas = {
+    closest(sel: string) {
+      return sel === 'canvas' || sel === '[data-map-canvas]' || sel === '[data-map-canvas-host]' ? canvas : null;
+    },
+  };
+  const host = {
+    closest(sel: string) {
+      return sel === '[data-map-canvas-host]' || sel === '[data-map-canvas]' ? host : null;
+    },
+  };
+  const zoom = {
+    closest(sel: string) {
+      return sel === '[data-map-controls]' || sel === 'button' ? zoom : null;
+    },
+  };
+  const locate = {
+    closest(sel: string) {
+      return sel === '[data-map-controls]' || sel === 'button' ? locate : null;
+    },
+  };
+  assert.equal(isMapboxKeyboardTarget(canvas as unknown as EventTarget), true);
+  assert.equal(isMapboxKeyboardTarget(host as unknown as EventTarget), true);
+  assert.equal(isMapboxKeyboardTarget(zoom as unknown as EventTarget), false);
+  assert.equal(isMapboxKeyboardTarget(locate as unknown as EventTarget), false);
+
+  for (const key of ['ArrowLeft', 'ArrowUp', '+', '-', '=', '_']) {
+    assert.equal(
+      shouldStampUserInputDuringFlight(true, {
+        type: 'keydown',
+        key,
+        target: zoom as unknown as EventTarget,
+      }),
+      false,
+      `Zoom ${key}`
+    );
+    assert.equal(
+      shouldStampUserInputDuringFlight(true, {
+        type: 'keydown',
+        key,
+        target: locate as unknown as EventTarget,
+      }),
+      false,
+      `Locate ${key}`
+    );
+    assert.equal(
+      classifyFlightEnd({
+        animationReason: 'complete',
+        userInputActive: false,
+        originalEvent: { type: 'keydown', key },
+      }),
+      'complete',
+      key
+    );
+    assert.equal(
+      shouldStampUserInputDuringFlight(true, {
+        type: 'keydown',
+        key,
+        target: canvas as unknown as EventTarget,
+      }),
+      true,
+      `canvas ${key}`
+    );
+  }
+
+  const listeners = new Map<string, { fn: (event: Event) => void }>();
+  const el = {
+    addEventListener(type: string, listener: (event: Event) => void) {
+      listeners.set(type, { fn: listener });
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+  };
+  const calls: string[] = [];
+  const stop = attachUserFlightInputListeners(el, () => true, (type) => calls.push(type));
+  for (const key of ['ArrowLeft', '+', '-']) {
+    listeners.get('keydown')?.fn({ type: 'keydown', key, target: zoom } as unknown as KeyboardEvent);
+    listeners.get('keydown')?.fn({ type: 'keydown', key, target: locate } as unknown as KeyboardEvent);
+  }
+  listeners.get('keydown')?.fn({
+    type: 'keydown',
+    key: 'ArrowLeft',
+    target: canvas,
+  } as unknown as KeyboardEvent);
+  assert.deepEqual(calls, ['keydown']);
+  stop();
+
+  const session = createBusyFlightSession();
+  const kind = classifyFlightEnd({
+    animationReason: 'complete',
+    userInputActive: false,
+    originalEvent: { type: 'keydown', key: 'ArrowLeft' },
+  });
+  session.handleFlyComplete(1, kind);
+  assert.equal(session.leftPreset, false, 'focused Zoom arrows must commit the preset');
+  assert.equal(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: 'london-bounds',
+      lastPresetKey: '',
+      cameraBusy: false,
+      settleKey: 'preset:london',
+    }).action,
+    'filters'
+  );
+});
+
 test('interrupt with no search still lets a later preset filters-search', () => {
   const session = createBusyFlightSession();
   session.handleFlyComplete(1, 'user-interrupt');
   assert.equal(session.leftPreset, true);
-  assert.equal(session.lastKey, 'current-bounds');
+  assert.equal(session.lastKey, '');
   assert.equal(
     searchAfterViewportChange({
       leftPreset: true,
@@ -1856,8 +1992,8 @@ test('interrupt with no search still lets a later preset filters-search', () => 
       lastPresetKey: session.lastKey,
       cameraBusy: false,
     }).action,
-    'skip',
-    'same-bounds interrupt must not search until bounds change'
+    'moveend',
+    'Map area chip flip must search even when bounds did not change'
   );
 
   session.lastKey = '';
@@ -2089,6 +2225,10 @@ test('a preset produces exactly one camera method call including setCenter/jumpT
   assert.deepEqual(methods, ['flyTo']);
   assert.ok(move.duration + 200 <= 2600);
   assert.equal(claimFlyNonce(started, nonce + 1), true);
+  const first = nextFlyNonce(0, 1_700_000_000_000);
+  const sameMs = nextFlyNonce(first, first);
+  assert.equal(sameMs, first + 1, 'Tokyo then Worldwide in the same millisecond must not share a nonce');
+  assert.equal(claimFlyNonce({ current: first }, sameMs), true);
 });
 
 test('unpadded preset fly has no extra jumpTo; padded flight may add one', () => {

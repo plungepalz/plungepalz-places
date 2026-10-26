@@ -298,7 +298,12 @@ export default function PlacesMap({
   const pointerDownRef = useRef(false);
   const needsBoundsReportRef = useRef(false);
   const clusterExpandingRef = useRef(false);
-  const lastOriginalEventRef = useRef<{ type?: string; key?: string; code?: string } | null>(null);
+  const lastOriginalEventRef = useRef<{
+    type?: string;
+    key?: string;
+    code?: string;
+    target?: EventTarget | null;
+  } | null>(null);
   const gestureRef = useRef(createGestureBoundsState());
   const gestureTimerRef = useRef<number | null>(null);
   const pendingWorldwideRefitRef = useRef(false);
@@ -714,7 +719,12 @@ export default function PlacesMap({
         }
         userInputRef.current = true;
         const keyEvent = event as KeyboardEvent;
-        lastOriginalEventRef.current = { type, key: keyEvent.key, code: keyEvent.code };
+        lastOriginalEventRef.current = {
+          type,
+          key: keyEvent.key,
+          code: keyEvent.code,
+          target: event.target,
+        };
         if (type === 'pointerdown' || type === 'touchstart') {
           if (shouldHoldPointerForFlight({ type, target: event.target })) {
             pointerDownRef.current = true;

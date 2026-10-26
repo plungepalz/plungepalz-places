@@ -23,6 +23,7 @@ import { listLocationName, locationChipLabel } from '@/lib/list-location-name';
 import { LOCATION_PRESETS, type LocationPreset } from '@/lib/locations';
 import {
   defaultCompactList,
+  nextFlyNonce,
   shouldCollapseList,
   shouldReapplyNarrowWorldwide,
   shouldReapplyPresetOnSizeChange,
@@ -112,6 +113,7 @@ export default function HomePage() {
   const [compactBarHeight, setCompactBarHeight] = useState(56);
   const leftPresetRef = useRef(leftPreset);
   const locationRef = useRef(location);
+  const flyNonceRef = useRef(0);
   const prevViewportRef = useRef<SizeBox | null>(null);
   const cameraBusyRef = useRef(false);
   const pendingSearchRef = useRef<{
@@ -387,7 +389,7 @@ export default function HomePage() {
     setLocation(next);
     setMapZoom(next.zoom);
     setFlyRequest({
-      nonce: Date.now(),
+      nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)),
       longitude: next.lng,
       latitude: next.lat,
       zoom: next.zoom,
@@ -406,7 +408,7 @@ export default function HomePage() {
     setAddPlaceOpen(false);
     if (place) {
       setLeftPreset(true);
-      setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
+      setFlyRequest({ nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)), longitude: place.lng, latitude: place.lat, zoom: 12 });
     }
   }, [places]);
 
@@ -417,7 +419,7 @@ export default function HomePage() {
     setAddPlaceOpen(false);
     if (place) {
       setFlyRequest({
-        nonce: Date.now(),
+        nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)),
         longitude: place.lng,
         latitude: place.lat,
         ease: true,
@@ -435,9 +437,9 @@ export default function HomePage() {
     if (kind === 'user-interrupt') {
       headingMachineRef.current = startListHeadingRequest(headingMachineRef.current);
       pendingSearchRef.current = null;
-      lastPresetBoundsKeyRef.current = mapBoundsKey(mapBoundsRef.current);
-      setLeftPreset(true);
-      setHeading((prev) =>
+    lastPresetBoundsKeyRef.current = '';
+    setLeftPreset(true);
+    setHeading((prev) =>
         prev
           ? {
               ...prev,
@@ -450,7 +452,7 @@ export default function HomePage() {
   }, []);
 
   const handleUserCameraMove = useCallback(() => {
-    lastPresetBoundsKeyRef.current = mapBoundsKey(mapBoundsRef.current);
+    lastPresetBoundsKeyRef.current = '';
     setLeftPreset(true);
   }, []);
 
@@ -489,7 +491,7 @@ export default function HomePage() {
     setSelectedPlaceId(place.place_id);
     setDetailsPlaceId(place.place_id);
     setLeftPreset(true);
-    setFlyRequest({ nonce: Date.now(), longitude: place.lng, latitude: place.lat, zoom: 12 });
+    setFlyRequest({ nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)), longitude: place.lng, latitude: place.lat, zoom: 12 });
     setSuccessMessage('Place submitted. It is pending review and is not approved yet.');
   };
 
@@ -568,7 +570,7 @@ export default function HomePage() {
         shouldReapplyNarrowWorldwide(left, loc.id, prevViewportRef.current, next)
       ) {
         setFlyRequest({
-          nonce: Date.now(),
+          nonce: (flyNonceRef.current = nextFlyNonce(flyNonceRef.current)),
           longitude: loc.lng,
           latitude: loc.lat,
           zoom: loc.zoom,

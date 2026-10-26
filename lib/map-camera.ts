@@ -895,6 +895,7 @@ export type CameraKeyEvent = {
   ctrlKey?: boolean;
   metaKey?: boolean;
   shiftKey?: boolean;
+  target?: EventTarget | null;
 };
 
 /**
@@ -921,7 +922,9 @@ export function isUserGestureEvent(
   const orig = event?.originalEvent as CameraKeyEvent | undefined;
   if (!orig?.type) return false;
   if (orig.type === 'resize' || orig.type === 'orientationchange') return false;
-  if (orig.type === 'keydown' || orig.type === 'keyup') return isCameraKey(orig);
+  if (orig.type === 'keydown' || orig.type === 'keyup') {
+    return isCameraKey(orig) && isMapboxKeyboardTarget(orig.target);
+  }
   return true;
 }
 
@@ -1325,6 +1328,11 @@ export function claimFlyNonce(started: { current: number | null }, nonce: number
   return true;
 }
 
+/** Monotonic fly nonce so two chips in the same millisecond cannot share an id. */
+export function nextFlyNonce(prev: number, now = Date.now()): number {
+  return now > prev ? now : prev + 1;
+}
+
 /**
  * Zoom and center for the Worldwide preset.
  * When the allowed world is wider than the visible gap (list on the left, and
@@ -1448,8 +1456,28 @@ export function shouldStampUserInputDuringFlight(
   if (!flightActive) return false;
   const ev = typeof event === 'string' ? { type: event } : event;
   if (!(USER_FLIGHT_INPUT_EVENTS as readonly string[]).includes(ev.type)) return false;
-  if (ev.type === 'keydown') return isCameraKey(ev);
+  if (ev.type === 'keydown') return isCameraKey(ev) && isMapboxKeyboardTarget(ev.target);
   return true;
+}
+
+/**
+ * Mapbox's KeyboardHandler listens on the canvas / `.mapboxgl-canvas-container`,
+ * not Zoom or Locate. Arrow and +/- keys on those buttons do not move the camera.
+ */
+export function isMapboxKeyboardTarget(target: EventTarget | null | undefined): boolean {
+  if (!target || typeof (target as Element).closest !== 'function') return false;
+  const el = target as Element;
+  if (el.closest('[data-map-controls]')) return false;
+  if (el.closest('button')) return false;
+  if (el.closest('[role="button"]')) return false;
+  if (el.closest('a, input, textarea, select')) return false;
+  return Boolean(
+    el.closest('canvas') ||
+      el.closest('[data-map-canvas-host]') ||
+      el.closest('[data-map-canvas]') ||
+      el.closest('.mapboxgl-canvas-container') ||
+      el.closest('.mapboxgl-map')
+  );
 }
 
 /** Zoom / Locate live in `[data-map-controls]` and must not hold the pointer. */
