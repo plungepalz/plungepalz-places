@@ -71,6 +71,10 @@ import {
   lowZoomCanvasLayout,
   mapControlsRightPx,
   mapboxChromeInsetLeft,
+  mapboxChromeLayout,
+  mapboxChromeRects,
+  MAPBOX_ATTRIB,
+  MAPBOX_LOGO,
   mapboxHeightMinZoom,
   mapNeedsResize,
   mercatorWorldPx,
@@ -141,36 +145,40 @@ test('Mapbox chrome sits to the right of the open list panel', () => {
   assert.equal(mapboxChromeInsetLeft(1280, false), LIST_PANEL_RIGHT);
   assert.equal(mapboxChromeInsetLeft(1440, true), 0);
   assert.equal(mapboxChromeInsetLeft(768, true), 0);
-  assert.equal(mapboxChromeInsetLeft(768, false), 0, 'stacked list at 768 must not inset the logo');
+  assert.deepEqual(mapboxChromeLayout({ canvasWidth: 1440, collapseList: false }), {
+    left: LIST_PANEL_RIGHT,
+    bottom: 0,
+  });
   assert.ok(mapboxChromeInsetLeft(1440, false) >= 380);
 });
 
-test('Mapbox logo never overlaps attribution at 768 with the list shown', () => {
+test('Mapbox logo and attribution stay visible above the 768 list sheet', () => {
   const height = 900;
-  const logoW = 88;
-  const logoH = 23;
-  const attribW = 280;
-  const attribH = 20;
-  const logo = (width: number, collapseList: boolean) => {
-    const left = 10 + mapboxChromeInsetLeft(width, collapseList);
-    return { left, right: left + logoW, top: height - 8 - logoH, bottom: height - 8 };
-  };
-  const attrib = (width: number) => ({
-    left: width - 8 - attribW,
-    right: width - 8,
-    top: height - 8 - attribH,
-    bottom: height - 8,
-  });
-  const stacked = logo(768, false);
-  const bar = attrib(768);
-  assert.equal(stacked.left, 10);
-  assert.ok(!rectsOverlap(stacked, bar), '768 stacked: logo vs attribution');
-  const wronglyInset = { left: 402, right: 402 + logoW, top: stacked.top, bottom: stacked.bottom };
-  assert.ok(rectsOverlap(wronglyInset, bar), 'the old 396px inset sat the logo under the attrib bar');
-  const desktopLogo = logo(1440, false);
-  const desktopBar = attrib(1440);
-  assert.equal(desktopLogo.left, 10 + LIST_PANEL_RIGHT);
-  assert.ok(!rectsOverlap(desktopLogo, desktopBar), '1440: inset logo vs attribution');
+  const header = { left: 0, right: 768, top: 0, bottom: 112 };
+  const sheet = { left: 16, right: 16 + 380, top: 112, bottom: height - 16 };
+  const shown = mapboxChromeRects(768, height, false);
+  assert.ok(shown.logo.left >= sheet.right, '768 shown: logo sits in the visible map gap');
+  assert.ok(!rectsOverlap(shown.logo, sheet), '768 shown: logo vs sheet');
+  assert.ok(!rectsOverlap(shown.attrib, sheet), '768 shown: attrib vs sheet');
+  assert.ok(!rectsOverlap(shown.logo, shown.attrib), '768 shown: logo vs attribution');
+  assert.ok(!rectsOverlap(shown.logo, header), '768 shown: logo vs header');
+  assert.ok(!rectsOverlap(shown.attrib, header), '768 shown: attrib vs header');
+  assert.ok(mapboxChromeLayout({ canvasWidth: 768, collapseList: false }).bottom > 0);
+
+  const hidden = mapboxChromeRects(768, height, true);
+  assert.equal(hidden.logo.left, MAPBOX_LOGO.pad);
+  assert.ok(!rectsOverlap(hidden.logo, header), '768 hidden: logo vs header');
+  assert.ok(!rectsOverlap(hidden.logo, hidden.attrib), '768 hidden: logo vs attribution');
+
+  for (const width of [1280, 1440] as const) {
+    const desktop = mapboxChromeRects(width, height, false);
+    const desktopSheet = { left: 16, right: 16 + 380, top: 104, bottom: height - 16 };
+    assert.equal(desktop.logo.left, LIST_PANEL_RIGHT + MAPBOX_LOGO.pad);
+    assert.ok(!rectsOverlap(desktop.logo, desktopSheet), `${width}: logo vs list`);
+    assert.ok(!rectsOverlap(desktop.logo, desktop.attrib), `${width}: logo vs attrib`);
+    assert.equal(mapboxChromeLayout({ canvasWidth: width, collapseList: false }).bottom, 0);
+  }
+  assert.ok(MAPBOX_ATTRIB.width > 0);
 });
 
 test('list panel right edge matches the floating list (16 + 380)', () => {

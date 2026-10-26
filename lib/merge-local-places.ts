@@ -147,6 +147,34 @@ export function listSwapForCls<T extends { place_id: string }>(
   };
 }
 
+/** Preset chip vs user-panned map area. Same-region pans keep the in-place list. */
+export function placeListRegionKey(leftPreset: boolean, presetId: string): string {
+  return leftPreset ? 'map-area' : `preset:${presetId}`;
+}
+
+/**
+ * City → Worldwide (and any other region change) remounts the list as one
+ * unit so a shared card cannot be pushed down (CLS). Map-area pans keep
+ * the previous mount key and reconcile in place.
+ */
+export function nextPlaceListMountKey(input: {
+  prevKey: string;
+  prevRegionKey: string;
+  requestId: number;
+  regionKey: string;
+  append?: boolean;
+}): string {
+  if (input.append) return input.prevKey;
+  if (input.prevKey !== '0' && input.regionKey === input.prevRegionKey) {
+    return input.prevKey;
+  }
+  return `${input.requestId}:${input.regionKey}`;
+}
+
+export function shouldRemountPlaceList(prevKey: string, nextKey: string): boolean {
+  return prevKey !== nextKey;
+}
+
 /** Place cards may fade/slide, never animate height (98px → 0 is CLS). */
 export const PLACE_CARD_LAYOUT = {
   minHeightPx: 98,

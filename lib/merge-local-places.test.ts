@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   listSwapForCls,
+  nextPlaceListMountKey,
   placeCardKey,
   placeCardMayAnimateHeight,
+  placeListRegionKey,
   PLACE_CARD_LAYOUT,
   placesVisibleDuringFlight,
   reconcilePlacesById,
   retainPlaceNodes,
   reuseIfSamePlaceRefs,
+  shouldRemountPlaceList,
 } from './merge-local-places';
 import type { PlaceSearchResult } from './types';
 
@@ -111,4 +114,94 @@ test('listSwapForCls takes removed cards out of flow instead of collapsing 98px 
   assert.ok(
     !(PLACE_CARD_LAYOUT.transitionProperties as readonly string[]).includes('height')
   );
+});
+
+function sharedCardShiftPx(
+  prev: { place_id: string }[],
+  next: { place_id: string }[],
+  remount: boolean,
+  cardHeight = 98
+): number {
+  if (remount) return 0;
+  const prevIndex = new Map(prev.map((place, index) => [place.place_id, index]));
+  let shift = 0;
+  next.forEach((place, index) => {
+    const from = prevIndex.get(place.place_id);
+    if (from != null && index > from) shift = Math.max(shift, (index - from) * cardHeight);
+  });
+  return shift;
+}
+
+test('city to Worldwide remounts the list so shared cards are not pushed down', () => {
+  const city = [place('shared'), place('tokyo-2')];
+  const world = [place('w-1'), place('shared'), place('w-3')];
+  const tokyo = nextPlaceListMountKey({
+    prevKey: '0',
+    prevRegionKey: '',
+    requestId: 1,
+    regionKey: placeListRegionKey(false, 'tokyo'),
+  });
+  const worldwide = nextPlaceListMountKey({
+    prevKey: tokyo,
+    prevRegionKey: 'preset:tokyo',
+    requestId: 2,
+    regionKey: placeListRegionKey(false, 'worldwide'),
+  });
+  assert.equal(shouldRemountPlaceList(tokyo, worldwide), true);
+  assert.equal(sharedCardShiftPx(city, world, true), 0);
+  assert.ok(sharedCardShiftPx(city, world, false) >= 98);
+});
+
+test('Worldwide to city and US to London remount; map-area pans keep the in-place list', () => {
+  const world = nextPlaceListMountKey({
+    prevKey: '0',
+    prevRegionKey: '',
+    requestId: 1,
+    regionKey: placeListRegionKey(false, 'worldwide'),
+  });
+  const city = nextPlaceListMountKey({
+    prevKey: world,
+    prevRegionKey: 'preset:worldwide',
+    requestId: 2,
+    regionKey: placeListRegionKey(false, 'tokyo'),
+  });
+  assert.equal(shouldRemountPlaceList(world, city), true);
+
+  const us = nextPlaceListMountKey({
+    prevKey: '0',
+    prevRegionKey: '',
+    requestId: 3,
+    regionKey: placeListRegionKey(false, 'united-states'),
+  });
+  const london = nextPlaceListMountKey({
+    prevKey: us,
+    prevRegionKey: 'preset:united-states',
+    requestId: 4,
+    regionKey: placeListRegionKey(false, 'london'),
+  });
+  assert.equal(shouldRemountPlaceList(us, london), true);
+
+  const mapArea = nextPlaceListMountKey({
+    prevKey: us,
+    prevRegionKey: 'preset:united-states',
+    requestId: 5,
+    regionKey: placeListRegionKey(true, 'united-states'),
+  });
+  assert.equal(shouldRemountPlaceList(us, mapArea), true);
+  const pan = nextPlaceListMountKey({
+    prevKey: mapArea,
+    prevRegionKey: 'map-area',
+    requestId: 6,
+    regionKey: placeListRegionKey(true, 'united-states'),
+  });
+  assert.equal(pan, mapArea);
+  assert.equal(shouldRemountPlaceList(mapArea, pan), false);
+  const loadMore = nextPlaceListMountKey({
+    prevKey: mapArea,
+    prevRegionKey: 'map-area',
+    requestId: 7,
+    regionKey: 'map-area',
+    append: true,
+  });
+  assert.equal(loadMore, mapArea);
 });

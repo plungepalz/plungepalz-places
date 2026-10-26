@@ -41,7 +41,7 @@ body {
 
 [data-places-map] > .mapboxgl-ctrl-bottom-left {
   left: var(--map-chrome-left, 0px);
-  bottom: 0;
+  bottom: var(--map-chrome-bottom, 0px);
 }
 
 [data-places-map] > .mapboxgl-ctrl-bottom-right {
@@ -89,6 +89,17 @@ body {
 .places-list-exit .place-card {
   opacity: 0;
   transform: translateY(-4px);
+}
+
+.places-list-batch {
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+@starting-style {
+  .places-list-batch {
+    opacity: 0;
+  }
 }
 
 @starting-style {
@@ -194,6 +205,7 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .place-card,
+  .places-list-batch,
   .places-list-chevron,
   .places-list-body-wrap,
   .drawer-panel,
@@ -204,7 +216,8 @@ body {
   }
 
   @starting-style {
-    .place-card {
+    .place-card,
+    .places-list-batch {
       opacity: 1;
       transform: none;
     }

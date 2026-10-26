@@ -28,7 +28,7 @@ import {
   createCanvasMachine,
   mapControlsRightPx,
   mapNeedsResize,
-  mapboxChromeInsetLeft,
+  mapboxChromeLayout,
   paddingIsZero,
   pickCameraAnimation,
   pinHintCenterX,
@@ -999,6 +999,7 @@ export default function PlacesMap({
   const fillColor = waterColor ?? (canvasLayout.top > 0 ? STREETS_LOW_ZOOM_OCEAN : undefined);
   const leftoverFill = fillColor ? canvasFillStyle(canvasLayout, fillColor) : null;
   const hostStyle = canvasHostStyle(canvasLayout);
+  const chromeLayout = mapboxChromeLayout({ canvasWidth: slotSize.width, collapseList });
 
   if (!accessToken) {
     return (
@@ -1029,7 +1030,8 @@ export default function PlacesMap({
       className="relative h-full w-full"
       style={{
         ...(fillColor ? { backgroundColor: fillColor } : {}),
-        ['--map-chrome-left' as string]: `${mapboxChromeInsetLeft(slotSize.width, collapseList)}px`,
+        ['--map-chrome-left' as string]: `${chromeLayout.left}px`,
+        ['--map-chrome-bottom' as string]: `${chromeLayout.bottom}px`,
       }}
     >
       {leftoverFill && (

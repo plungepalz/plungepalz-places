@@ -45,10 +45,60 @@ export function listPanelRightEdge(canvasWidth: number): number {
 
 /** Mapbox logo/attrib sit in the visible map, not under the list or the Next.js badge. */
 export function mapboxChromeInsetLeft(canvasWidth: number, collapseList: boolean): number {
-  // At 768 the list is stacked, not over the map — a 396px inset slides the
-  // logo under the attribution bar. Only inset when the panel actually overlaps.
-  if (collapseList || canvasWidth < DESKTOP_LIST_OVERLAP) return 0;
-  return listPanelRightEdge(canvasWidth);
+  return mapboxChromeLayout({ canvasWidth, collapseList }).left;
+}
+
+/** Conservative Mapbox chrome boxes used to keep logo and attrib apart. */
+export const MAPBOX_LOGO = { width: 88, height: 23, pad: 10 } as const;
+export const MAPBOX_ATTRIB = { width: 280, height: 20, pad: 8 } as const;
+export const MAPBOX_CHROME_GAP = 8;
+
+/**
+ * Logo/attrib placement. Desktop (1280+) insets by the overlapping list.
+ * At 768 the list is a left sheet — park chrome in the visible map gap
+ * and lift the logo above the attribution bar so they never overlap.
+ */
+export function mapboxChromeLayout(input: {
+  canvasWidth: number;
+  collapseList: boolean;
+  /** Live sheet height when the stacked list is shown; unused for the gap park. */
+  sheetHeight?: number;
+}): { left: number; bottom: number } {
+  const { canvasWidth, collapseList } = input;
+  if (collapseList) return { left: 0, bottom: 0 };
+  if (canvasWidth >= DESKTOP_LIST_OVERLAP) {
+    return { left: listPanelRightEdge(canvasWidth), bottom: 0 };
+  }
+  const left = listPanelRightEdge(canvasWidth);
+  const logoRight = left + MAPBOX_LOGO.pad + MAPBOX_LOGO.width;
+  const attribLeft = canvasWidth - MAPBOX_ATTRIB.pad - MAPBOX_ATTRIB.width;
+  const bottom =
+    logoRight + MAPBOX_CHROME_GAP > attribLeft ? MAPBOX_ATTRIB.height + MAPBOX_CHROME_GAP : 0;
+  return { left, bottom };
+}
+
+export function mapboxChromeRects(
+  canvasWidth: number,
+  canvasHeight: number,
+  collapseList: boolean
+): {
+  logo: { left: number; right: number; top: number; bottom: number };
+  attrib: { left: number; right: number; top: number; bottom: number };
+} {
+  const { left, bottom } = mapboxChromeLayout({ canvasWidth, collapseList });
+  const logo = {
+    left: left + MAPBOX_LOGO.pad,
+    right: left + MAPBOX_LOGO.pad + MAPBOX_LOGO.width,
+    top: canvasHeight - bottom - MAPBOX_LOGO.pad - MAPBOX_LOGO.height,
+    bottom: canvasHeight - bottom - MAPBOX_LOGO.pad,
+  };
+  const attrib = {
+    left: canvasWidth - MAPBOX_ATTRIB.pad - MAPBOX_ATTRIB.width,
+    right: canvasWidth - MAPBOX_ATTRIB.pad,
+    top: canvasHeight - MAPBOX_ATTRIB.pad - MAPBOX_ATTRIB.height,
+    bottom: canvasHeight - MAPBOX_ATTRIB.pad,
+  };
+  return { logo, attrib };
 }
 
 /** Drawer width plus `right-4`, never wider than the canvas minus side gutters. */

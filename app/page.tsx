@@ -27,7 +27,13 @@ import {
   shouldReapplyPresetOnSizeChange,
   type SizeBox,
 } from '@/lib/map-camera';
-import { mergeLocalPlaces, placesVisibleDuringFlight, reconcilePlacesById } from '@/lib/merge-local-places';
+import {
+  mergeLocalPlaces,
+  nextPlaceListMountKey,
+  placeListRegionKey,
+  placesVisibleDuringFlight,
+  reconcilePlacesById,
+} from '@/lib/merge-local-places';
 import {
   placesListMaxHeightPx,
   placesListSlotMaxHeightPx,
@@ -152,6 +158,9 @@ export default function HomePage() {
     cameraBusyRef.current = cameraBusy;
   }, [cameraBusy]);
   const [heldList, setHeldList] = useState<PlaceSearchResult[] | null>(null);
+  const [listMountKey, setListMountKey] = useState('0');
+  const listMountKeyRef = useRef('0');
+  const listRegionKeyRef = useRef(placeListRegionKey(false, DEFAULT_LOCATION.id));
   const listView = placesVisibleDuringFlight(places, heldList, cameraBusy, isLoading);
   if (heldList !== listView.hold) {
     setHeldList(listView.hold);
@@ -235,6 +244,19 @@ export default function HomePage() {
           return;
         }
         pendingSearchRef.current = null;
+        const regionKey = placeListRegionKey(context.leftPreset, context.location.id);
+        const nextMount = nextPlaceListMountKey({
+          prevKey: listMountKeyRef.current,
+          prevRegionKey: listRegionKeyRef.current,
+          requestId,
+          regionKey,
+          append,
+        });
+        listRegionKeyRef.current = regionKey;
+        if (nextMount !== listMountKeyRef.current) {
+          listMountKeyRef.current = nextMount;
+          setListMountKey(nextMount);
+        }
         const returnedIds = new Set(response.places.map((place) => place.place_id));
         setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
         setServerPlaces((prev) => (append ? [...prev, ...response.places] : response.places));
@@ -296,6 +318,20 @@ export default function HomePage() {
           if (pending.error) {
             setError(pending.error);
           } else {
+            const ctx = searchContextRef.current;
+            const regionKey = placeListRegionKey(ctx.leftPreset, ctx.location.id);
+            const nextMount = nextPlaceListMountKey({
+              prevKey: listMountKeyRef.current,
+              prevRegionKey: listRegionKeyRef.current,
+              requestId: pending.requestId,
+              regionKey,
+              append: pending.append,
+            });
+            listRegionKeyRef.current = regionKey;
+            if (nextMount !== listMountKeyRef.current) {
+              listMountKeyRef.current = nextMount;
+              setListMountKey(nextMount);
+            }
             const returnedIds = new Set(pending.places.map((place) => place.place_id));
             setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
             setServerPlaces((prev) => (pending.append ? [...prev, ...pending.places] : pending.places));
@@ -599,6 +635,7 @@ export default function HomePage() {
           aria-hidden={hideListForDrawer}
         >
           <PlacesList
+            listKey={listMountKey}
             places={listPlaces}
             total={displayTotal}
             selectedPlaceId={selectedPlaceId}

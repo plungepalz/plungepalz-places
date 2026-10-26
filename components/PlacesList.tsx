@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { placesListHeading } from '@/lib/list-heading';
 import { listSwapForCls, PLACE_CARD_LAYOUT } from '@/lib/merge-local-places';
 import { FILTER_OVERLAY_HEADER_INSET } from '@/lib/map-style';
@@ -27,6 +27,8 @@ interface PlacesListProps {
   collapsible?: boolean;
   expanded?: boolean;
   onToggleExpanded?: () => void;
+  /** Region/request key — remount the card batch on preset/region settle. */
+  listKey?: string;
 }
 
 function PlacesList({
@@ -47,16 +49,26 @@ function PlacesList({
   collapsible = false,
   expanded = true,
   onToggleExpanded,
+  listKey = '0',
 }: PlacesListProps) {
   const compact = collapsible && !expanded;
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [swap, setSwap] = useState(() => ({
     seen: places,
     exiting: [] as PlaceSearchResult[],
+    key: listKey,
   }));
-  if (swap.seen !== places) {
-    const next = listSwapForCls(swap.seen, places);
-    setSwap({ seen: places, exiting: next.exiting });
+  if (swap.seen !== places || swap.key !== listKey) {
+    if (swap.key !== listKey) {
+      setSwap({ seen: places, exiting: [], key: listKey });
+    } else {
+      const next = listSwapForCls(swap.seen, places);
+      setSwap({ seen: places, exiting: next.exiting, key: listKey });
+    }
   }
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [listKey]);
   useEffect(() => {
     if (swap.exiting.length === 0) return;
     const handle = window.setTimeout(() => {
@@ -131,6 +143,7 @@ function PlacesList({
         inert={compact ? true : undefined}
       >
         <div
+          ref={bodyRef}
           id="places-list-body"
           hidden={compact}
           className="places-list-body relative flex-1 space-y-1 overflow-y-auto px-2 py-2"
@@ -139,17 +152,19 @@ function PlacesList({
             <div className="m-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
           )}
 
-          {places.map((place) => (
-            <PlaceCard
-              key={place.place_id}
-              place={place}
-              isSelected={selectedPlaceId === place.place_id}
-              isFavorited={favorites.has(place.place_id)}
-              onSelectPlace={onSelectPlace}
-              onHoverPlace={onHoverPlace}
-              onToggleFavorite={onToggleFavorite}
-            />
-          ))}
+          <div key={listKey} className="places-list-batch space-y-1">
+            {places.map((place) => (
+              <PlaceCard
+                key={place.place_id}
+                place={place}
+                isSelected={selectedPlaceId === place.place_id}
+                isFavorited={favorites.has(place.place_id)}
+                onSelectPlace={onSelectPlace}
+                onHoverPlace={onHoverPlace}
+                onToggleFavorite={onToggleFavorite}
+              />
+            ))}
+          </div>
 
           {swap.exiting.length > 0 ? (
             <div className="places-list-exit" aria-hidden>
