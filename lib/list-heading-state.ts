@@ -87,6 +87,20 @@ export function shouldApplySettledSearch(
   return requestId === machine.requestId;
 }
 
+/**
+ * Header and list commit together, and only when the camera is idle.
+ * A mid-flight response (or a stale id after a back-to-back chip) is held
+ * or dropped so SLC → Worldwide → US cannot freeze on Salt Lake City.
+ */
+export function shouldCommitSearchUi(input: {
+  requestId: number;
+  machine: Pick<ListHeadingMachine, 'requestId'>;
+  cameraBusy: boolean;
+}): boolean {
+  if (input.cameraBusy) return false;
+  return shouldApplySettledSearch(input.requestId, input.machine);
+}
+
 export function listHeadingText(snapshot: ListHeadingSnapshot | null, extraCount = 0): string | null {
   if (!snapshot) return null;
   return placesListHeading(snapshot.shown + extraCount, snapshot.total + extraCount, snapshot.locationName, {

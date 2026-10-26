@@ -6,6 +6,7 @@ import {
   listHeadingText,
   settleListHeadingRequest,
   shouldApplySettledSearch,
+  shouldCommitSearchUi,
   startListHeadingRequest,
 } from './list-heading-state';
 import { LOCATION_PRESETS } from './locations';
@@ -279,4 +280,56 @@ test('every preset names itself, including a one-place New York with city Brookl
     assert.equal(listHeadingText(state.heading), expected, preset.id);
     assert.equal(state.heading?.chipLabel, preset.label, preset.id);
   }
+});
+
+test('header and list wait for idle; a mid-flight settle does not commit', () => {
+  let state = createListHeadingMachine();
+  state = startListHeadingRequest(state);
+  state = settleListHeadingRequest(
+    state,
+    1,
+    { shown: 7, total: 7, hasMore: false, places: placesIn('Salt Lake City', 7) },
+    { hasMap: true, zoom: saltLake.zoom, location: saltLake, leftPreset: false }
+  );
+  state = startListHeadingRequest(state);
+  assert.equal(shouldCommitSearchUi({ requestId: 2, machine: state, cameraBusy: true }), false);
+  assert.equal(shouldApplySettledSearch(2, state), true);
+  assert.equal(listHeadingText(state.heading), '7 places in Salt Lake City');
+});
+
+test('back-to-back presets drop a mid-flight settle and apply the idle search', () => {
+  let state = createListHeadingMachine();
+  state = startListHeadingRequest(state);
+  state = settleListHeadingRequest(
+    state,
+    1,
+    { shown: 7, total: 7, hasMore: false, places: placesIn('Salt Lake City', 7) },
+    { hasMap: true, zoom: saltLake.zoom, location: saltLake, leftPreset: false }
+  );
+
+  state = startListHeadingRequest(state); // Worldwide, superseded
+  state = startListHeadingRequest(state); // US chip click invalidates WW
+  const afterWorldwide = settleListHeadingRequest(
+    state,
+    2,
+    { shown: 82, total: 82, hasMore: false, places: placesIn('Scottsdale', 10) },
+    { hasMap: true, zoom: worldwide.zoom, location: worldwide, leftPreset: false }
+  );
+  assert.equal(afterWorldwide, state);
+  assert.equal(shouldApplySettledSearch(2, afterWorldwide), false);
+  assert.equal(shouldCommitSearchUi({ requestId: 2, machine: afterWorldwide, cameraBusy: false }), false);
+  assert.equal(listHeadingText(afterWorldwide.heading), '7 places in Salt Lake City');
+  assert.equal(afterWorldwide.heading?.chipLabel, 'Salt Lake City');
+
+  state = startListHeadingRequest(afterWorldwide); // idle US search
+  assert.equal(shouldCommitSearchUi({ requestId: 4, machine: state, cameraBusy: true }), false);
+  state = settleListHeadingRequest(
+    state,
+    4,
+    { shown: 59, total: 59, hasMore: false, places: usScalePlaces() },
+    { hasMap: true, zoom: unitedStates.zoom, location: unitedStates, leftPreset: false }
+  );
+  assert.equal(shouldCommitSearchUi({ requestId: 4, machine: state, cameraBusy: false }), true);
+  assert.equal(listHeadingText(state.heading), '59 places in United States');
+  assert.equal(state.heading?.chipLabel, 'United States');
 });

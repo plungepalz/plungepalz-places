@@ -8,6 +8,7 @@ import { BRAND } from '@/lib/brand';
 import {
   CAMERA_DURATION,
   STREETS_LOW_ZOOM_OCEAN,
+  ZERO_PADDING,
   cameraEaseOptions,
   cameraFlyOptions,
   cameraMoveendEffects,
@@ -25,6 +26,7 @@ import {
   createCanvasMachine,
   mapControlsRightPx,
   mapNeedsResize,
+  mapboxChromeInsetLeft,
   paddingIsZero,
   pickCameraAnimation,
   pinHintCenterX,
@@ -366,6 +368,9 @@ export default function PlacesMap({
     if (isProgrammaticFlightTag(flightTagRef.current) && !pendingNarrowWorldwideRef.current) {
       return;
     }
+    if (flyRequest && !pendingNarrowWorldwideRef.current) {
+      return;
+    }
     if (!mapNeedsResize(map.getCanvas(), mapBoxRef.current)) {
       applyNarrowWorldwideAfterResize();
       return;
@@ -378,7 +383,7 @@ export default function PlacesMap({
       cancelAnimationFrame,
       applyNarrowWorldwideAfterResize
     );
-  }, [applyNarrowWorldwideAfterResize]);
+  }, [applyNarrowWorldwideAfterResize, flyRequest]);
 
   const applyWaterColor = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -663,7 +668,10 @@ export default function PlacesMap({
       const shouldClear =
         !detailsOpenRef.current &&
         !keepFitPadding &&
-        shouldClearPaddingAfterFlight(padding, live?.getPadding());
+        shouldClearPaddingAfterFlight(
+          flyRequest.exactZoom ? ZERO_PADDING : padding,
+          live?.getPadding()
+        );
       if (shouldClear) {
         clearPaddingProgrammatic();
       }
@@ -995,7 +1003,10 @@ export default function PlacesMap({
       ref={containerRef}
       data-places-map
       className="relative h-full w-full"
-      style={fillColor ? { backgroundColor: fillColor } : undefined}
+      style={{
+        ...(fillColor ? { backgroundColor: fillColor } : {}),
+        ['--map-chrome-left' as string]: `${mapboxChromeInsetLeft(slotSize.width, collapseList)}px`,
+      }}
     >
       {leftoverFill && (
         <div

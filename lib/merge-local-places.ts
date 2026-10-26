@@ -119,7 +119,7 @@ export function placeCardKey(place: { place_id: string }): string {
 /**
  * Keep the previous cards on screen while a programmatic flight is in
  * progress so a 98px card cannot collapse to 0 (CLS) mid-flight.
- * Heading / search may settle; the list swaps only when the camera is idle.
+ * Header and list commit together once, at idle.
  */
 export function placesVisibleDuringFlight<T>(
   live: T[],

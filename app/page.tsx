@@ -15,6 +15,7 @@ import {
   mapBoundsKey,
   settleListHeadingRequest,
   shouldApplySettledSearch,
+  shouldCommitSearchUi,
   startListHeadingRequest,
   type ListHeadingSnapshot,
 } from '@/lib/list-heading-state';
@@ -103,6 +104,17 @@ export default function HomePage() {
   const leftPresetRef = useRef(leftPreset);
   const locationRef = useRef(location);
   const prevViewportRef = useRef<SizeBox | null>(null);
+  const cameraBusyRef = useRef(false);
+  const pendingSearchRef = useRef<{
+    requestId: number;
+    append: boolean;
+    places: PlaceSearchResult[];
+    total: number;
+    page: number;
+    hasMore: boolean;
+    heading: ListHeadingSnapshot | null;
+    error: string | null;
+  } | null>(null);
 
   const mapboxToken = resolveMapboxToken(process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   const hasMap = Boolean(mapboxToken);
@@ -134,7 +146,10 @@ export default function HomePage() {
     setPlaceStore({ src: merged, places: reconcilePlacesById(placeStore.places, merged.places) });
   }
   const places = placeStore.src === merged ? placeStore.places : reconcilePlacesById(placeStore.places, merged.places);
-  const cameraBusy = Boolean(flyRequest) || mapCameraBusy;
+  const cameraBusy = hasMap && (Boolean(flyRequest) || mapCameraBusy);
+  useEffect(() => {
+    cameraBusyRef.current = cameraBusy;
+  }, [cameraBusy]);
   const [heldList, setHeldList] = useState<PlaceSearchResult[] | null>(null);
   const listView = placesVisibleDuringFlight(places, heldList, cameraBusy);
   if (heldList !== listView.hold) {
@@ -196,7 +211,29 @@ export default function HomePage() {
           context
         );
         headingMachineRef.current = settled;
-        if (!shouldApplySettledSearch(requestId, headingMachineRef.current)) return;
+        const commit = {
+          requestId,
+          append,
+          places: response.places,
+          total: response.total,
+          page: response.page,
+          hasMore: response.has_more,
+          heading: settled.heading,
+          error: null as string | null,
+        };
+        if (
+          !shouldCommitSearchUi({
+            requestId,
+            machine: headingMachineRef.current,
+            cameraBusy: cameraBusyRef.current,
+          })
+        ) {
+          if (shouldApplySettledSearch(requestId, headingMachineRef.current)) {
+            pendingSearchRef.current = commit;
+          }
+          return;
+        }
+        pendingSearchRef.current = null;
         const returnedIds = new Set(response.places.map((place) => place.place_id));
         setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
         setServerPlaces((prev) => (append ? [...prev, ...response.places] : response.places));
@@ -205,11 +242,25 @@ export default function HomePage() {
         setHasMore(response.has_more);
         setHeading(settled.heading);
         setError(null);
+        setIsLoading(false);
       } catch (err) {
         if (!shouldApplySettledSearch(requestId, headingMachineRef.current)) return;
-        setError(isPlacesApiError(err) ? err.message : 'Search failed');
-      } finally {
-        if (shouldApplySettledSearch(requestId, headingMachineRef.current)) setIsLoading(false);
+        const message = isPlacesApiError(err) ? err.message : 'Search failed';
+        if (cameraBusyRef.current) {
+          pendingSearchRef.current = {
+            requestId,
+            append,
+            places: [],
+            total: 0,
+            page: 0,
+            hasMore: false,
+            heading: headingMachineRef.current.heading,
+            error: message,
+          };
+          return;
+        }
+        setError(message);
+        setIsLoading(false);
       }
     },
     [buildParams]
@@ -221,15 +272,49 @@ export default function HomePage() {
     setMapZoom(zoom);
   }, []);
 
-  const searchIdentity = viewportSearchIdentity(leftPreset, mapBoundsKey(mapBounds));
+  const filterKey = `${searchQuery.trim()}|${selectedActivities.join(',')}|${selectedPlaceTypes.join(',')}|${approvedOnly}`;
+  const searchIdentity = viewportSearchIdentity(
+    leftPreset,
+    mapBoundsKey(mapBounds),
+    location.id,
+    filterKey
+  );
 
   useEffect(() => {
+    if (!cameraBusy) {
+      const pending = pendingSearchRef.current;
+      if (pending) {
+        pendingSearchRef.current = null;
+        if (
+          shouldCommitSearchUi({
+            requestId: pending.requestId,
+            machine: headingMachineRef.current,
+            cameraBusy: false,
+          })
+        ) {
+          if (pending.error) {
+            setError(pending.error);
+          } else {
+            const returnedIds = new Set(pending.places.map((place) => place.place_id));
+            setLocalPlaces((prev) => prev.filter((place) => !returnedIds.has(place.place_id)));
+            setServerPlaces((prev) => (pending.append ? [...prev, ...pending.places] : pending.places));
+            setTotal(pending.total);
+            setPage(pending.page);
+            setHasMore(pending.hasMore);
+            setHeading(pending.heading);
+            setError(null);
+          }
+          setIsLoading(false);
+        }
+      }
+    }
     const bounds = mapBoundsRef.current;
     const decision = searchAfterViewportChange({
       leftPreset,
       boundsKey: mapBoundsKey(leftPreset ? bounds : null),
       lastPresetKey: lastPresetBoundsKeyRef.current,
       cameraBusy,
+      settleKey: searchIdentity,
     });
     if (decision.action === 'skip') return;
     if (decision.nextPresetKey != null) {
@@ -248,6 +333,8 @@ export default function HomePage() {
   }, [successMessage]);
 
   const handleLocationChange = (next: LocationPreset) => {
+    headingMachineRef.current = startListHeadingRequest(headingMachineRef.current);
+    pendingSearchRef.current = null;
     setDetailsPlaceId(null);
     setAddPlaceOpen(false);
     setSelectedPlaceId(null);

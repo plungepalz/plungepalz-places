@@ -8,25 +8,36 @@ export const SEARCH_DEBOUNCE_MS = {
 export type SearchTrigger = 'skip' | 'filters' | 'moveend';
 
 /**
- * While a location chip is active, ignore bbox churn from the preset flight
- * so the header can settle with the chip search (fly + 200ms ≤ ~2.6s).
+ * Chip searches key on the preset (and filters), not the flying bbox, so a
+ * resize / padding-clear cannot enqueue a second /search for the same settle.
  */
-export function viewportSearchIdentity(leftPreset: boolean, boundsKey: string): string {
-  return leftPreset ? boundsKey : 'preset-chip';
+export function viewportSearchIdentity(
+  leftPreset: boolean,
+  boundsKey: string,
+  presetId?: string,
+  filterKey = ''
+): string {
+  const suffix = filterKey ? `|${filterKey}` : '';
+  if (leftPreset) return `${boundsKey}${suffix}`;
+  return `${presetId ? `preset:${presetId}` : 'preset-chip'}${suffix}`;
 }
 
 export function searchAfterViewportChange(input: {
   leftPreset: boolean;
   boundsKey: string;
   lastPresetKey: string;
-  /** Programmatic fly / ease — do not search on interrupt or mid-flight moveend. */
+  /** Programmatic fly / ease / shrink-first resize — wait for idle. */
   cameraBusy?: boolean;
+  /** Stable id for this settle (`preset:tokyo` or a bbox key). */
+  settleKey?: string;
 }): { action: SearchTrigger; nextPresetKey?: string } {
-  if (!input.leftPreset) {
-    return { action: 'filters', nextPresetKey: input.boundsKey };
-  }
   if (input.cameraBusy) {
     return { action: 'skip' };
+  }
+  if (!input.leftPreset) {
+    const key = input.settleKey ?? 'preset-chip';
+    if (key === input.lastPresetKey) return { action: 'skip' };
+    return { action: 'filters', nextPresetKey: key };
   }
   if (!input.boundsKey || input.boundsKey === input.lastPresetKey) {
     return { action: 'skip' };

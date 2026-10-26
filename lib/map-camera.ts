@@ -41,6 +41,12 @@ export function listPanelRightEdge(canvasWidth: number): number {
   return Math.min(LIST_PANEL_RIGHT, Math.max(0, canvasWidth - 80));
 }
 
+/** Mapbox logo/attrib sit in the visible map, not under the list or the Next.js badge. */
+export function mapboxChromeInsetLeft(canvasWidth: number, collapseList: boolean): number {
+  if (collapseList) return 0;
+  return listPanelRightEdge(canvasWidth);
+}
+
 /** Drawer width plus `right-4`, never wider than the canvas minus side gutters. */
 export function drawerOccupiedWidth(canvasWidth: number): number {
   return Math.min(DRAWER_OCCUPIED, Math.max(0, canvasWidth - 32));

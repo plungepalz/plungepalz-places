@@ -68,6 +68,7 @@ import {
   listPanelRightEdge,
   lowZoomCanvasLayout,
   mapControlsRightPx,
+  mapboxChromeInsetLeft,
   mapboxHeightMinZoom,
   mapNeedsResize,
   mercatorWorldPx,
@@ -131,6 +132,12 @@ function assertPlacesInGap(
     );
   }
 }
+
+test('Mapbox chrome sits to the right of the open list panel', () => {
+  assert.equal(mapboxChromeInsetLeft(1440, false), LIST_PANEL_RIGHT);
+  assert.equal(mapboxChromeInsetLeft(768, true), 0);
+  assert.ok(mapboxChromeInsetLeft(1440, false) >= 380);
+});
 
 test('list panel right edge matches the floating list (16 + 380)', () => {
   assert.equal(LIST_PANEL_RIGHT, 396);
@@ -294,7 +301,7 @@ test('user wheel zoom-in leaves Worldwide and bounds-searches even with a leftov
       boundsKey: '',
       lastPresetKey: '',
     }),
-    { action: 'filters', nextPresetKey: '' }
+    { action: 'filters', nextPresetKey: 'preset-chip' }
   );
 });
 

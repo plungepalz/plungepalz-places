@@ -19,6 +19,12 @@ test('moveend search waits longer than filter search', () => {
 test('preset chip search ignores bbox churn so the header can settle with the flight', () => {
   assert.equal(viewportSearchIdentity(false, 'tokyo-bounds'), 'preset-chip');
   assert.equal(viewportSearchIdentity(false, 'worldwide-bounds'), 'preset-chip');
+  assert.equal(viewportSearchIdentity(false, 'x', 'tokyo'), 'preset:tokyo');
+  assert.equal(viewportSearchIdentity(false, 'y', 'worldwide'), 'preset:worldwide');
+  assert.notEqual(
+    viewportSearchIdentity(false, 'x', 'tokyo'),
+    viewportSearchIdentity(false, 'x', 'worldwide')
+  );
   assert.equal(viewportSearchIdentity(true, 'a'), 'a');
   assert.notEqual(viewportSearchIdentity(true, 'a'), viewportSearchIdentity(true, 'b'));
 });
@@ -26,7 +32,25 @@ test('preset chip search ignores bbox churn so the header can settle with the fl
 test('user map moves debounce on moveend; preset chips search without bbox', () => {
   assert.deepEqual(
     searchAfterViewportChange({ leftPreset: false, boundsKey: 'a', lastPresetKey: '' }),
-    { action: 'filters', nextPresetKey: 'a' }
+    { action: 'filters', nextPresetKey: 'preset-chip' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: '',
+      settleKey: 'preset:tokyo',
+    }),
+    { action: 'filters', nextPresetKey: 'preset:tokyo' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: 'preset:tokyo',
+      settleKey: 'preset:tokyo',
+    }),
+    { action: 'skip' }
   );
   assert.deepEqual(
     searchAfterViewportChange({ leftPreset: true, boundsKey: '', lastPresetKey: 'a' }),
@@ -79,8 +103,19 @@ test('programmatic camera suppresses moveend search so the header stays old→fi
       boundsKey: 'tokyo',
       lastPresetKey: 'us',
       cameraBusy: true,
+      settleKey: 'preset:tokyo',
     }),
-    { action: 'filters', nextPresetKey: 'tokyo' }
+    { action: 'skip' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: 'preset:us',
+      cameraBusy: false,
+      settleKey: 'preset:tokyo',
+    }),
+    { action: 'filters', nextPresetKey: 'preset:tokyo' }
   );
   assert.deepEqual(
     searchAfterViewportChange({
@@ -93,7 +128,27 @@ test('programmatic camera suppresses moveend search so the header stays old→fi
   );
 });
 
-test('leaving a preset after a leftover resize report still bounds-searches', () => {
+test('one /search per settle: busy, resize, and a repeat chip are skipped', () => {
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: '',
+      lastPresetKey: '',
+      cameraBusy: true,
+      settleKey: 'preset:worldwide',
+    }),
+    { action: 'skip' }
+  );
+  assert.deepEqual(
+    searchAfterViewportChange({
+      leftPreset: false,
+      boundsKey: 'resized',
+      lastPresetKey: 'preset:worldwide',
+      cameraBusy: false,
+      settleKey: 'preset:worldwide',
+    }),
+    { action: 'skip' }
+  );
   assert.deepEqual(
     searchAfterViewportChange({
       leftPreset: false,
@@ -101,7 +156,7 @@ test('leaving a preset after a leftover resize report still bounds-searches', ()
       lastPresetKey: '',
       cameraBusy: false,
     }),
-    { action: 'filters', nextPresetKey: '' }
+    { action: 'filters', nextPresetKey: 'preset-chip' }
   );
   assert.deepEqual(
     searchAfterViewportChange({
